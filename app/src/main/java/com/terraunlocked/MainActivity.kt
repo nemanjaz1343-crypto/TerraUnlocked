@@ -60,8 +60,13 @@ class MainActivity : Activity() {
         }
         root.addView(map, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(root)
-        store.load().forEach { drawCircle(it) }
-        last = store.load().lastOrNull { !it.manual }
+        var previous: DiscoveryPoint? = null
+        store.load().forEach { saved ->
+            drawCircle(saved)
+            val prev = previous
+            if (!saved.manual && prev != null && canConnect(prev, saved)) drawCorridor(prev, saved)
+            if (!saved.manual) previous = saved
+        }
         map.overlays.add(0, MapEventsOverlay(object : MapEventsReceiver {
             override fun singleTapConfirmedHelper(p: GeoPoint): Boolean {
                 if (!manual) return false
@@ -94,10 +99,42 @@ class MainActivity : Activity() {
     }
     private fun addDiscovery(point: DiscoveryPoint) {
         store.add(point)
-        if (!point.manual) last = point
+        if (!point.manual) {
+            val prev = last
+            if (prev != null && canConnect(prev, point)) drawCorridor(prev, point)
+            last = point
+        }
         drawCircle(point)
         if (!point.manual) map.controller.animateTo(GeoPoint(point.latitude, point.longitude))
     }
+    private fun canConnect(a: DiscoveryPoint, b: DiscoveryPoint): Boolean =
+        !a.manual && !b.manual && b.timestamp >= a.timestamp &&
+            b.timestamp - a.timestamp <= 90_000L && distance(a, b) <= 120f
+
+    // A vector segment between two GPS vertices, buffered 20 metres on both sides.
+    private fun drawCorridor(a: DiscoveryPoint, b: DiscoveryPoint) {
+        val lat = Math.toRadians((a.latitude + b.latitude) / 2.0)
+        val metresPerLat = 111_320.0
+        val metresPerLon = 111_320.0 * kotlin.math.cos(lat)
+        val dx = (b.longitude - a.longitude) * metresPerLon
+        val dy = (b.latitude - a.latitude) * metresPerLat
+        val length = kotlin.math.hypot(dx, dy)
+        if (length < 0.01) return
+        val nx = -dy / length * 20.0
+        val ny = dx / length * 20.0
+        fun offset(p: DiscoveryPoint, side: Double): GeoPoint =
+            GeoPoint(p.latitude + side * ny / metresPerLat,
+                p.longitude + side * nx / metresPerLon)
+        val corridor = Polygon().apply {
+            points = listOf(offset(a, 1.0), offset(b, 1.0),
+                offset(b, -1.0), offset(a, -1.0))
+            fillPaint.color = Color.argb(75, 40, 170, 115)
+            outlinePaint.color = Color.TRANSPARENT
+        }
+        map.overlays.add(corridor)
+        map.invalidate()
+    }
+
     private fun drawCircle(point: DiscoveryPoint) {
         val circle = Polygon().apply {
             points = Polygon.pointsAsCircle(GeoPoint(point.latitude, point.longitude), 20.0)
@@ -111,6 +148,7 @@ class MainActivity : Activity() {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
         val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 6000L)
             .setMinUpdateDistanceMeters(10f).build()
+        last = null // A new session never bridges unrelated journeys.
         client.requestLocationUpdates(request, callback, mainLooper)
         tracking = true
         status.text = "GPS aktivan • otkrivanje 20 m"
