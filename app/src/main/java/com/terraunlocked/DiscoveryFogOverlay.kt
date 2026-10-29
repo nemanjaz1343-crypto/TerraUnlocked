@@ -56,39 +56,46 @@ class DiscoveryFogOverlay(
         if (shadow) return
         val points = records() + demo()
         if (fogVisible) {
-            canvas.save()
-            val visible = Path()
-            for (i in points.indices) {
-                val p = points[i]
-                val pix = toPoint(mapView, p.latitude, p.longitude)
-                val r = radiusPx(mapView, p.latitude, p.longitude)
-                visible.addCircle(pix.x.toFloat(), pix.y.toFloat(), r, Path.Direction.CW)
-                if (i > 0 && canJoin(points[i-1],p)) {
-                    val a = toPoint(mapView,points[i-1].latitude,points[i-1].longitude)
-                    visible.addPath(buffered(segmentPath(a,pix),r))
-                }
-            }
-            for (s in segments()) {
-                val a = toPoint(mapView,s.aLat,s.aLon)
-                val b = toPoint(mapView,s.bLat,s.bLon)
-                visible.addPath(buffered(segmentPath(a,b),radiusPx(mapView,s.aLat,s.aLon)))
-            }
-            canvas.clipOutPath(visible)
+            // One offscreen fog layer; DST_OUT creates feathered transparent openings.
+            val layer = canvas.saveLayer(0f, 0f, canvas.width.toFloat(), canvas.height.toFloat(), null)
             fogPaint.alpha = opacity.coerceIn(0,255)
             canvas.drawRect(0f,0f,canvas.width.toFloat(),canvas.height.toFloat(),fogPaint)
-            canvas.restore()
-
-            // Feathered transition: translucent dark halo just inside the reveal boundary.
-            val edge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.STROKE
-                strokeWidth = 4f
-                color = Color.argb((opacity * .28f).toInt(),15,22,17)
+            val erase = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT)
             }
-            for (p in points) {
-                val c = toPoint(mapView,p.latitude,p.longitude)
+            fun stamp(x: Float, y: Float, r: Float) {
+                val size = r.coerceAtLeast(2f)
+                erase.shader = RadialGradient(x,y,size,
+                    intArrayOf(Color.WHITE,Color.WHITE,Color.TRANSPARENT),
+                    floatArrayOf(0f,0.74f,1f),Shader.TileMode.CLAMP)
+                canvas.drawCircle(x,y,size,erase)
+            }
+            fun stroke(ax:Float,ay:Float,bx:Float,by:Float,r:Float) {
+                val length = hypot((bx-ax).toDouble(),(by-ay).toDouble()).toFloat()
+                val steps = (length / (r * .45f).coerceAtLeast(5f)).toInt().coerceIn(1,500)
+                for (j in 0..steps) {
+                    val t = j.toFloat()/steps
+                    stamp(ax+(bx-ax)*t,ay+(by-ay)*t,r)
+                }
+            }
+            for (i in points.indices) {
+                val p = points[i]
+                val pix = toPoint(mapView,p.latitude,p.longitude)
                 val r = radiusPx(mapView,p.latitude,p.longitude)
-                canvas.drawCircle(c.x.toFloat(),c.y.toFloat(),(r-2f).coerceAtLeast(.5f),edge)
+                stamp(pix.x.toFloat(),pix.y.toFloat(),r)
+                if(i>0 && canJoin(points[i-1],p)) {
+                    val a=toPoint(mapView,points[i-1].latitude,points[i-1].longitude)
+                    stroke(a.x.toFloat(),a.y.toFloat(),pix.x.toFloat(),pix.y.toFloat(),r)
+                }
             }
+            for (seg in segments()) {
+                val a=toPoint(mapView,seg.aLat,seg.aLon)
+                val b=toPoint(mapView,seg.bLat,seg.bLon)
+                stroke(a.x.toFloat(),a.y.toFloat(),b.x.toFloat(),b.y.toFloat(),radiusPx(mapView,seg.aLat,seg.aLon))
+            }
+            erase.shader=null
+            erase.xfermode=null
+            canvas.restoreToCount(layer)
         }
         if (showRoute) {
             for (i in 1 until points.size) {
