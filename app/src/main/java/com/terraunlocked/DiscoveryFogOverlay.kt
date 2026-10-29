@@ -21,7 +21,7 @@ class DiscoveryFogOverlay(
 ) : Overlay() {
     var fogVisible = true
     var opacity = 205
-    var showRoute = true
+    var showRoute = false
     var currentPosition: GeoPoint? = null
     var positionAccuracy = 0f
     private val fogPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(15, 22, 17) }
