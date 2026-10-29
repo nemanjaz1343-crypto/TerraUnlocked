@@ -75,6 +75,8 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var followButton:Button
     private lateinit var radarDrawer:LinearLayout
     private var radarExpanded=false
+    private var radialMenu:PopupWindow?=null
+    private var attachmentPoint:GeoPoint?=null
     private var filteredFixes=0
     private var simulating = false
     private var fogEnabled = true
@@ -190,7 +192,7 @@ class MainActivity : Activity(), SensorEventListener {
             }
             override fun onLongPress(e:MotionEvent,mapView:MapView):Boolean {
                 val p=mapView.projection.fromPixels(e.x.toInt(),e.y.toInt())
-                showNoteEditor(GeoPoint(p.latitude,p.longitude))
+                showRadialMenu(e.x.toInt(),e.y.toInt(),GeoPoint(p.latitude,p.longitude))
                 return true
             }
         })
@@ -274,39 +276,6 @@ class MainActivity : Activity(), SensorEventListener {
             status.text="PATH CONFIRMED"
             refresh()
         }
-        radarDrawer=LinearLayout(this).apply {
-            orientation=LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(43,54,43))
-        }
-        radarDrawer.addView(label("RADAR",10,sand))
-        radarDrawer.addView(action("+").apply {setOnClickListener {map.controller.zoomIn()}},
-            LinearLayout.LayoutParams(dp(45),dp(50)))
-        radarDrawer.addView(action("⌖").apply {setOnClickListener {
-            fogOverlay.currentPosition?.let {map.controller.animateTo(it)}
-        }},LinearLayout.LayoutParams(dp(45),dp(50)))
-        radarDrawer.addView(action("−").apply {setOnClickListener {map.controller.zoomOut()}},
-            LinearLayout.LayoutParams(dp(45),dp(50)))
-        followButton=action("FOLLOW ●").apply {
-            setOnClickListener {
-                followUser=!followUser
-                text=if(followUser) "FOLLOW ●" else "FOLLOW ○"
-                if(followUser) fogOverlay.currentPosition?.let { map.controller.animateTo(it) }
-            }
-        }
-        radarDrawer.addView(followButton,LinearLayout.LayoutParams(-1,dp(40)))
-        radarDrawer.visibility=View.GONE
-        val rp=FrameLayout.LayoutParams(dp(65),dp(225),Gravity.END or Gravity.CENTER_VERTICAL)
-        rp.rightMargin=dp(5)
-        mapArea.addView(radarDrawer,rp)
-        mapArea.addView(action("◂").apply {
-            setOnClickListener {
-                radarExpanded=!radarExpanded
-                radarDrawer.visibility=if(radarExpanded) View.VISIBLE else View.GONE
-                text=if(radarExpanded) "▸" else "◂"
-            }
-        },FrameLayout.LayoutParams(dp(29),dp(42),Gravity.END or Gravity.CENTER_VERTICAL))
-        mapArea.addView(action("◂").apply {setOnClickListener {showCheckpointPanel()}},
-            FrameLayout.LayoutParams(dp(31),dp(43),Gravity.START or Gravity.CENTER_VERTICAL))
         root.addView(mapArea,LinearLayout.LayoutParams(-1,0,1f))
         val controls = LinearLayout(this).apply { setBackgroundColor(olive); gravity = Gravity.CENTER }
         trackButton = action("TRACK")
@@ -348,6 +317,45 @@ class MainActivity : Activity(), SensorEventListener {
         layers.setOnClickListener { showLayers(layers) }
         compass.setOnClickListener { map.mapOrientation = 0f }
         map.setUseDataConnection(true)
+    }
+
+
+    private fun showRadialMenu(x:Int,y:Int,where:GeoPoint) {
+        radialMenu?.dismiss()
+        val size=dp(212)
+        val panel=FrameLayout(this)
+        fun item(title:String,gravity:Int,onTap:()->Unit) {
+            panel.addView(action(title).apply {
+                background=android.graphics.drawable.GradientDrawable().apply {
+                    cornerRadius=dp(12).toFloat()
+                    setColor(Color.rgb(43,54,43))
+                    setStroke(dp(1),Color.rgb(143,158,116))
+                }
+                setOnClickListener { radialMenu?.dismiss();onTap() }
+            },FrameLayout.LayoutParams(dp(72),dp(45),gravity))
+        }
+        item("NOTE",Gravity.START or Gravity.CENTER_VERTICAL) { showNoteEditor(where,"MEMORY") }
+        item("FLAG",Gravity.TOP or Gravity.CENTER_HORIZONTAL) { showNoteEditor(where,"CHECKPOINT") }
+        item("PHOTO",Gravity.END or Gravity.CENTER_VERTICAL) {
+            attachmentPoint=where
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type="image/*"
+            },82)
+        }
+        item("PIN",Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL) { showNoteEditor(where,"POI") }
+        val loc=IntArray(2)
+        map.getLocationOnScreen(loc)
+        val w=resources.displayMetrics.widthPixels
+        val h=resources.displayMetrics.heightPixels
+        val left=(loc[0]+x-size/2).coerceIn(0,(w-size).coerceAtLeast(0))
+        val top=(loc[1]+y-size/2).coerceIn(dp(35),(h-size-dp(40)).coerceAtLeast(dp(35)))
+        radialMenu=PopupWindow(panel,size,size,true).apply {
+            isOutsideTouchable=true
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+            elevation=dp(6).toFloat()
+            showAtLocation(map,Gravity.TOP or Gravity.START,left,top)
+        }
     }
 
     private var poiPopup:PopupWindow?=null
@@ -482,6 +490,25 @@ class MainActivity : Activity(), SensorEventListener {
     }
     override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?) {
         super.onActivityResult(requestCode,resultCode,data)
+
+        if(requestCode==82 && resultCode==RESULT_OK) {
+            val point=attachmentPoint
+            val uri=data?.data
+            if(point!=null && uri!=null) {
+                try {
+                    val file=File(filesDir,"photo_"+System.currentTimeMillis()+".jpg")
+                    contentResolver.openInputStream(uri)?.use { input ->
+                        file.outputStream().use { output -> input.copyTo(output) }
+                    } ?: error("Cannot open image")
+                    notes.add(FieldNote(point.latitude,point.longitude,"Photo","PHOTO",file.name,System.currentTimeMillis()))
+                    fieldNotes.save(notes)
+                    status.text="PHOTO ATTACHED"
+                    refresh()
+                } catch(e:Exception) {status.text="PHOTO IMPORT FAILED"}
+            }
+            attachmentPoint=null
+            return
+        }
         if(requestCode!=81 || resultCode!=RESULT_OK) return
         val uri = data?.data ?: return
         val filename = uri.lastPathSegment?.substringAfterLast('/')?.substringAfterLast(':') ?: "offline.mbtiles"
@@ -575,5 +602,6 @@ class MainActivity : Activity(), SensorEventListener {
         handler.removeCallbacks(simulationStep)
         layersPopup?.dismiss()
         poiPopup?.dismiss()
+        radialMenu?.dismiss()
     }
 }
