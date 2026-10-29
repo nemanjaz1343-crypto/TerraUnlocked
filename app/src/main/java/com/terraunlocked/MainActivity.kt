@@ -138,7 +138,6 @@ class MainActivity : Activity(), SensorEventListener {
                 status.text=if(stableFixCount<2) "GPS STABILIZING" else
                     "GPS STABLE / ±${loc.accuracy.toInt()}m / "+if(moved) "RECON" else "STATIONARY"
             }
-            }
         }
     }
     private val simulationStep = object : Runnable {
