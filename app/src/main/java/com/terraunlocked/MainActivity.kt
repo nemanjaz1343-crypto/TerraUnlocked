@@ -374,7 +374,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun showRadialMenu(x:Int,y:Int,where:GeoPoint) {
         radialMenu?.dismiss()
-        val size=dp(212)
+        val size=dp(230)
         val panel=FrameLayout(this)
         fun item(title:String,gravity:Int,onTap:()->Unit) {
             panel.addView(action(title).apply {
@@ -384,18 +384,18 @@ class MainActivity : Activity(), SensorEventListener {
                     setStroke(dp(1),Color.rgb(143,158,116))
                 }
                 setOnClickListener { radialMenu?.dismiss();onTap() }
-            },FrameLayout.LayoutParams(dp(72),dp(45),gravity))
+            },FrameLayout.LayoutParams(dp(83),dp(45),gravity))
         }
-        item("NOTE",Gravity.START or Gravity.CENTER_VERTICAL) { showNoteEditor(where,"MEMORY") }
-        item("FLAG",Gravity.TOP or Gravity.CENTER_HORIZONTAL) { showNoteEditor(where,"CHECKPOINT") }
-        item("PHOTO",Gravity.END or Gravity.CENTER_VERTICAL) {
+        item("✎ NOTE",Gravity.START or Gravity.CENTER_VERTICAL) { showNoteEditor(where,"MEMORY") }
+        item("⚑ FLAG",Gravity.TOP or Gravity.CENTER_HORIZONTAL) { showNoteEditor(where,"CHECKPOINT") }
+        item("▣ PHOTO",Gravity.END or Gravity.CENTER_VERTICAL) {
             attachmentPoint=where
             startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
                 type="image/*"
             },82)
         }
-        item("PIN",Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL) { showNoteEditor(where,"POI") }
+        item("◆ PIN",Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL) { showNoteEditor(where,"POI") }
         panel.addView(action("● REC").apply {setOnClickListener {radialMenu?.dismiss();startVoice(where)}},FrameLayout.LayoutParams(dp(75),dp(32),Gravity.CENTER))
         val loc=IntArray(2)
         map.getLocationOnScreen(loc)
@@ -488,8 +488,9 @@ class MainActivity : Activity(), SensorEventListener {
                 android.widget.ImageView(this@MainActivity).apply {setImageBitmap(bitmap);adjustViewBounds=true}
             ).setPositiveButton("CLOSE",null).show()
         }})
-        android.app.AlertDialog.Builder(this).setView(panel).setNegativeButton("CLOSE",null)
+        val dialog=android.app.AlertDialog.Builder(this).setView(panel).setNegativeButton("CLOSE",null)
             .setNeutralButton("DELETE") {_,_->notes.remove(note);fieldNotes.save(notes);refresh()}.show()
+        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
     }
     private fun startVoice(where:GeoPoint) {
         voicePoint=where
