@@ -234,8 +234,8 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.rgb(43, 54, 43))
             setPadding(dp(12), dp(8), dp(12), dp(8))
         }
-        fun option(name: String, action: () -> Unit) {
-            panel.addView(action(name).apply { setOnClickListener { action(); layersPopup?.dismiss() } },
+        fun option(name: String, callback: () -> Unit) {
+            panel.addView(action(name).apply { setOnClickListener { callback(); layersPopup?.dismiss() } },
                 LinearLayout.LayoutParams(-1, dp(43)))
         }
         option("FOG ${if (fogEnabled) "ON" else "OFF"}") {
