@@ -17,11 +17,14 @@ class DiscoveryFogOverlay(
     private val records: () -> List<DiscoveryPoint>,
     private val demo: () -> List<DiscoveryPoint>,
     private val segments: () -> List<ManualSegment>,
+    private val notes: () -> List<FieldNote>,
     var radiusMeters: Double = 20.0
 ) : Overlay() {
     var fogVisible = true
     var opacity = 205
     var showRoute = false
+    var showCheckpoints = true
+    var backtrack = false
     var currentPosition: GeoPoint? = null
     var positionAccuracy = 0f
     var northAzimuth = 0f
@@ -111,6 +114,37 @@ class DiscoveryFogOverlay(
                 val a = toPoint(mapView,s.aLat,s.aLon)
                 val b = toPoint(mapView,s.bLat,s.bLon)
                 canvas.drawLine(a.x.toFloat(),a.y.toFloat(),b.x.toFloat(),b.y.toFloat(),routePaint)
+            }
+        }
+        if (showCheckpoints) {
+            val palette = mapOf("CHECKPOINT" to Color.rgb(228,183,85),
+                "POI" to Color.rgb(91,204,210), "MEMORY" to Color.rgb(203,150,220),
+                "CAMP" to Color.rgb(147,198,105))
+            notes().forEach { note ->
+                val p = toPoint(mapView,note.latitude,note.longitude)
+                val color = palette[note.kind] ?: Color.rgb(228,183,85)
+                val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color }
+                val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    this.color = Color.rgb(25,35,29);style=Paint.Style.STROKE;strokeWidth=3f
+                }
+                canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),11f,fill)
+                canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),11f,outline)
+                val glyph=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    this.color=Color.rgb(20,30,25);textSize=12f;textAlign=Paint.Align.CENTER
+                }
+                val symbol=when(note.kind) {"CHECKPOINT"->"⚑";"POI"->"★";"MEMORY"->"●";"CAMP"->"▲";else->"◆"}
+                canvas.drawText(symbol,p.x.toFloat(),p.y+4f,glyph)
+            }
+        }
+        if (backtrack && records().size > 1) {
+            val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color=Color.rgb(120,210,246);strokeWidth=5f;style=Paint.Style.STROKE
+            }
+            val trail=records().filter { !it.manual }.takeLast(600)
+            for(i in 1 until trail.size) if(canJoin(trail[i-1],trail[i])) {
+                val a=toPoint(mapView,trail[i-1].latitude,trail[i-1].longitude)
+                val b=toPoint(mapView,trail[i].latitude,trail[i].longitude)
+                canvas.drawLine(a.x.toFloat(),a.y.toFloat(),b.x.toFloat(),b.y.toFloat(),paint)
             }
         }
         currentPosition?.let { loc ->
