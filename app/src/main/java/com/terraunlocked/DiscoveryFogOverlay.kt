@@ -119,7 +119,7 @@ class DiscoveryFogOverlay(
         if (showCheckpoints) {
             val palette = mapOf("CHECKPOINT" to Color.rgb(228,183,85),
                 "POI" to Color.rgb(91,204,210), "MEMORY" to Color.rgb(203,150,220),
-                "CAMP" to Color.rgb(147,198,105), "PHOTO" to Color.rgb(237,174,118))
+                "CAMP" to Color.rgb(147,198,105), "PHOTO" to Color.rgb(237,174,118), "VOICE" to Color.rgb(239,118,126))
             notes().forEach { note ->
                 val p = toPoint(mapView,note.latitude,note.longitude)
                 val color = palette[note.kind] ?: Color.rgb(228,183,85)
@@ -132,7 +132,7 @@ class DiscoveryFogOverlay(
                 val glyph=Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     this.color=Color.rgb(20,30,25);textSize=12f;textAlign=Paint.Align.CENTER
                 }
-                val symbol=when(note.kind) {"CHECKPOINT"->"⚑";"POI"->"★";"MEMORY"->"●";"CAMP"->"▲";"PHOTO"->"▣";else->"◆"}
+                val symbol=when(note.kind) {"CHECKPOINT"->"⚑";"POI"->"★";"MEMORY"->"●";"CAMP"->"▲";"PHOTO"->"▣";"VOICE"->"◉";"MEMORY"->"✎";else->"◆"}
                 canvas.drawText(symbol,p.x.toFloat(),p.y+4f,glyph)
             }
         }
