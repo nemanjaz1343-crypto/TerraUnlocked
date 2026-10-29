@@ -24,6 +24,7 @@ class DiscoveryFogOverlay(
     var showRoute = false
     var currentPosition: GeoPoint? = null
     var positionAccuracy = 0f
+    var northAzimuth = 0f
     private val fogPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(15, 22, 17) }
     private val routePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(218, 199, 148); strokeWidth = 2.5f; style = Paint.Style.STROKE
@@ -122,6 +123,13 @@ class DiscoveryFogOverlay(
             canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),7f,dot)
             val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.WHITE;style=Paint.Style.STROKE;strokeWidth=2f}
             canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),7f,border)
+            val angle=Math.toRadians(northAzimuth.toDouble())
+            val nx=kotlin.math.sin(angle).toFloat()
+            val ny=-kotlin.math.cos(angle).toFloat()
+            val arrow=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color=Color.rgb(255,210,116);strokeWidth=3.5f;strokeCap=Paint.Cap.ROUND
+            }
+            canvas.drawLine(p.x.toFloat(),p.y.toFloat(),p.x+nx*23f,p.y+ny*23f,arrow)
         }
     }
 }
