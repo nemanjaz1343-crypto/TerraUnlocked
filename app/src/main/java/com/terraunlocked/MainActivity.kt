@@ -136,7 +136,8 @@ class MainActivity : Activity() {
                     return true
                 }
                 if (event.actionMasked != MotionEvent.ACTION_DOWN && event.actionMasked != MotionEvent.ACTION_MOVE) return false
-                val geo = mapView.projection.fromPixels(event.x.toInt(), event.y.toInt())
+                val projected = mapView.projection.fromPixels(event.x.toInt(), event.y.toInt())
+                val geo = GeoPoint(projected.latitude, projected.longitude)
                 if (mode == "PATH") {
                     if (event.actionMasked == MotionEvent.ACTION_DOWN) {
                         val previous = pathStart
