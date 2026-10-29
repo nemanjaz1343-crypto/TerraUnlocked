@@ -15,6 +15,14 @@ import android.view.MotionEvent
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.SeekBar
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import java.io.File
 import android.widget.TextView
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
@@ -27,11 +35,17 @@ import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Overlay
 
-class MainActivity : Activity() {
+class MainActivity : Activity(), SensorEventListener {
     private val olive = Color.rgb(31, 40, 32)
     private val sand = Color.rgb(218, 201, 156)
     private val sage = Color.rgb(155, 181, 134)
     private lateinit var map: MapView
+    private lateinit var compassView: TextView
+    private lateinit var sensors: SensorManager
+    private var compassEnabled = false
+    private val rotation = FloatArray(9)
+    private val orientation = FloatArray(3)
+    private var offline = false
     private lateinit var store: DiscoveryStore
     private lateinit var pathStore: PathStore
     private val segments = mutableListOf<ManualSegment>()
@@ -110,7 +124,10 @@ class MainActivity : Activity() {
         }
         val brand = label("TERRA / UNLOCKED", 12, sand).apply { setTypeface(null, Typeface.BOLD) }
         header.addView(brand, LinearLayout.LayoutParams(0, dp(40), 1f))
-        val compass = label("◇ N 000°", 12, sand)
+        sensors = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        compassEnabled = sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR) != null
+        val compass = label(if (compassEnabled) "◇ N --°" else "◇ N/A", 12, sand)
+        compassView = compass
         header.addView(compass)
         val gps = label("  ● RECON", 10, sage)
         header.addView(gps)
@@ -221,6 +238,7 @@ class MainActivity : Activity() {
         eraseButton.setOnClickListener { activate("ERASE", eraseButton) }
         layers.setOnClickListener { showLayers(layers) }
         compass.setOnClickListener { map.mapOrientation = 0f }
+        map.setUseDataConnection(true)
     }
 
     private fun gap(a: GeoPoint, b: GeoPoint): Float {
@@ -248,9 +266,33 @@ class MainActivity : Activity() {
         option("ROUTE ${if (fogOverlay.showRoute) "ON" else "OFF"}") {
             fogOverlay.showRoute = !fogOverlay.showRoute; refresh()
         }
-        option("RADIUS ${radius}m") {
-            radius = when(radius) { 10 -> 20; 20 -> 30; 30 -> 50; 50 -> 100; else -> 10 }
-            fogOverlay.radiusMeters = radius.toDouble(); refresh()
+        val radiusLabel = label("BRUSH RADIUS  ${radius} m",12,sand)
+        panel.addView(radiusLabel)
+        panel.addView(SeekBar(this).apply {
+            max = 95
+            progress = radius - 5
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(bar: SeekBar?, value: Int, user: Boolean) {
+                    radius = value + 5
+                    fogOverlay.radiusMeters = radius.toDouble()
+                    radiusLabel.text = "BRUSH RADIUS  ${radius} m"
+                    refresh()
+                }
+                override fun onStartTrackingTouch(bar: SeekBar?) {}
+                override fun onStopTrackingTouch(bar: SeekBar?) {}
+            })
+        })
+        option("OFFLINE ${if (offline) "ON" else "OFF"}") {
+            offline = !offline
+            map.setUseDataConnection(!offline)
+            status.text = if (offline) "OFFLINE / LOCAL TILES ONLY" else "ONLINE / MAP TILES ENABLED"
+        }
+        option("IMPORT OFFLINE MAP") {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+            }
+            startActivityForResult(intent, 81)
         }
         option("MAP OSM / TOPO") {
             map.setTileSource(if(map.tileProvider.tileSource == TileSourceFactory.MAPNIK)
@@ -263,13 +305,44 @@ class MainActivity : Activity() {
             val idx = records.indexOfLast { it.manual }
             if (idx >= 0) { records.removeAt(idx); store.replaceAll(records); refresh() }
         }
-        layersPopup = PopupWindow(panel, dp(230), dp(310), true).apply {
+        layersPopup = PopupWindow(panel, dp(255), dp(390), true).apply {
             isOutsideTouchable = true
             setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.rgb(43, 54, 43)))
             elevation = dp(8).toFloat()
             showAtLocation(map, Gravity.BOTTOM or Gravity.END, dp(8), dp(60))
         }
     }
+    override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?) {
+        super.onActivityResult(requestCode,resultCode,data)
+        if(requestCode!=81 || resultCode!=RESULT_OK) return
+        val uri = data?.data ?: return
+        val filename = uri.lastPathSegment?.substringAfterLast('/')?.substringAfterLast(':') ?: "offline.mbtiles"
+        val extension = filename.substringAfterLast('.', "").lowercase()
+        if(extension !in setOf("mbtiles","sqlite","zip","gemf")) {
+            status.text = "UNSUPPORTED ARCHIVE / USE MBTILES, SQLITE, ZIP OR GEMF"
+            return
+        }
+        try {
+            val dir = Configuration.getInstance().osmdroidBasePath
+            dir.mkdirs()
+            val dest = File(dir,"terra_import_${System.currentTimeMillis()}.$extension")
+            contentResolver.openInputStream(uri).use { input ->
+                requireNotNull(input) { "Cannot read selected file" }
+                dest.outputStream().use { output -> input.copyTo(output) }
+            }
+            status.text = "OFFLINE MAP IMPORTED / RESTART APP TO LOAD"
+        } catch(e:Exception) {
+            status.text = "MAP IMPORT FAILED / ${e.javaClass.simpleName}"
+        }
+    }
+    override fun onSensorChanged(event: SensorEvent) {
+        if(event.sensor.type != Sensor.TYPE_ROTATION_VECTOR) return
+        SensorManager.getRotationMatrixFromVector(rotation,event.values)
+        SensorManager.getOrientation(rotation,orientation)
+        val degrees = ((Math.toDegrees(orientation[0].toDouble())+360.0)%360.0).toInt()
+        compassView.text = "◇ N %03d°".format(degrees)
+    }
+    override fun onAccuracyChanged(sensor:Sensor?,accuracy:Int) {}
     private fun startTracking() {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
         last = null
@@ -315,8 +388,16 @@ class MainActivity : Activity() {
         super.onRequestPermissionsResult(code, permissions, grants)
         if (code == 10 && grants.isNotEmpty() && grants[0] == PackageManager.PERMISSION_GRANTED) startTracking()
     }
-    override fun onResume() { super.onResume(); map.onResume() }
-    override fun onPause() { super.onPause(); map.onPause(); if (tracking) stopTracking() }
+    override fun onResume() {
+        super.onResume(); map.onResume()
+        sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)?.let {
+            sensors.registerListener(this,it,SensorManager.SENSOR_DELAY_UI)
+        }
+    }
+    override fun onPause() {
+        super.onPause(); sensors.unregisterListener(this); map.onPause()
+        if (tracking) stopTracking()
+    }
     override fun onDestroy() {
         super.onDestroy()
         if (tracking) stopTracking()
