@@ -468,7 +468,9 @@ class MainActivity : Activity(), SensorEventListener {
         SensorManager.getRotationMatrixFromVector(rotation,event.values)
         SensorManager.getOrientation(rotation,orientation)
         val degrees = ((Math.toDegrees(orientation[0].toDouble())+360.0)%360.0).toInt()
-        compassView.text = "◇ N %03d°".format(degrees)
+        compassView.text = "▲ N %03d°".format(degrees)
+        fogOverlay.northAzimuth = degrees.toFloat()
+        map.invalidate()
     }
     override fun onAccuracyChanged(sensor:Sensor?,accuracy:Int) {}
     private fun startTracking() {
