@@ -31,6 +31,9 @@ import android.widget.FrameLayout
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Point
+import android.media.MediaRecorder
+import android.media.MediaPlayer
+import android.graphics.drawable.GradientDrawable
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
@@ -77,6 +80,11 @@ class MainActivity : Activity(), SensorEventListener {
     private var radarExpanded=false
     private var radialMenu:PopupWindow?=null
     private var attachmentPoint:GeoPoint?=null
+    private var voicePoint:GeoPoint?=null
+    private var recorder:MediaRecorder?=null
+    private var audioFile:File?=null
+    private var measure=false
+    private val measurePoints=mutableListOf<GeoPoint>()
     private var filteredFixes=0
     private var simulating = false
     private var fogEnabled = true
@@ -189,6 +197,36 @@ class MainActivity : Activity(), SensorEventListener {
         }
         fogOverlay = DiscoveryFogOverlay({ records }, { demo }, { segments }, { notes })
         map.overlays.add(fogOverlay)
+        map.overlays.add(object : Overlay() {
+            override fun onSingleTapConfirmed(event:MotionEvent,mapView:MapView):Boolean {
+                if(mode!="VIEW") return false
+                val clicked=notes.asReversed().firstOrNull { note ->
+                    val p=mapView.projection.toPixels(GeoPoint(note.latitude,note.longitude),Point())
+                    kotlin.math.hypot((event.x-p.x).toDouble(),(event.y-p.y).toDouble())<dp(24)
+                }
+                if(clicked!=null) {showExisting(clicked);return true}
+                if(measure) {
+                    val p=mapView.projection.fromPixels(event.x.toInt(),event.y.toInt())
+                    if(measurePoints.size==2) measurePoints.clear()
+                    measurePoints.add(GeoPoint(p.latitude,p.longitude))
+                    status.text=if(measurePoints.size==2) "DISTANCE / %.0f m".format(gap(measurePoints[0],measurePoints[1]))
+                        else "RULER / SELECT END POINT"
+                    refresh();return true
+                }
+                return false
+            }
+            override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
+                if(shadow || measurePoints.isEmpty()) return
+                val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.argb(190,250,210,130);strokeWidth=3f}
+                val a=mapView.projection.toPixels(measurePoints[0],Point())
+                canvas.drawCircle(a.x.toFloat(),a.y.toFloat(),5f,paint)
+                if(measurePoints.size==2) {
+                    val b=mapView.projection.toPixels(measurePoints[1],Point())
+                    canvas.drawLine(a.x.toFloat(),a.y.toFloat(),b.x.toFloat(),b.y.toFloat(),paint)
+                    canvas.drawCircle(b.x.toFloat(),b.y.toFloat(),5f,paint)
+                }
+            }
+        })
         map.overlays.add(object : Overlay() {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
                 if(shadow || pending.isEmpty()) return
@@ -358,6 +396,7 @@ class MainActivity : Activity(), SensorEventListener {
             },82)
         }
         item("PIN",Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL) { showNoteEditor(where,"POI") }
+        panel.addView(action("● REC").apply {setOnClickListener {radialMenu?.dismiss();startVoice(where)}},FrameLayout.LayoutParams(dp(75),dp(32),Gravity.CENTER))
         val loc=IntArray(2)
         map.getLocationOnScreen(loc)
         val w=resources.displayMetrics.widthPixels
@@ -407,15 +446,16 @@ class MainActivity : Activity(), SensorEventListener {
             orientation=LinearLayout.VERTICAL
             setPadding(dp(15),dp(12),dp(15),dp(12))
         }
-        val title=EditText(this).apply {hint="Title / callsign"}
-        val detail=EditText(this).apply {hint="Field notes";minLines=3}
+        val title=EditText(this).apply {hint="Title / callsign";setTextColor(sand);setHintTextColor(sage)}
+        val detail=EditText(this).apply {hint="Field notes";minLines=3;setTextColor(sand);setHintTextColor(sage)}
         val kinds=listOf("POI","CHECKPOINT","MEMORY","CAMP")
         val selector=Spinner(this).apply {
             adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,kinds)
             setSelection(kinds.indexOf(kind).coerceAtLeast(0))
         }
+        layout.setBackgroundColor(Color.rgb(39,51,41))
         layout.addView(selector);layout.addView(title);layout.addView(detail)
-        android.app.AlertDialog.Builder(this).setTitle("FIELD INVENTORY")
+        android.app.AlertDialog.Builder(this)
             .setView(layout).setNegativeButton("CANCEL",null)
             .setPositiveButton("SAVE") { _,_ ->
                 notes.add(FieldNote(where.latitude,where.longitude,title.text.toString().ifBlank{"Untitled"},
@@ -424,6 +464,64 @@ class MainActivity : Activity(), SensorEventListener {
                 status.text="FIELD NOTE SAVED"
                 refresh()
             }.show()
+    }
+
+    private fun showExisting(note:FieldNote) {
+        val panel=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL;setPadding(dp(18),dp(12),dp(18),dp(12))
+            setBackgroundColor(Color.rgb(40,52,42))
+        }
+        panel.addView(label(note.kind+" / "+note.title,16,sand))
+        panel.addView(label(if(note.kind=="VOICE") "Voice recording" else if(note.kind=="PHOTO") "Photo attachment" else note.body,13,sage))
+        if(note.kind=="VOICE") panel.addView(action("▶ PLAY").apply {setOnClickListener {
+            runCatching {
+                MediaPlayer().apply {
+                    setDataSource(File(filesDir,note.body).absolutePath)
+                    setOnCompletionListener {it.release()}
+                    prepare();start()
+                }
+            }.onFailure { status.text="PLAYBACK ERROR" }
+        }})
+        if(note.kind=="PHOTO") panel.addView(action("▣ OPEN PHOTO").apply {setOnClickListener {
+            val bitmap=android.graphics.BitmapFactory.decodeFile(File(filesDir,note.body).absolutePath)
+            if(bitmap!=null) android.app.AlertDialog.Builder(this@MainActivity).setView(
+                android.widget.ImageView(this@MainActivity).apply {setImageBitmap(bitmap);adjustViewBounds=true}
+            ).setPositiveButton("CLOSE",null).show()
+        }})
+        android.app.AlertDialog.Builder(this).setView(panel).setNegativeButton("CLOSE",null)
+            .setNeutralButton("DELETE") {_,_->notes.remove(note);fieldNotes.save(notes);refresh()}.show()
+    }
+    private fun startVoice(where:GeoPoint) {
+        voicePoint=where
+        if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO),11);return
+        }
+        try {
+            val file=File(filesDir,"voice_"+System.currentTimeMillis()+".m4a")
+            recorder=MediaRecorder().apply {
+                setAudioSource(MediaRecorder.AudioSource.MIC)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setOutputFile(file.absolutePath);prepare();start()
+            }
+            audioFile=file
+            android.app.AlertDialog.Builder(this).setTitle("● VOICE MEMO")
+                .setMessage("Recording locally")
+                .setNegativeButton("DISCARD") {_,_->stopVoice(false)}
+                .setPositiveButton("SAVE") {_,_->stopVoice(true)}
+                .setCancelable(false).show()
+        }catch(e:Exception) {recorder?.release();recorder=null;status.text="MIC UNAVAILABLE"}
+    }
+    private fun stopVoice(save:Boolean) {
+        runCatching {recorder?.stop()}
+        recorder?.release();recorder=null
+        val file=audioFile
+        val point=voicePoint
+        if(save && file!=null && file.exists() && file.length()>0 && point!=null) {
+            notes.add(FieldNote(point.latitude,point.longitude,"Voice memo","VOICE",file.name,System.currentTimeMillis()))
+            fieldNotes.save(notes);refresh()
+        }else file?.delete()
+        audioFile=null;voicePoint=null
     }
     private fun gap(a: GeoPoint, b: GeoPoint): Float {
         val out = FloatArray(1)
@@ -449,6 +547,9 @@ class MainActivity : Activity(), SensorEventListener {
         }
         option("CHECKPOINTS ${if(fogOverlay.showCheckpoints) "ON" else "OFF"}") {
             fogOverlay.showCheckpoints=!fogOverlay.showCheckpoints;refresh()
+        }
+        option("RULER ${if(measure) "ON" else "OFF"}") {
+            measure=!measure;measurePoints.clear();status.text=if(measure) "RULER / SELECT FIRST POINT" else "RULER OFF";refresh()
         }
         option("BACKTRACK ${if(fogOverlay.backtrack) "ON" else "OFF"}") {
             fogOverlay.backtrack=!fogOverlay.backtrack;refresh()
@@ -599,6 +700,7 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, grants: IntArray) {
         super.onRequestPermissionsResult(code, permissions, grants)
         if (code == 10 && grants.isNotEmpty() && grants[0] == PackageManager.PERMISSION_GRANTED) startTracking()
+        if (code == 11 && grants.isNotEmpty() && grants[0] == PackageManager.PERMISSION_GRANTED) voicePoint?.let {startVoice(it)}
     }
     override fun onResume() {
         super.onResume(); map.onResume()
