@@ -90,30 +90,44 @@ class MainActivity : Activity(), SensorEventListener {
         override fun onLocationResult(result: LocationResult) {
             if (!tracking) return
             result.locations.forEach { loc ->
-                val prevFix=lastGpsSample
-                val elapsed=if(prevFix!=null) (loc.elapsedRealtimeNanos-prevFix.elapsedRealtimeNanos)/1e9 else 0.0
-                if(loc.accuracy>65f || (prevFix!=null && elapsed>1.0 && prevFix.distanceTo(loc)/elapsed>38.0)) {
+                if (!loc.hasAccuracy() || !loc.latitude.isFinite() || !loc.longitude.isFinite()) return@forEach
+                val p = GeoPoint(loc.latitude, loc.longitude)
+                // Always show the latest measured position, even when it is not safe
+                // to use that position to permanently reveal terrain.
+                fogOverlay.currentPosition = p
+                fogOverlay.positionAccuracy = loc.accuracy
+                val prev = lastGpsSample
+                val elapsed = if (prev != null) (loc.elapsedRealtimeNanos - prev.elapsedRealtimeNanos) / 1e9 else 0.0
+                val jump = prev != null && elapsed > 0.5 &&
+                    prev.distanceTo(loc) > maxOf(100f, loc.accuracy * 2f, prev.accuracy * 2f) &&
+                    prev.distanceTo(loc) / elapsed > 40.0
+                val uncertain = loc.accuracy > 80f
+                status.text = when {
+                    uncertain -> "GPS WEAK / ±${loc.accuracy.toInt()} m / WAITING FOR PRECISION"
+                    jump -> "GPS JUMP FILTERED / POSITION VISIBLE"
+                    else -> "GPS ACTIVE / ±${loc.accuracy.toInt()} m / R ${radius} m"
+                }
+                if (followUser) map.controller.animateTo(p)
+                map.invalidate()
+                if (uncertain || jump) {
                     filteredFixes++
-                    if(filteredFixes >= 3) { lastGpsSample=null; last=null; filteredFixes=0 }
-                    status.text="GPS DRIFT / FIX REJECTED"
+                    if (filteredFixes >= 3) {
+                        lastGpsSample = null
+                        last = null
+                        filteredFixes = 0
+                    }
                     return@forEach
                 }
-                filteredFixes=0
-                lastGpsSample=loc
-                fogOverlay.currentPosition = GeoPoint(loc.latitude, loc.longitude)
-                fogOverlay.positionAccuracy = loc.accuracy
-                map.invalidate()
-                if (loc.accuracy > 65f) return@forEach
+                filteredFixes = 0
+                lastGpsSample = loc
                 val point = DiscoveryPoint(loc.latitude, loc.longitude, false, System.currentTimeMillis())
                 val previous = last
                 if (previous == null || metres(previous, point) >= 8f) {
                     records.add(point)
                     store.add(point)
                     last = point
-                    map.controller.animateTo(GeoPoint(point.latitude, point.longitude))
                     refresh()
                 }
-                status.text = "GPS LOCK  |  ACC ±${loc.accuracy.toInt()}m  |  R ${radius}m"
             }
         }
     }
