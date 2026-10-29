@@ -194,6 +194,7 @@ class MainActivity : Activity(), SensorEventListener {
         map = MapView(this).apply {
             setTileSource(TileSourceFactory.MAPNIK)
             setMultiTouchControls(true)
+            setBuiltInZoomControls(false)
             controller.setZoom(16.0)
             controller.setCenter(GeoPoint(25.0657, 55.1403))
         }
