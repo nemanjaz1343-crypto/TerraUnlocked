@@ -70,8 +70,8 @@ class DiscoveryFogOverlay(
             fun stamp(x: Float, y: Float, r: Float) {
                 val size = r.coerceAtLeast(2f)
                 erase.shader = RadialGradient(x,y,size,
-                    intArrayOf(Color.WHITE,Color.WHITE,Color.TRANSPARENT),
-                    floatArrayOf(0f,0.74f,1f),Shader.TileMode.CLAMP)
+                    intArrayOf(Color.WHITE,Color.argb(242,255,255,255),Color.argb(170,255,255,255),Color.argb(72,255,255,255),Color.TRANSPARENT),
+                    floatArrayOf(0f,0.22f,0.48f,0.75f,1f),Shader.TileMode.CLAMP)
                 canvas.drawCircle(x,y,size,erase)
             }
             fun stroke(ax:Float,ay:Float,bx:Float,by:Float,r:Float) {
@@ -132,7 +132,7 @@ class DiscoveryFogOverlay(
                 val glyph=Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     this.color=Color.rgb(20,30,25);textSize=12f;textAlign=Paint.Align.CENTER
                 }
-                val symbol=when(note.kind) {"CHECKPOINT"->"⚑";"POI"->"★";"MEMORY"->"●";"CAMP"->"▲";"PHOTO"->"▣";"VOICE"->"◉";"MEMORY"->"✎";else->"◆"}
+                val symbol=when(note.kind) {"CHECKPOINT"->"⚑";"POI"->"★";"MEMORY"->"●";"CAMP"->"▲";"PHOTO"->"▣";"VOICE"->"◉";else->"◆"}
                 canvas.drawText(symbol,p.x.toFloat(),p.y+4f,glyph)
             }
         }
