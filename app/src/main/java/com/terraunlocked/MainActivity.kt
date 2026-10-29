@@ -66,8 +66,7 @@ class MainActivity : Activity() {
             override fun singleTapConfirmedHelper(p: GeoPoint): Boolean {
                 if (!manual) return false
                 addDiscovery(DiscoveryPoint(p.latitude, p.longitude, true, System.currentTimeMillis()))
-                manual = false
-                manualButton.text = "Ručno otkrij"
+                // Keep manual reveal enabled for multiple taps until toggled off.
                 return true
             }
             override fun longPressHelper(p: GeoPoint): Boolean = false
