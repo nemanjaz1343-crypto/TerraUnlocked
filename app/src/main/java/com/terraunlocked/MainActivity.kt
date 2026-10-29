@@ -87,6 +87,8 @@ class MainActivity : Activity(), SensorEventListener {
     private var measure=false
     private val measurePoints=mutableListOf<GeoPoint>()
     private var filteredFixes=0
+    private var stableFixCount=0
+    private var lastSavedLocation:android.location.Location?=null
     private var simulating = false
     private var fogEnabled = true
     private var radius = 20
@@ -100,43 +102,42 @@ class MainActivity : Activity(), SensorEventListener {
             if (!tracking) return
             result.locations.forEach { loc ->
                 if (!loc.hasAccuracy() || !loc.latitude.isFinite() || !loc.longitude.isFinite()) return@forEach
-                val p = GeoPoint(loc.latitude, loc.longitude)
-                // Always show the latest measured position, even when it is not safe
-                // to use that position to permanently reveal terrain.
-                fogOverlay.currentPosition = p
-                fogOverlay.positionAccuracy = loc.accuracy
                 val prev = lastGpsSample
-                val elapsed = if (prev != null) (loc.elapsedRealtimeNanos - prev.elapsedRealtimeNanos) / 1e9 else 0.0
-                val jump = prev != null && elapsed > 0.5 &&
-                    prev.distanceTo(loc) > maxOf(100f, loc.accuracy * 2f, prev.accuracy * 2f) &&
-                    prev.distanceTo(loc) / elapsed > 40.0
-                val uncertain = loc.accuracy > 80f
-                status.text = when {
-                    uncertain -> "GPS WEAK / ±${loc.accuracy.toInt()} m / WAITING FOR PRECISION"
-                    jump -> "GPS JUMP FILTERED / POSITION VISIBLE"
-                    else -> "GPS ACTIVE / ±${loc.accuracy.toInt()} m / R ${radius} m"
-                }
-                if (followUser) map.controller.animateTo(p)
-                map.invalidate()
-                if (uncertain || jump) {
+                val elapsed = if(prev!=null) (loc.elapsedRealtimeNanos-prev.elapsedRealtimeNanos)/1e9 else 0.0
+                val distance = if(prev!=null) prev.distanceTo(loc) else 0f
+                val plausible = prev==null || elapsed<=0.0 ||
+                    distance <= maxOf(18f, 3f*maxOf(prev.accuracy,loc.accuracy)) ||
+                    distance/elapsed <= 12.0
+                val accurate = loc.accuracy<=25f
+                if (!plausible || !accurate) {
                     filteredFixes++
-                    if (filteredFixes >= 3) {
-                        lastGpsSample = null
-                        last = null
-                        filteredFixes = 0
-                    }
+                    status.text="GPS SEARCHING / ±${loc.accuracy.toInt()}m / NO REVEAL"
+                    // A GPS jump never becomes the new reference. Keep the last
+                    // trusted position and avoid making a bridge across a gap.
+                    if(filteredFixes>=6) { lastGpsSample=null;last=null;stableFixCount=0;filteredFixes=0 }
                     return@forEach
                 }
-                filteredFixes = 0
-                lastGpsSample = loc
-                val point = DiscoveryPoint(loc.latitude, loc.longitude, false, System.currentTimeMillis())
-                val previous = last
-                if (previous == null || metres(previous, point) >= 8f) {
-                    records.add(point)
-                    store.add(point)
-                    last = point
-                    refresh()
+                filteredFixes=0
+                stableFixCount++
+                lastGpsSample=loc
+                val position=GeoPoint(loc.latitude,loc.longitude)
+                fogOverlay.currentPosition=position
+                fogOverlay.positionAccuracy=loc.accuracy
+                if(followUser && stableFixCount>=2) map.controller.animateTo(position)
+                refresh()
+                val saved=lastSavedLocation
+                // Stationary GPS noise must not paint an area. Require clear
+                // displacement beyond combined positioning uncertainty.
+                val moved=saved==null || saved.distanceTo(loc) >=
+                    maxOf(15f,loc.accuracy*1.8f,saved.accuracy*1.8f)
+                if(stableFixCount>=2 && moved) {
+                    val point=DiscoveryPoint(loc.latitude,loc.longitude,false,System.currentTimeMillis())
+                    records.add(point);store.add(point);last=point
+                    lastSavedLocation=loc
                 }
+                status.text=if(stableFixCount<2) "GPS STABILIZING" else
+                    "GPS STABLE / ±${loc.accuracy.toInt()}m / "+if(moved) "RECON" else "STATIONARY"
+            }
             }
         }
     }
@@ -677,6 +678,8 @@ class MainActivity : Activity(), SensorEventListener {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
         last = null
         lastGpsSample=null
+        lastSavedLocation=null
+        stableFixCount=0
         tracking = true
         trackButton.text = "STOP GPS"
         val req = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000L)
