@@ -9,6 +9,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
+import android.view.View
+import android.widget.PopupWindow
 import android.view.MotionEvent
 import android.widget.Button
 import android.widget.LinearLayout
@@ -31,6 +33,10 @@ class MainActivity : Activity() {
     private val sage = Color.rgb(155, 181, 134)
     private lateinit var map: MapView
     private lateinit var store: DiscoveryStore
+    private lateinit var pathStore: PathStore
+    private val segments = mutableListOf<ManualSegment>()
+    private var pathStart: GeoPoint? = null
+    private var layersPopup: PopupWindow? = null
     private lateinit var status: TextView
     private lateinit var trackButton: Button
     private lateinit var modeButton: Button
@@ -51,6 +57,9 @@ class MainActivity : Activity() {
         override fun onLocationResult(result: LocationResult) {
             if (!tracking) return
             result.locations.forEach { loc ->
+                fogOverlay.currentPosition = GeoPoint(loc.latitude, loc.longitude)
+                fogOverlay.positionAccuracy = loc.accuracy
+                map.invalidate()
                 if (loc.accuracy > 35f) return@forEach
                 val point = DiscoveryPoint(loc.latitude, loc.longitude, false, System.currentTimeMillis())
                 val previous = last
@@ -90,8 +99,10 @@ class MainActivity : Activity() {
         window.navigationBarColor = olive
         Configuration.getInstance().userAgentValue = packageName
         store = DiscoveryStore(this)
+        pathStore = PathStore(this)
+        segments.addAll(pathStore.load())
         records.addAll(store.load())
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(olive) }
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(olive); fitsSystemWindows = true }
         val header = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(9), 0, dp(9), 0)
@@ -114,42 +125,76 @@ class MainActivity : Activity() {
             controller.setZoom(16.0)
             controller.setCenter(GeoPoint(25.0657, 55.1403))
         }
-        fogOverlay = DiscoveryFogOverlay({ records }, { demo })
+        fogOverlay = DiscoveryFogOverlay({ records }, { demo }, { segments })
         map.overlays.add(fogOverlay)
         map.overlays.add(object : Overlay() {
+            private var strokeLast: GeoPoint? = null
             override fun onTouchEvent(event: MotionEvent, mapView: MapView): Boolean {
-                if (mode != "PAINT") return false
-                if (event.actionMasked == MotionEvent.ACTION_DOWN ||
-                    event.actionMasked == MotionEvent.ACTION_MOVE) {
-                    val now = System.currentTimeMillis()
-                    if (now - lastPaintTime > 65L) {
-                        val point = mapView.projection.fromPixels(event.x.toInt(), event.y.toInt())
-                        val p = DiscoveryPoint(point.latitude, point.longitude, true, now)
-                        if (records.lastOrNull()?.let { metres(it, p) >= radius * 0.35 } != false) {
-                            records.add(p)
-                            store.add(p)
-                            refresh()
+                if (mode == "VIEW") return false
+                if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                    strokeLast = null
+                    return true
+                }
+                if (event.actionMasked != MotionEvent.ACTION_DOWN && event.actionMasked != MotionEvent.ACTION_MOVE) return false
+                val geo = mapView.projection.fromPixels(event.x.toInt(), event.y.toInt())
+                if (mode == "PATH") {
+                    if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                        val previous = pathStart
+                        if (previous != null) {
+                            segments.add(ManualSegment(previous.latitude, previous.longitude, geo.latitude, geo.longitude))
+                            pathStore.save(segments)
                         }
-                        lastPaintTime = now
+                        pathStart = GeoPoint(geo.latitude, geo.longitude)
+                        status.text = "PATH / TAP NEXT VERTEX · ${segments.size} SEGMENTS"
+                        refresh()
                     }
                     return true
                 }
-                return event.actionMasked == MotionEvent.ACTION_UP
+                if (mode == "PAINT") {
+                    val current = GeoPoint(geo.latitude, geo.longitude)
+                    val previous = strokeLast
+                    if (previous == null || gap(previous, current) > radius * 0.30f) {
+                        val p = DiscoveryPoint(current.latitude, current.longitude, true, System.currentTimeMillis())
+                        records.add(p)
+                        store.add(p)
+                        if (previous != null) {
+                            segments.add(ManualSegment(previous.latitude, previous.longitude, current.latitude, current.longitude))
+                            pathStore.save(segments)
+                        }
+                        strokeLast = current
+                        refresh()
+                    }
+                    return true
+                }
+                if (mode == "ERASE") {
+                    val before = records.size + segments.size
+                    records.removeAll { it.manual && gap(GeoPoint(it.latitude, it.longitude), geo) < radius * 1.5f }
+                    segments.removeAll {
+                        gap(GeoPoint(it.aLat, it.aLon), geo) < radius * 1.5f ||
+                        gap(GeoPoint(it.bLat, it.bLon), geo) < radius * 1.5f
+                    }
+                    if (records.size + segments.size != before) {
+                        store.replaceAll(records)
+                        pathStore.save(segments)
+                        refresh()
+                    }
+                    return true
+                }
+                return false
             }
         })
         root.addView(map, LinearLayout.LayoutParams(-1, 0, 1f))
         val controls = LinearLayout(this).apply { setBackgroundColor(olive); gravity = Gravity.CENTER }
         trackButton = action("TRACK")
         modeButton = action("PAINT")
+        val pathButton = action("PATH")
+        val eraseButton = action("ERASE")
         val layers = action("LAYERS")
-        val mark = action("MARK")
-        val sim = action("SIM")
-        listOf(trackButton, modeButton, layers, mark, sim).forEach {
+        listOf(trackButton, pathButton, modeButton, eraseButton, layers).forEach {
             controls.addView(it, LinearLayout.LayoutParams(0, dp(45), 1f))
         }
         root.addView(controls)
         setContentView(root)
-
         trackButton.setOnClickListener {
             if (tracking) stopTracking() else {
                 if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED)
@@ -157,65 +202,72 @@ class MainActivity : Activity() {
                 else requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), 10)
             }
         }
-        modeButton.setOnClickListener {
-            mode = if (mode == "PAINT") "VIEW" else "PAINT"
+        fun activate(selected: String, button: Button) {
+            mode = if (mode == selected) "VIEW" else selected
+            pathStart = null
+            pathButton.text = if (mode == "PATH") "PATH ●" else "PATH"
             modeButton.text = if (mode == "PAINT") "PAINT ●" else "PAINT"
-            status.text = if (mode == "PAINT") "PAINT MODE  |  DRAG TO REVEAL" else "MAP READY"
-        }
-        mark.setOnClickListener {
-            val p = map.mapCenter
-            val point = DiscoveryPoint(p.latitude, p.longitude, true, System.currentTimeMillis())
-            records.add(point); store.add(point); refresh()
-            status.text = "WAYPOINT REVEALED AT MAP CENTER"
-        }
-        layers.setOnClickListener { showLayers() }
-        sim.setOnClickListener {
-            if (simulating) stopSimulation() else {
-                if (tracking) stopTracking()
-                simulating = true
-                simulationIndex = 0
-                simulationOrigin = GeoPoint(map.mapCenter.latitude, map.mapCenter.longitude)
-                sim.text = "STOP"
-                status.text = "SIMULATION ACTIVE  |  TEST DATA ONLY"
-                handler.post(simulationStep)
+            eraseButton.text = if (mode == "ERASE") "ERASE ●" else "ERASE"
+            status.text = when(mode) {
+                "PATH" -> "PATH / TAP VERTICES TO DRAW VECTOR"
+                "PAINT" -> "PAINT / DRAG TO REVEAL"
+                "ERASE" -> "ERASE / DRAG TO REMOVE MANUAL REVEALS"
+                else -> "MAP READY"
             }
         }
+        pathButton.setOnClickListener { activate("PATH", pathButton) }
+        modeButton.setOnClickListener { activate("PAINT", modeButton) }
+        eraseButton.setOnClickListener { activate("ERASE", eraseButton) }
+        layers.setOnClickListener { showLayers(layers) }
         compass.setOnClickListener { map.mapOrientation = 0f }
     }
 
-    private fun showLayers() {
-        val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(8), dp(18), dp(8)) }
-        fun addOption(name: String, action: () -> Unit) {
-            panel.addView(Button(this).apply { text = name; setOnClickListener { action() } })
+    private fun gap(a: GeoPoint, b: GeoPoint): Float {
+        val out = FloatArray(1)
+        android.location.Location.distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude, out)
+        return out[0]
+    }
+    private fun showLayers(anchor: View) {
+        if (layersPopup?.isShowing == true) { layersPopup?.dismiss(); return }
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.rgb(43, 54, 43))
+            setPadding(dp(12), dp(8), dp(12), dp(8))
         }
-        addOption("FOG: ${if (fogEnabled) "ON" else "OFF"}") {
+        fun option(name: String, action: () -> Unit) {
+            panel.addView(action(name).apply { setOnClickListener { action(); layersPopup?.dismiss() } },
+                LinearLayout.LayoutParams(-1, dp(43)))
+        }
+        option("FOG ${if (fogEnabled) "ON" else "OFF"}") {
             fogEnabled = !fogEnabled; fogOverlay.fogVisible = fogEnabled; refresh()
         }
-        addOption("FOG OPACITY: ${fogOverlay.opacity}") {
-            fogOverlay.opacity = if (fogOverlay.opacity >= 230) 120 else fogOverlay.opacity + 35
-            refresh()
+        option("FOG OPACITY ${fogOverlay.opacity}") {
+            fogOverlay.opacity = if (fogOverlay.opacity >= 235) 125 else fogOverlay.opacity + 35; refresh()
         }
-        addOption("ROUTE: ${if (fogOverlay.showRoute) "ON" else "OFF"}") {
+        option("ROUTE ${if (fogOverlay.showRoute) "ON" else "OFF"}") {
             fogOverlay.showRoute = !fogOverlay.showRoute; refresh()
         }
-        addOption("RADIUS: ${radius}m (tap to cycle)") {
-            radius = when (radius) { 10 -> 20; 20 -> 30; 30 -> 50; 50 -> 100; else -> 10 }
+        option("RADIUS ${radius}m") {
+            radius = when(radius) { 10 -> 20; 20 -> 30; 30 -> 50; 50 -> 100; else -> 10 }
             fogOverlay.radiusMeters = radius.toDouble(); refresh()
         }
-        addOption("MAP: OSM / TOPO") {
-            map.setTileSource(if (map.tileProvider.tileSource == TileSourceFactory.MAPNIK)
+        option("MAP OSM / TOPO") {
+            map.setTileSource(if(map.tileProvider.tileSource == TileSourceFactory.MAPNIK)
                 TileSourceFactory.OpenTopo else TileSourceFactory.MAPNIK)
         }
-        addOption("UNDO LAST MANUAL") {
-            val i = records.indexOfLast { it.manual }
-            if (i >= 0) {
-                records.removeAt(i)
-                store.replaceAll(records)
-                refresh()
-            }
+        option("UNDO LAST PATH") {
+            if (segments.isNotEmpty()) { segments.removeAt(segments.lastIndex); pathStore.save(segments); refresh() }
         }
-        android.app.AlertDialog.Builder(this).setTitle("TACTICAL / LAYERS")
-            .setView(panel).setPositiveButton("CLOSE", null).show()
+        option("UNDO LAST PAINT") {
+            val idx = records.indexOfLast { it.manual }
+            if (idx >= 0) { records.removeAt(idx); store.replaceAll(records); refresh() }
+        }
+        layersPopup = PopupWindow(panel, dp(230), dp(310), true).apply {
+            isOutsideTouchable = true
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.rgb(43, 54, 43)))
+            elevation = dp(8).toFloat()
+            showAtLocation(map, Gravity.BOTTOM or Gravity.END, dp(8), dp(60))
+        }
     }
     private fun startTracking() {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
@@ -268,5 +320,6 @@ class MainActivity : Activity() {
         super.onDestroy()
         if (tracking) stopTracking()
         handler.removeCallbacks(simulationStep)
+        layersPopup?.dismiss()
     }
 }
