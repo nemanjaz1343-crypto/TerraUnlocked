@@ -4,10 +4,15 @@ import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
+import android.view.MotionEvent
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.TextView
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
@@ -18,155 +23,250 @@ import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
-import org.osmdroid.views.overlay.Polygon
-import org.osmdroid.views.overlay.MapEventsOverlay
-import org.osmdroid.events.MapEventsReceiver
+import org.osmdroid.views.overlay.Overlay
 
 class MainActivity : Activity() {
+    private val olive = Color.rgb(31, 40, 32)
+    private val sand = Color.rgb(218, 201, 156)
+    private val sage = Color.rgb(155, 181, 134)
     private lateinit var map: MapView
     private lateinit var store: DiscoveryStore
     private lateinit var status: TextView
-    private val client by lazy { LocationServices.getFusedLocationProviderClient(this) }
+    private lateinit var trackButton: Button
+    private lateinit var modeButton: Button
+    private lateinit var fogOverlay: DiscoveryFogOverlay
+    private val records = mutableListOf<DiscoveryPoint>()
+    private val demo = mutableListOf<DiscoveryPoint>()
+    private var mode = "VIEW"
     private var tracking = false
-    private var manual = false
+    private var simulating = false
+    private var fogEnabled = true
+    private var radius = 20
     private var last: DiscoveryPoint? = null
+    private var lastPaintTime = 0L
+    private val handler = Handler(Looper.getMainLooper())
+    private var simulationIndex = 0
+    private val client by lazy { LocationServices.getFusedLocationProviderClient(this) }
     private val callback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
-            result.locations.forEach { location ->
-                if (location.accuracy > 60f) return@forEach
-                val point = DiscoveryPoint(location.latitude, location.longitude, false, System.currentTimeMillis())
-                if (last == null || distance(last!!, point) >= 12f) addDiscovery(point)
+            if (!tracking) return
+            result.locations.forEach { loc ->
+                if (loc.accuracy > 35f) return@forEach
+                val point = DiscoveryPoint(loc.latitude, loc.longitude, false, System.currentTimeMillis())
+                val previous = last
+                if (previous == null || metres(previous, point) >= 8f) {
+                    records.add(point)
+                    store.add(point)
+                    last = point
+                    map.controller.animateTo(GeoPoint(point.latitude, point.longitude))
+                    refresh()
+                }
+                status.text = "GPS LOCK  |  ACC ±${loc.accuracy.toInt()}m  |  R ${radius}m"
             }
         }
     }
+    private val simulationStep = object : Runnable {
+        override fun run() {
+            if (!simulating) return
+            val centre = map.mapCenter
+            if (simulationIndex == 0) demo.clear()
+            val t = simulationIndex.toDouble() / 12.0
+            // Demo spirals away from starting point, generated entirely within the test layer.
+            val base = simulationOrigin ?: GeoPoint(centre.latitude, centre.longitude)
+            val lat = base.latitude + 0.000035 * simulationIndex * kotlin.math.sin(t)
+            val lon = base.longitude + 0.000035 * simulationIndex * kotlin.math.cos(t)
+            demo.add(DiscoveryPoint(lat, lon, false, System.currentTimeMillis() + simulationIndex * 1000L))
+            simulationIndex++
+            refresh()
+            map.controller.animateTo(GeoPoint(lat, lon))
+            if (simulationIndex < 90) handler.postDelayed(this, 550L) else stopSimulation()
+        }
+    }
+    private var simulationOrigin: GeoPoint? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.statusBarColor = olive
+        window.navigationBarColor = olive
         Configuration.getInstance().userAgentValue = packageName
         store = DiscoveryStore(this)
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        status = TextView(this).apply { text = "TerraUnlocked • GPS isključen"; setPadding(16, 16, 16, 16) }
-        val controls = LinearLayout(this).apply { gravity = Gravity.CENTER }
-        val trackingButton = Button(this).apply { text = "Pokreni GPS" }
-        val manualButton = Button(this).apply { text = "Ručno otkrij" }
-        controls.addView(trackingButton)
-        controls.addView(manualButton)
+        records.addAll(store.load())
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(olive) }
+        val header = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(9), 0, dp(9), 0)
+            setBackgroundColor(olive)
+        }
+        val brand = label("TERRA / UNLOCKED", 12, sand).apply { setTypeface(null, Typeface.BOLD) }
+        header.addView(brand, LinearLayout.LayoutParams(0, dp(40), 1f))
+        val compass = label("◇ N 000°", 12, sand)
+        header.addView(compass)
+        val gps = label("  ● RECON", 10, sage)
+        header.addView(gps)
+        root.addView(header, LinearLayout.LayoutParams(-1, dp(40)))
+        status = label("GPS OFFLINE  |  FOG 82%  |  R 20m", 10, sage)
+        status.setPadding(dp(10), dp(4), 0, dp(4))
         root.addView(status)
-        root.addView(controls)
+
         map = MapView(this).apply {
             setTileSource(TileSourceFactory.MAPNIK)
             setMultiTouchControls(true)
             controller.setZoom(16.0)
             controller.setCenter(GeoPoint(25.0657, 55.1403))
         }
+        fogOverlay = DiscoveryFogOverlay({ records }, { demo })
+        map.overlays.add(fogOverlay)
+        map.overlays.add(object : Overlay() {
+            override fun onTouchEvent(event: MotionEvent, mapView: MapView): Boolean {
+                if (mode != "PAINT") return false
+                if (event.actionMasked == MotionEvent.ACTION_DOWN ||
+                    event.actionMasked == MotionEvent.ACTION_MOVE) {
+                    val now = System.currentTimeMillis()
+                    if (now - lastPaintTime > 65L) {
+                        val point = mapView.projection.fromPixels(event.x.toInt(), event.y.toInt())
+                        val p = DiscoveryPoint(point.latitude, point.longitude, true, now)
+                        if (records.lastOrNull()?.let { metres(it, p) >= radius * 0.35 } != false) {
+                            records.add(p)
+                            store.add(p)
+                            refresh()
+                        }
+                        lastPaintTime = now
+                    }
+                    return true
+                }
+                return event.actionMasked == MotionEvent.ACTION_UP
+            }
+        })
         root.addView(map, LinearLayout.LayoutParams(-1, 0, 1f))
+        val controls = LinearLayout(this).apply { setBackgroundColor(olive); gravity = Gravity.CENTER }
+        trackButton = action("TRACK")
+        modeButton = action("PAINT")
+        val layers = action("LAYERS")
+        val mark = action("MARK")
+        val sim = action("SIM")
+        listOf(trackButton, modeButton, layers, mark, sim).forEach {
+            controls.addView(it, LinearLayout.LayoutParams(0, dp(45), 1f))
+        }
+        root.addView(controls)
         setContentView(root)
-        var previous: DiscoveryPoint? = null
-        store.load().forEach { saved ->
-            drawCircle(saved)
-            val prev = previous
-            if (!saved.manual && prev != null && canConnect(prev, saved)) drawCorridor(prev, saved)
-            if (!saved.manual) previous = saved
-        }
-        map.overlays.add(0, MapEventsOverlay(object : MapEventsReceiver {
-            override fun singleTapConfirmedHelper(p: GeoPoint): Boolean {
-                if (!manual) return false
-                addDiscovery(DiscoveryPoint(p.latitude, p.longitude, true, System.currentTimeMillis()))
-                // Keep manual reveal enabled for multiple taps until toggled off.
-                return true
-            }
-            override fun longPressHelper(p: GeoPoint): Boolean = false
-        }))
-        trackingButton.setOnClickListener {
-            if (tracking) {
-                stopTracking()
-                trackingButton.text = "Pokreni GPS"
-            } else {
-                if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+
+        trackButton.setOnClickListener {
+            if (tracking) stopTracking() else {
+                if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED)
                     startTracking()
-                    trackingButton.text = "Zaustavi GPS"
-                } else requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), 10)
+                else requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), 10)
             }
         }
-        manualButton.setOnClickListener {
-            manual = !manual
-            manualButton.text = if (manual) "Dodirni mapu…" else "Ručno otkrij"
+        modeButton.setOnClickListener {
+            mode = if (mode == "PAINT") "VIEW" else "PAINT"
+            modeButton.text = if (mode == "PAINT") "PAINT ●" else "PAINT"
+            status.text = if (mode == "PAINT") "PAINT MODE  |  DRAG TO REVEAL" else "MAP READY"
         }
-    }
-    private fun distance(a: DiscoveryPoint, b: DiscoveryPoint): Float {
-        val distances = FloatArray(1)
-        android.location.Location.distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude, distances)
-        return distances[0]
-    }
-    private fun addDiscovery(point: DiscoveryPoint) {
-        store.add(point)
-        if (!point.manual) {
-            val prev = last
-            if (prev != null && canConnect(prev, point)) drawCorridor(prev, point)
-            last = point
+        mark.setOnClickListener {
+            val p = map.mapCenter
+            val point = DiscoveryPoint(p.latitude, p.longitude, true, System.currentTimeMillis())
+            records.add(point); store.add(point); refresh()
+            status.text = "WAYPOINT REVEALED AT MAP CENTER"
         }
-        drawCircle(point)
-        if (!point.manual) map.controller.animateTo(GeoPoint(point.latitude, point.longitude))
-    }
-    private fun canConnect(a: DiscoveryPoint, b: DiscoveryPoint): Boolean =
-        !a.manual && !b.manual && b.timestamp >= a.timestamp &&
-            b.timestamp - a.timestamp <= 90_000L && distance(a, b) <= 120f
-
-    // A vector segment between two GPS vertices, buffered 20 metres on both sides.
-    private fun drawCorridor(a: DiscoveryPoint, b: DiscoveryPoint) {
-        val lat = Math.toRadians((a.latitude + b.latitude) / 2.0)
-        val metresPerLat = 111_320.0
-        val metresPerLon = 111_320.0 * kotlin.math.cos(lat)
-        val dx = (b.longitude - a.longitude) * metresPerLon
-        val dy = (b.latitude - a.latitude) * metresPerLat
-        val length = kotlin.math.hypot(dx, dy)
-        if (length < 0.01) return
-        val nx = -dy / length * 20.0
-        val ny = dx / length * 20.0
-        fun offset(p: DiscoveryPoint, side: Double): GeoPoint =
-            GeoPoint(p.latitude + side * ny / metresPerLat,
-                p.longitude + side * nx / metresPerLon)
-        val corridor = Polygon().apply {
-            points = listOf(offset(a, 1.0), offset(b, 1.0),
-                offset(b, -1.0), offset(a, -1.0))
-            fillPaint.color = Color.argb(75, 40, 170, 115)
-            outlinePaint.color = Color.TRANSPARENT
+        layers.setOnClickListener { showLayers() }
+        sim.setOnClickListener {
+            if (simulating) stopSimulation() else {
+                if (tracking) stopTracking()
+                simulating = true
+                simulationIndex = 0
+                simulationOrigin = GeoPoint(map.mapCenter.latitude, map.mapCenter.longitude)
+                sim.text = "STOP"
+                status.text = "SIMULATION ACTIVE  |  TEST DATA ONLY"
+                handler.post(simulationStep)
+            }
         }
-        map.overlays.add(corridor)
-        map.invalidate()
+        compass.setOnClickListener { map.mapOrientation = 0f }
     }
 
-    private fun drawCircle(point: DiscoveryPoint) {
-        val circle = Polygon().apply {
-            points = Polygon.pointsAsCircle(GeoPoint(point.latitude, point.longitude), 20.0)
-            fillPaint.color = if (point.manual) Color.argb(80, 255, 176, 32) else Color.argb(75, 40, 170, 115)
-            outlinePaint.color = Color.TRANSPARENT
+    private fun showLayers() {
+        val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(8), dp(18), dp(8)) }
+        fun addOption(name: String, action: () -> Unit) {
+            panel.addView(Button(this).apply { text = name; setOnClickListener { action() } })
         }
-        map.overlays.add(circle)
-        map.invalidate()
+        addOption("FOG: ${if (fogEnabled) "ON" else "OFF"}") {
+            fogEnabled = !fogEnabled; fogOverlay.fogVisible = fogEnabled; refresh()
+        }
+        addOption("FOG OPACITY: ${fogOverlay.opacity}") {
+            fogOverlay.opacity = if (fogOverlay.opacity >= 230) 120 else fogOverlay.opacity + 35
+            refresh()
+        }
+        addOption("ROUTE: ${if (fogOverlay.showRoute) "ON" else "OFF"}") {
+            fogOverlay.showRoute = !fogOverlay.showRoute; refresh()
+        }
+        addOption("RADIUS: ${radius}m (tap to cycle)") {
+            radius = when (radius) { 10 -> 20; 20 -> 30; 30 -> 50; 50 -> 100; else -> 10 }
+            fogOverlay.radiusMeters = radius.toDouble(); refresh()
+        }
+        addOption("MAP: OSM / TOPO") {
+            map.setTileSource(if (map.tileProvider.tileSource == TileSourceFactory.MAPNIK)
+                TileSourceFactory.OpenTopo else TileSourceFactory.MAPNIK)
+        }
+        addOption("UNDO LAST MANUAL") {
+            val i = records.indexOfLast { it.manual }
+            if (i >= 0) {
+                records.removeAt(i)
+                store.replaceAll(records)
+                refresh()
+            }
+        }
+        android.app.AlertDialog.Builder(this).setTitle("TACTICAL / LAYERS")
+            .setView(panel).setPositiveButton("CLOSE", null).show()
     }
     private fun startTracking() {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
-        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 6000L)
-            .setMinUpdateDistanceMeters(10f).build()
-        last = null // A new session never bridges unrelated journeys.
-        client.requestLocationUpdates(request, callback, mainLooper)
+        last = null
         tracking = true
-        status.text = "GPS aktivan • otkrivanje 20 m"
+        trackButton.text = "STOP GPS"
+        val req = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000L)
+            .setMinUpdateDistanceMeters(8f).build()
+        client.requestLocationUpdates(req, callback, mainLooper)
+        status.text = "GPS ACQUIRING..."
     }
     private fun stopTracking() {
-        client.removeLocationUpdates(callback)
         tracking = false
-        status.text = "GPS isključen • podaci su sačuvani"
+        client.removeLocationUpdates(callback)
+        trackButton.text = "TRACK"
+        status.text = "GPS OFFLINE  |  DATA SAVED"
     }
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 10 && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            startTracking()
-            (findViewById<LinearLayout>(android.R.id.content).getChildAt(0) as LinearLayout)
-                .let { ((it.getChildAt(1) as LinearLayout).getChildAt(0) as Button).text = "Zaustavi GPS" }
-        }
+    private fun stopSimulation() {
+        simulating = false
+        handler.removeCallbacks(simulationStep)
+        demo.clear()
+        simulationOrigin = null
+        (findViewById<android.view.ViewGroup>(android.R.id.content).getChildAt(0) as LinearLayout)
+            .let { ((it.getChildAt(it.childCount - 1) as LinearLayout).getChildAt(4) as Button).text = "SIM" }
+        status.text = "SIMULATION ENDED  |  NO TEST DATA SAVED"
+        refresh()
+    }
+    private fun refresh() { map.invalidate() }
+    private fun metres(a: DiscoveryPoint, b: DiscoveryPoint): Float {
+        val out = FloatArray(1)
+        android.location.Location.distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude, out)
+        return out[0]
+    }
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+    private fun label(t: String, size: Int, color: Int) = TextView(this).apply {
+        text = t; textSize = size.toFloat(); setTextColor(color); gravity = Gravity.CENTER_VERTICAL
+    }
+    private fun action(t: String) = Button(this).apply {
+        text = t; textSize = 10f; isAllCaps = false
+        setTextColor(sand); setBackgroundColor(Color.rgb(58, 69, 52))
+        setPadding(0, 0, 0, 0)
+    }
+    override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, grants: IntArray) {
+        super.onRequestPermissionsResult(code, permissions, grants)
+        if (code == 10 && grants.isNotEmpty() && grants[0] == PackageManager.PERMISSION_GRANTED) startTracking()
     }
     override fun onResume() { super.onResume(); map.onResume() }
     override fun onPause() { super.onPause(); map.onPause(); if (tracking) stopTracking() }
-    override fun onDestroy() { super.onDestroy(); client.removeLocationUpdates(callback) }
+    override fun onDestroy() {
+        super.onDestroy()
+        if (tracking) stopTracking()
+        handler.removeCallbacks(simulationStep)
+    }
 }
