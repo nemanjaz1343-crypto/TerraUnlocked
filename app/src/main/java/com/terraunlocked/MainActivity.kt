@@ -24,6 +24,13 @@ import android.content.Intent
 import android.net.Uri
 import java.io.File
 import android.widget.TextView
+import android.widget.EditText
+import android.widget.Spinner
+import android.widget.ArrayAdapter
+import android.widget.FrameLayout
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Point
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
@@ -46,6 +53,11 @@ class MainActivity : Activity(), SensorEventListener {
     private val rotation = FloatArray(9)
     private val orientation = FloatArray(3)
     private var offline = false
+    private lateinit var fieldNotes:FieldNotes
+    private val notes=mutableListOf<FieldNote>()
+    private val pending=mutableListOf<GeoPoint>()
+    private lateinit var confirmButton:Button
+    private var lastGpsSample:android.location.Location?=null
     private lateinit var store: DiscoveryStore
     private lateinit var pathStore: PathStore
     private val segments = mutableListOf<ManualSegment>()
@@ -71,6 +83,13 @@ class MainActivity : Activity(), SensorEventListener {
         override fun onLocationResult(result: LocationResult) {
             if (!tracking) return
             result.locations.forEach { loc ->
+                val prevFix=lastGpsSample
+                val elapsed=if(prevFix!=null) (loc.elapsedRealtimeNanos-prevFix.elapsedRealtimeNanos)/1e9 else 0.0
+                if(loc.accuracy>35f || (prevFix!=null && elapsed>0 && prevFix.distanceTo(loc)/elapsed>38.0)) {
+                    status.text="GPS DRIFT / FIX REJECTED"
+                    return@forEach
+                }
+                lastGpsSample=loc
                 fogOverlay.currentPosition = GeoPoint(loc.latitude, loc.longitude)
                 fogOverlay.positionAccuracy = loc.accuracy
                 map.invalidate()
@@ -113,6 +132,8 @@ class MainActivity : Activity(), SensorEventListener {
         window.navigationBarColor = olive
         Configuration.getInstance().userAgentValue = packageName
         store = DiscoveryStore(this)
+        fieldNotes=FieldNotes(this)
+        notes.addAll(fieldNotes.load())
         pathStore = PathStore(this)
         segments.addAll(pathStore.load())
         records.addAll(store.load())
@@ -145,6 +166,27 @@ class MainActivity : Activity(), SensorEventListener {
         fogOverlay = DiscoveryFogOverlay({ records }, { demo }, { segments })
         map.overlays.add(fogOverlay)
         map.overlays.add(object : Overlay() {
+            override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
+                if(shadow || pending.isEmpty()) return
+                val red=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color=Color.rgb(239,72,65);strokeWidth=3f;style=Paint.Style.STROKE
+                }
+                val dot=Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.rgb(239,72,65)}
+                var prev:Point?=null
+                pending.forEach { p ->
+                    val next=mapView.projection.toPixels(p,Point())
+                    canvas.drawCircle(next.x.toFloat(),next.y.toFloat(),5f,dot)
+                    prev?.let { canvas.drawLine(it.x.toFloat(),it.y.toFloat(),next.x.toFloat(),next.y.toFloat(),red) }
+                    prev=next
+                }
+            }
+            override fun onLongPress(e:MotionEvent,mapView:MapView):Boolean {
+                val p=mapView.projection.fromPixels(e.x.toInt(),e.y.toInt())
+                showNoteEditor(GeoPoint(p.latitude,p.longitude))
+                return true
+            }
+        })
+        map.overlays.add(object : Overlay() {
             private var strokeLast: GeoPoint? = null
             override fun onTouchEvent(event: MotionEvent, mapView: MapView): Boolean {
                 if (mode == "VIEW") return false
@@ -155,15 +197,11 @@ class MainActivity : Activity(), SensorEventListener {
                 if (event.actionMasked != MotionEvent.ACTION_DOWN && event.actionMasked != MotionEvent.ACTION_MOVE) return false
                 val projected = mapView.projection.fromPixels(event.x.toInt(), event.y.toInt())
                 val geo = GeoPoint(projected.latitude, projected.longitude)
-                if (mode == "PATH") {
-                    if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-                        val previous = pathStart
-                        if (previous != null) {
-                            segments.add(ManualSegment(previous.latitude, previous.longitude, geo.latitude, geo.longitude))
-                            pathStore.save(segments)
-                        }
-                        pathStart = GeoPoint(geo.latitude, geo.longitude)
-                        status.text = "PATH / TAP NEXT VERTEX · ${segments.size} SEGMENTS"
+                if(mode=="PATH") {
+                    if(event.actionMasked==MotionEvent.ACTION_DOWN) {
+                        pending.add(geo)
+                        confirmButton.visibility=if(pending.size>=2) View.VISIBLE else View.GONE
+                        status.text="PATH / ${pending.size} VERTICES / CONFIRM"
                         refresh()
                     }
                     return true
@@ -201,7 +239,42 @@ class MainActivity : Activity(), SensorEventListener {
                 return false
             }
         })
-        root.addView(map, LinearLayout.LayoutParams(-1, 0, 1f))
+        val mapArea=FrameLayout(this)
+        mapArea.addView(map,FrameLayout.LayoutParams(-1,-1))
+        confirmButton=action("CONFIRM PATH").apply {
+            visibility=View.GONE
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.rgb(120,39,35))
+        }
+        mapArea.addView(confirmButton,FrameLayout.LayoutParams(dp(140),dp(43),Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+        confirmButton.setOnClickListener {
+            pending.zipWithNext().forEach { (a,b) ->
+                segments.add(ManualSegment(a.latitude,a.longitude,b.latitude,b.longitude))
+            }
+            pathStore.save(segments)
+            pending.clear()
+            confirmButton.visibility=View.GONE
+            status.text="PATH CONFIRMED"
+            refresh()
+        }
+        val radar=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setBackgroundColor(Color.rgb(43,54,43))
+        }
+        radar.addView(label("ZOOM",10,sand))
+        radar.addView(action("+").apply {setOnClickListener {map.controller.zoomIn()}},
+            LinearLayout.LayoutParams(dp(45),dp(50)))
+        radar.addView(action("⌖").apply {setOnClickListener {
+            fogOverlay.currentPosition?.let {map.controller.animateTo(it)}
+        }},LinearLayout.LayoutParams(dp(45),dp(50)))
+        radar.addView(action("−").apply {setOnClickListener {map.controller.zoomOut()}},
+            LinearLayout.LayoutParams(dp(45),dp(50)))
+        val rp=FrameLayout.LayoutParams(dp(45),dp(175),Gravity.END or Gravity.CENTER_VERTICAL)
+        rp.rightMargin=dp(6)
+        mapArea.addView(radar,rp)
+        mapArea.addView(action("◀ POI").apply {setOnClickListener {showCheckpointPanel()}},
+            FrameLayout.LayoutParams(dp(70),dp(45),Gravity.START or Gravity.CENTER_VERTICAL))
+        root.addView(mapArea,LinearLayout.LayoutParams(-1,0,1f))
         val controls = LinearLayout(this).apply { setBackgroundColor(olive); gravity = Gravity.CENTER }
         trackButton = action("TRACK")
         modeButton = action("PAINT")
@@ -223,11 +296,14 @@ class MainActivity : Activity(), SensorEventListener {
         fun activate(selected: String, button: Button) {
             mode = if (mode == selected) "VIEW" else selected
             pathStart = null
+            pending.clear()
+            confirmButton.visibility=View.GONE
+            refresh()
             pathButton.text = if (mode == "PATH") "PATH ●" else "PATH"
             modeButton.text = if (mode == "PAINT") "PAINT ●" else "PAINT"
             eraseButton.text = if (mode == "ERASE") "ERASE ●" else "ERASE"
             status.text = when(mode) {
-                "PATH" -> "PATH / TAP VERTICES TO DRAW VECTOR"
+                "PATH" -> "PATH / RED VERTICES / CONFIRM"
                 "PAINT" -> "PAINT / DRAG TO REVEAL"
                 "ERASE" -> "ERASE / DRAG TO REMOVE MANUAL REVEALS"
                 else -> "MAP READY"
@@ -241,6 +317,58 @@ class MainActivity : Activity(), SensorEventListener {
         map.setUseDataConnection(true)
     }
 
+    private var poiPopup:PopupWindow?=null
+    private fun showCheckpointPanel() {
+        val panel=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(10),dp(10),dp(10),dp(10))
+            setBackgroundColor(Color.rgb(43,54,43))
+        }
+        panel.addView(label("FIELD INVENTORY / ${notes.size}",12,sand))
+        for(kind in listOf("CHECKPOINT","POI")) {
+            panel.addView(action("+ $kind").apply {setOnClickListener {
+                poiPopup?.dismiss()
+                val c=map.mapCenter
+                showNoteEditor(GeoPoint(c.latitude,c.longitude),kind)
+            }})
+        }
+        notes.takeLast(5).reversed().forEach { note ->
+            panel.addView(action("${note.kind}: ${note.title.take(15)}").apply {
+                setOnClickListener {
+                    poiPopup?.dismiss()
+                    map.controller.animateTo(GeoPoint(note.latitude,note.longitude))
+                }
+            })
+        }
+        poiPopup?.dismiss()
+        poiPopup=PopupWindow(panel,dp(230),-2,true).apply {
+            isOutsideTouchable=true
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.rgb(43,54,43)))
+            showAtLocation(map,Gravity.START or Gravity.CENTER_VERTICAL,dp(8),0)
+        }
+    }
+    private fun showNoteEditor(where:GeoPoint,kind:String="POI") {
+        val layout=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(15),dp(12),dp(15),dp(12))
+        }
+        val title=EditText(this).apply {hint="Title / callsign"}
+        val detail=EditText(this).apply {hint="Field notes";minLines=3}
+        val kinds=listOf("POI","CHECKPOINT","MEMORY","CAMP")
+        val selector=Spinner(this).apply {
+            adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,kinds)
+            setSelection(kinds.indexOf(kind).coerceAtLeast(0))
+        }
+        layout.addView(selector);layout.addView(title);layout.addView(detail)
+        android.app.AlertDialog.Builder(this).setTitle("FIELD INVENTORY")
+            .setView(layout).setNegativeButton("CANCEL",null)
+            .setPositiveButton("SAVE") { _,_ ->
+                notes.add(FieldNote(where.latitude,where.longitude,title.text.toString().ifBlank{"Untitled"},
+                    selector.selectedItem.toString(),detail.text.toString(),System.currentTimeMillis()))
+                fieldNotes.save(notes)
+                status.text="FIELD NOTE SAVED"
+            }.show()
+    }
     private fun gap(a: GeoPoint, b: GeoPoint): Float {
         val out = FloatArray(1)
         android.location.Location.distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude, out)
@@ -403,5 +531,6 @@ class MainActivity : Activity(), SensorEventListener {
         if (tracking) stopTracking()
         handler.removeCallbacks(simulationStep)
         layersPopup?.dismiss()
+        poiPopup?.dismiss()
     }
 }
