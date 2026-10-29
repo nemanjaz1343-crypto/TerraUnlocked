@@ -76,6 +76,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var tracking = false
     private var followUser = true
     private lateinit var followButton:Button
+    private var paintPopup:PopupWindow?=null
     private lateinit var radarDrawer:LinearLayout
     private var radarExpanded=false
     private var radialMenu:PopupWindow?=null
@@ -250,7 +251,7 @@ class MainActivity : Activity(), SensorEventListener {
         })
         map.overlays.add(object : Overlay() {
             override fun onTouchEvent(event:MotionEvent,mapView:MapView):Boolean {
-                if(mode=="VIEW" && event.actionMasked==MotionEvent.ACTION_MOVE && event.pointerCount==1) {
+                if(mode=="VIEW" && event.actionMasked==MotionEvent.ACTION_MOVE && event.pointerCount==1 && followUser) {
                     followUser=false
                     if(::followButton.isInitialized) followButton.text="FOLLOW ○"
                 }
@@ -329,14 +330,15 @@ class MainActivity : Activity(), SensorEventListener {
             refresh()
         }
         root.addView(mapArea,LinearLayout.LayoutParams(-1,0,1f))
-        val controls = LinearLayout(this).apply { setBackgroundColor(olive); gravity = Gravity.CENTER }
-        trackButton = action("TRACK")
-        modeButton = action("PAINT")
-        val pathButton = action("PATH")
-        val eraseButton = action("ERASE")
-        val layers = action("LAYERS")
-        listOf(trackButton, pathButton, modeButton, eraseButton, layers).forEach {
-            controls.addView(it, LinearLayout.LayoutParams(0, dp(45), 1f))
+        val controls=LinearLayout(this).apply {setBackgroundColor(olive);gravity=Gravity.CENTER}
+        trackButton=action("TRACK")
+        followButton=action("FOCUS ●")
+        val pathButton=action("PATH")
+        modeButton=action("PAINT")
+        val eraseButton=action("ERASE")
+        val viewButton=action("VIEW")
+        listOf(trackButton,followButton,pathButton,modeButton,eraseButton,viewButton).forEach {
+            controls.addView(it,LinearLayout.LayoutParams(0,dp(46),1f))
         }
         root.addView(controls)
         setContentView(root)
@@ -346,6 +348,11 @@ class MainActivity : Activity(), SensorEventListener {
                     startTracking()
                 else requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), 10)
             }
+        }
+        followButton.setOnClickListener {
+            followUser=!followUser
+            followButton.text=if(followUser) "FOCUS ●" else "FOCUS ○"
+            if(followUser) fogOverlay.currentPosition?.let {map.controller.animateTo(it)}
         }
         fun activate(selected: String, button: Button) {
             mode = if (mode == selected) "VIEW" else selected
@@ -364,9 +371,9 @@ class MainActivity : Activity(), SensorEventListener {
             }
         }
         pathButton.setOnClickListener { activate("PATH", pathButton) }
-        modeButton.setOnClickListener { activate("PAINT", modeButton) }
+        modeButton.setOnClickListener {activate("PAINT",modeButton);if(mode=="PAINT") showPaintSettings() else paintPopup?.dismiss()}
         eraseButton.setOnClickListener { activate("ERASE", eraseButton) }
-        layers.setOnClickListener { showLayers(layers) }
+        viewButton.setOnClickListener { showLayers(viewButton) }
         compass.setOnClickListener { map.mapOrientation = 0f }
         map.setUseDataConnection(true)
     }
@@ -529,11 +536,37 @@ class MainActivity : Activity(), SensorEventListener {
         android.location.Location.distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude, out)
         return out[0]
     }
+    private fun showPaintSettings() {
+        paintPopup?.dismiss()
+        val panel=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(12),dp(8),dp(12),dp(8))
+            setBackgroundColor(Color.argb(230,38,52,41))
+        }
+        val caption=label("PAINT / RADIUS "+radius+"m",12,sand)
+        panel.addView(caption)
+        panel.addView(SeekBar(this).apply {
+            max=95;progress=radius-5
+            setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(bar:SeekBar?,value:Int,user:Boolean) {
+                    radius=value+5;fogOverlay.radiusMeters=radius.toDouble()
+                    caption.text="PAINT / RADIUS "+radius+"m";refresh()
+                }
+                override fun onStartTrackingTouch(bar:SeekBar?) {}
+                override fun onStopTrackingTouch(bar:SeekBar?) {}
+            })
+        })
+        paintPopup=PopupWindow(panel,dp(235),dp(98),true).apply {
+            isOutsideTouchable=true
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+            showAtLocation(map,Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,0,dp(61))
+        }
+    }
     private fun showLayers(anchor: View) {
         if (layersPopup?.isShowing == true) { layersPopup?.dismiss(); return }
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(43, 54, 43))
+            setBackgroundColor(Color.argb(225,43,54,43))
             setPadding(dp(12), dp(8), dp(12), dp(8))
         }
         fun option(name: String, callback: () -> Unit) {
@@ -558,22 +591,6 @@ class MainActivity : Activity(), SensorEventListener {
         option("ROUTE ${if (fogOverlay.showRoute) "ON" else "OFF"}") {
             fogOverlay.showRoute = !fogOverlay.showRoute; refresh()
         }
-        val radiusLabel = label("BRUSH RADIUS  ${radius} m",12,sand)
-        panel.addView(radiusLabel)
-        panel.addView(SeekBar(this).apply {
-            max = 95
-            progress = radius - 5
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(bar: SeekBar?, value: Int, user: Boolean) {
-                    radius = value + 5
-                    fogOverlay.radiusMeters = radius.toDouble()
-                    radiusLabel.text = "BRUSH RADIUS  ${radius} m"
-                    refresh()
-                }
-                override fun onStartTrackingTouch(bar: SeekBar?) {}
-                override fun onStopTrackingTouch(bar: SeekBar?) {}
-            })
-        })
         option("OFFLINE ${if (offline) "ON" else "OFF"}") {
             offline = !offline
             map.setUseDataConnection(!offline)
@@ -597,7 +614,7 @@ class MainActivity : Activity(), SensorEventListener {
             val idx = records.indexOfLast { it.manual }
             if (idx >= 0) { records.removeAt(idx); store.replaceAll(records); refresh() }
         }
-        layersPopup = PopupWindow(panel, dp(255), dp(520), true).apply {
+        layersPopup = PopupWindow(panel, dp(240), dp(475), true).apply {
             isOutsideTouchable = true
             setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.rgb(43, 54, 43)))
             elevation = dp(8).toFloat()
@@ -720,5 +737,6 @@ class MainActivity : Activity(), SensorEventListener {
         layersPopup?.dismiss()
         poiPopup?.dismiss()
         radialMenu?.dismiss()
+        paintPopup?.dismiss()
     }
 }
