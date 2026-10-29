@@ -17,6 +17,14 @@ class DiscoveryStore(context: Context) {
             }.getOrNull()
         }
     }
+    fun replaceAll(points: List<DiscoveryPoint>) {
+        val array = JSONArray()
+        points.forEach { point ->
+            array.put(JSONObject().put("lat", point.latitude).put("lon", point.longitude)
+                .put("manual", point.manual).put("time", point.timestamp))
+        }
+        preferences.edit().putString("points", array.toString()).apply()
+    }
     fun add(point: DiscoveryPoint) {
         val array = JSONArray(preferences.getString("points", "[]") ?: "[]")
         array.put(JSONObject().put("lat", point.latitude).put("lon", point.longitude)
