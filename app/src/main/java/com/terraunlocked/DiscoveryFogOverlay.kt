@@ -5,78 +5,116 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Point
+import android.graphics.RadialGradient
+import android.graphics.Shader
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Overlay
 import kotlin.math.cos
 import kotlin.math.hypot
 
-/** Screen-space rendering of the complement of all explored buffered paths.
- * Geometry remains in geographic coordinates; nothing is rasterized to persistent tiles.
- */
 class DiscoveryFogOverlay(
     private val records: () -> List<DiscoveryPoint>,
     private val demo: () -> List<DiscoveryPoint>,
+    private val segments: () -> List<ManualSegment>,
     var radiusMeters: Double = 20.0
 ) : Overlay() {
     var fogVisible = true
-    var opacity = 215
+    var opacity = 205
     var showRoute = true
-    private val fogPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(17, 23, 19); style = Paint.Style.FILL }
-    private val routePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(210, 188, 132); strokeWidth = 2.5f; style = Paint.Style.STROKE }
-
+    var currentPosition: GeoPoint? = null
+    var positionAccuracy = 0f
+    private val fogPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(15, 22, 17) }
+    private val routePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(218, 199, 148); strokeWidth = 2.5f; style = Paint.Style.STROKE
+    }
+    private fun toPoint(map: MapView, lat: Double, lon: Double): Point =
+        map.projection.toPixels(GeoPoint(lat, lon), Point())
+    private fun radiusPx(map: MapView, lat: Double, lon: Double): Float {
+        val p = toPoint(map, lat, lon)
+        val east = toPoint(map, lat, lon + radiusMeters / (111320.0 * cos(Math.toRadians(lat)).coerceAtLeast(.01)))
+        return kotlin.math.abs(east.x - p.x).toFloat().coerceAtLeast(1f)
+    }
+    private fun canJoin(a: DiscoveryPoint, b: DiscoveryPoint): Boolean {
+        if (a.manual || b.manual || b.timestamp < a.timestamp || b.timestamp - a.timestamp > 90000L) return false
+        val out = FloatArray(1)
+        android.location.Location.distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude, out)
+        return out[0] <= 120f
+    }
+    private fun segmentPath(a: Point, b: Point): Path =
+        Path().apply { moveTo(a.x.toFloat(), a.y.toFloat()); lineTo(b.x.toFloat(), b.y.toFloat()) }
+    private fun buffered(path: Path, radius: Float): Path {
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            strokeWidth = radius * 2
+        }
+        return Path().also { paint.getFillPath(path, it) }
+    }
     override fun draw(canvas: Canvas, mapView: MapView, shadow: Boolean) {
         if (shadow) return
         val points = records() + demo()
-        val projection = mapView.projection
         if (fogVisible) {
             canvas.save()
-            // Subtract explored shapes from dark overlay; round caps connect vertices.
+            val visible = Path()
             for (i in points.indices) {
                 val p = points[i]
-                val pix = projection.toPixels(GeoPoint(p.latitude, p.longitude), Point())
-                val east = projection.toPixels(
-                    GeoPoint(p.latitude, p.longitude + radiusMeters / (111320.0 * cos(Math.toRadians(p.latitude)).coerceAtLeast(0.01))), Point())
-                val r = hypot((east.x - pix.x).toDouble(), (east.y - pix.y).toDouble()).toFloat().coerceAtLeast(1f)
-                val circle = Path().apply { addCircle(pix.x.toFloat(), pix.y.toFloat(), r, Path.Direction.CW) }
-                canvas.clipOutPath(circle)
-                if (i > 0 && !p.manual && canJoin(points[i - 1], p)) {
-                    val a = points[i - 1]
-                    val pa = projection.toPixels(GeoPoint(a.latitude, a.longitude), Point())
-                    val corridor = Path()
-                    val dx = (pix.x - pa.x).toFloat()
-                    val dy = (pix.y - pa.y).toFloat()
-                    val d = hypot(dx.toDouble(), dy.toDouble()).toFloat()
-                    if (d > 0.01f) {
-                        val nx = -dy / d * r; val ny = dx / d * r
-                        corridor.moveTo(pa.x + nx, pa.y + ny)
-                        corridor.lineTo(pix.x + nx, pix.y + ny)
-                        corridor.lineTo(pix.x - nx, pix.y - ny)
-                        corridor.lineTo(pa.x - nx, pa.y - ny)
-                        corridor.close()
-                        canvas.clipOutPath(corridor)
-                    }
+                val pix = toPoint(mapView, p.latitude, p.longitude)
+                val r = radiusPx(mapView, p.latitude, p.longitude)
+                visible.addCircle(pix.x.toFloat(), pix.y.toFloat(), r, Path.Direction.CW)
+                if (i > 0 && canJoin(points[i-1],p)) {
+                    val a = toPoint(mapView,points[i-1].latitude,points[i-1].longitude)
+                    visible.addPath(buffered(segmentPath(a,pix),r))
                 }
             }
-            fogPaint.alpha = opacity.coerceIn(0, 255)
-            canvas.drawRect(0f, 0f, canvas.width.toFloat(), canvas.height.toFloat(), fogPaint)
+            for (s in segments()) {
+                val a = toPoint(mapView,s.aLat,s.aLon)
+                val b = toPoint(mapView,s.bLat,s.bLon)
+                visible.addPath(buffered(segmentPath(a,b),radiusPx(mapView,s.aLat,s.aLon)))
+            }
+            canvas.clipOutPath(visible)
+            fogPaint.alpha = opacity.coerceIn(0,255)
+            canvas.drawRect(0f,0f,canvas.width.toFloat(),canvas.height.toFloat(),fogPaint)
             canvas.restore()
+
+            // Feathered transition: translucent dark halo just inside the reveal boundary.
+            val edge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = 4f
+                color = Color.argb((opacity * .28f).toInt(),15,22,17)
+            }
+            for (p in points) {
+                val c = toPoint(mapView,p.latitude,p.longitude)
+                val r = radiusPx(mapView,p.latitude,p.longitude)
+                canvas.drawCircle(c.x.toFloat(),c.y.toFloat(),(r-2f).coerceAtLeast(.5f),edge)
+            }
         }
         if (showRoute) {
             for (i in 1 until points.size) {
-                val p = points[i]; val a = points[i - 1]
-                if (!p.manual && canJoin(a, p)) {
-                    val p1 = projection.toPixels(GeoPoint(a.latitude, a.longitude), Point())
-                    val p2 = projection.toPixels(GeoPoint(p.latitude, p.longitude), Point())
-                    canvas.drawLine(p1.x.toFloat(), p1.y.toFloat(), p2.x.toFloat(), p2.y.toFloat(), routePaint)
+                val a = points[i-1]; val b = points[i]
+                if (canJoin(a,b)) {
+                    val x = toPoint(mapView,a.latitude,a.longitude)
+                    val y = toPoint(mapView,b.latitude,b.longitude)
+                    canvas.drawLine(x.x.toFloat(),x.y.toFloat(),y.x.toFloat(),y.y.toFloat(),routePaint)
                 }
             }
+            for (s in segments()) {
+                val a = toPoint(mapView,s.aLat,s.aLon)
+                val b = toPoint(mapView,s.bLat,s.bLon)
+                canvas.drawLine(a.x.toFloat(),a.y.toFloat(),b.x.toFloat(),b.y.toFloat(),routePaint)
+            }
         }
-    }
-    private fun canJoin(a: DiscoveryPoint, b: DiscoveryPoint): Boolean {
-        if (a.manual || b.manual || b.timestamp < a.timestamp || b.timestamp - a.timestamp > 90_000L) return false
-        val results = FloatArray(1)
-        android.location.Location.distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude, results)
-        return results[0] < 120f
+        currentPosition?.let { loc ->
+            val p = toPoint(mapView,loc.latitude,loc.longitude)
+            val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color=Color.argb(85,107,185,226); style=Paint.Style.FILL
+            }
+            canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),15f,ring)
+            val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color=Color.rgb(95,202,255);style=Paint.Style.FILL }
+            canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),7f,dot)
+            val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.WHITE;style=Paint.Style.STROKE;strokeWidth=2f}
+            canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),7f,border)
+        }
     }
 }
