@@ -71,6 +71,11 @@ class MainActivity : Activity(), SensorEventListener {
     private val demo = mutableListOf<DiscoveryPoint>()
     private var mode = "VIEW"
     private var tracking = false
+    private var followUser = true
+    private lateinit var followButton:Button
+    private lateinit var radarDrawer:LinearLayout
+    private var radarExpanded=false
+    private var filteredFixes=0
     private var simulating = false
     private var fogEnabled = true
     private var radius = 20
@@ -85,15 +90,18 @@ class MainActivity : Activity(), SensorEventListener {
             result.locations.forEach { loc ->
                 val prevFix=lastGpsSample
                 val elapsed=if(prevFix!=null) (loc.elapsedRealtimeNanos-prevFix.elapsedRealtimeNanos)/1e9 else 0.0
-                if(loc.accuracy>35f || (prevFix!=null && elapsed>0 && prevFix.distanceTo(loc)/elapsed>38.0)) {
+                if(loc.accuracy>65f || (prevFix!=null && elapsed>1.0 && prevFix.distanceTo(loc)/elapsed>38.0)) {
+                    filteredFixes++
+                    if(filteredFixes >= 3) { lastGpsSample=null; last=null; filteredFixes=0 }
                     status.text="GPS DRIFT / FIX REJECTED"
                     return@forEach
                 }
+                filteredFixes=0
                 lastGpsSample=loc
                 fogOverlay.currentPosition = GeoPoint(loc.latitude, loc.longitude)
                 fogOverlay.positionAccuracy = loc.accuracy
                 map.invalidate()
-                if (loc.accuracy > 35f) return@forEach
+                if (loc.accuracy > 65f) return@forEach
                 val point = DiscoveryPoint(loc.latitude, loc.longitude, false, System.currentTimeMillis())
                 val previous = last
                 if (previous == null || metres(previous, point) >= 8f) {
@@ -163,7 +171,7 @@ class MainActivity : Activity(), SensorEventListener {
             controller.setZoom(16.0)
             controller.setCenter(GeoPoint(25.0657, 55.1403))
         }
-        fogOverlay = DiscoveryFogOverlay({ records }, { demo }, { segments })
+        fogOverlay = DiscoveryFogOverlay({ records }, { demo }, { segments }, { notes })
         map.overlays.add(fogOverlay)
         map.overlays.add(object : Overlay() {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
@@ -184,6 +192,15 @@ class MainActivity : Activity(), SensorEventListener {
                 val p=mapView.projection.fromPixels(e.x.toInt(),e.y.toInt())
                 showNoteEditor(GeoPoint(p.latitude,p.longitude))
                 return true
+            }
+        })
+        map.overlays.add(object : Overlay() {
+            override fun onTouchEvent(event:MotionEvent,mapView:MapView):Boolean {
+                if(mode=="VIEW" && event.actionMasked==MotionEvent.ACTION_MOVE && event.pointerCount==1) {
+                    followUser=false
+                    if(::followButton.isInitialized) followButton.text="FOLLOW ○"
+                }
+                return false
             }
         })
         map.overlays.add(object : Overlay() {
@@ -257,23 +274,39 @@ class MainActivity : Activity(), SensorEventListener {
             status.text="PATH CONFIRMED"
             refresh()
         }
-        val radar=LinearLayout(this).apply {
+        radarDrawer=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
             setBackgroundColor(Color.rgb(43,54,43))
         }
-        radar.addView(label("ZOOM",10,sand))
-        radar.addView(action("+").apply {setOnClickListener {map.controller.zoomIn()}},
+        radarDrawer.addView(label("RADAR",10,sand))
+        radarDrawer.addView(action("+").apply {setOnClickListener {map.controller.zoomIn()}},
             LinearLayout.LayoutParams(dp(45),dp(50)))
-        radar.addView(action("⌖").apply {setOnClickListener {
+        radarDrawer.addView(action("⌖").apply {setOnClickListener {
             fogOverlay.currentPosition?.let {map.controller.animateTo(it)}
         }},LinearLayout.LayoutParams(dp(45),dp(50)))
-        radar.addView(action("−").apply {setOnClickListener {map.controller.zoomOut()}},
+        radarDrawer.addView(action("−").apply {setOnClickListener {map.controller.zoomOut()}},
             LinearLayout.LayoutParams(dp(45),dp(50)))
-        val rp=FrameLayout.LayoutParams(dp(45),dp(175),Gravity.END or Gravity.CENTER_VERTICAL)
-        rp.rightMargin=dp(6)
-        mapArea.addView(radar,rp)
-        mapArea.addView(action("◀ POI").apply {setOnClickListener {showCheckpointPanel()}},
-            FrameLayout.LayoutParams(dp(70),dp(45),Gravity.START or Gravity.CENTER_VERTICAL))
+        followButton=action("FOLLOW ●").apply {
+            setOnClickListener {
+                followUser=!followUser
+                text=if(followUser) "FOLLOW ●" else "FOLLOW ○"
+                if(followUser) fogOverlay.currentPosition?.let { map.controller.animateTo(it) }
+            }
+        }
+        radarDrawer.addView(followButton,LinearLayout.LayoutParams(-1,dp(40)))
+        radarDrawer.visibility=View.GONE
+        val rp=FrameLayout.LayoutParams(dp(65),dp(225),Gravity.END or Gravity.CENTER_VERTICAL)
+        rp.rightMargin=dp(5)
+        mapArea.addView(radarDrawer,rp)
+        mapArea.addView(action("◂").apply {
+            setOnClickListener {
+                radarExpanded=!radarExpanded
+                radarDrawer.visibility=if(radarExpanded) View.VISIBLE else View.GONE
+                text=if(radarExpanded) "▸" else "◂"
+            }
+        },FrameLayout.LayoutParams(dp(29),dp(42),Gravity.END or Gravity.CENTER_VERTICAL))
+        mapArea.addView(action("◂").apply {setOnClickListener {showCheckpointPanel()}},
+            FrameLayout.LayoutParams(dp(31),dp(43),Gravity.START or Gravity.CENTER_VERTICAL))
         root.addView(mapArea,LinearLayout.LayoutParams(-1,0,1f))
         val controls = LinearLayout(this).apply { setBackgroundColor(olive); gravity = Gravity.CENTER }
         trackButton = action("TRACK")
@@ -367,6 +400,7 @@ class MainActivity : Activity(), SensorEventListener {
                     selector.selectedItem.toString(),detail.text.toString(),System.currentTimeMillis()))
                 fieldNotes.save(notes)
                 status.text="FIELD NOTE SAVED"
+                refresh()
             }.show()
     }
     private fun gap(a: GeoPoint, b: GeoPoint): Float {
@@ -390,6 +424,12 @@ class MainActivity : Activity(), SensorEventListener {
         }
         option("FOG OPACITY ${fogOverlay.opacity}") {
             fogOverlay.opacity = if (fogOverlay.opacity >= 235) 125 else fogOverlay.opacity + 35; refresh()
+        }
+        option("CHECKPOINTS ${if(fogOverlay.showCheckpoints) "ON" else "OFF"}") {
+            fogOverlay.showCheckpoints=!fogOverlay.showCheckpoints;refresh()
+        }
+        option("BACKTRACK ${if(fogOverlay.backtrack) "ON" else "OFF"}") {
+            fogOverlay.backtrack=!fogOverlay.backtrack;refresh()
         }
         option("ROUTE ${if (fogOverlay.showRoute) "ON" else "OFF"}") {
             fogOverlay.showRoute = !fogOverlay.showRoute; refresh()
@@ -433,7 +473,7 @@ class MainActivity : Activity(), SensorEventListener {
             val idx = records.indexOfLast { it.manual }
             if (idx >= 0) { records.removeAt(idx); store.replaceAll(records); refresh() }
         }
-        layersPopup = PopupWindow(panel, dp(255), dp(455), true).apply {
+        layersPopup = PopupWindow(panel, dp(255), dp(520), true).apply {
             isOutsideTouchable = true
             setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.rgb(43, 54, 43)))
             elevation = dp(8).toFloat()
@@ -476,6 +516,7 @@ class MainActivity : Activity(), SensorEventListener {
     private fun startTracking() {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
         last = null
+        lastGpsSample=null
         tracking = true
         trackButton.text = "STOP GPS"
         val req = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000L)
