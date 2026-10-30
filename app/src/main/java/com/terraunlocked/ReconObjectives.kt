@@ -32,5 +32,19 @@ class ObjectiveStore(context:Context) {
     fun hide(id:String,hidden:Boolean=true){prefs.edit().putBoolean("hidden_"+id,hidden).apply()}
     fun completed(id:String)=prefs.getBoolean("done_"+id,false)
     fun complete(id:String){prefs.edit().putBoolean("done_"+id,true).apply()}
+    fun customPlaces():List<ReconObjective> = runCatching {
+        val arr=org.json.JSONArray(prefs.getString("custom_places","[]"))
+        (0 until arr.length()).map {i->
+            val j=arr.getJSONObject(i)
+            ReconObjective(j.getString("id"),j.getString("name"),"SAVED",j.getDouble("lat"),j.getDouble("lon"),j.optString("brief","Want to visit"),"")
+        }
+    }.getOrDefault(emptyList())
+    fun addPlace(name:String,lat:Double,lon:Double,address:String):ReconObjective {
+        val item=ReconObjective("saved_"+System.currentTimeMillis(),name,"SAVED",lat,lon,address,"")
+        val arr=org.json.JSONArray(prefs.getString("custom_places","[]"))
+        arr.put(org.json.JSONObject().put("id",item.id).put("name",name).put("lat",lat).put("lon",lon).put("brief",address))
+        prefs.edit().putString("custom_places",arr.toString()).apply()
+        return item
+    }
     fun resetHiding(){ReconObjectives.all.forEach{hide(it.id,false)}}
 }
