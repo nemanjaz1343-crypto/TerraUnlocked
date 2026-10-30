@@ -249,7 +249,7 @@ class MainActivity : Activity(), SensorEventListener {
                     canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),dp(13).toFloat(),ink)
                     ink.color=if(objectiveStore.completed(o.id))Color.GREEN else if(objectiveStore.active==o.id)Color.YELLOW else Color.CYAN
                     ink.textSize=dp(18).toFloat();ink.textAlign=Paint.Align.CENTER
-                    canvas.drawText(if(objectiveStore.completed(o.id))"✓" else "◇",p.x.toFloat(),p.y+dp(5),ink)
+                    canvas.drawText(if(objectiveStore.completed(o.id))"✓" else "◇",p.x.toFloat(),p.y.toFloat()+dp(5).toFloat(),ink)
                 }
             }
             override fun onSingleTapConfirmed(event:MotionEvent,mapView:MapView):Boolean {
