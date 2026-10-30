@@ -508,7 +508,7 @@ class MainActivity : Activity(), SensorEventListener {
             panel.addView(action(title).apply {
                 background=android.graphics.drawable.GradientDrawable().apply {
                     cornerRadius=dp(12).toFloat()
-                    setColor(Color.rgb(43,54,43))
+                    setColor(Color.argb(126,43,54,43))
                     setStroke(dp(1),Color.rgb(143,158,116))
                 }
                 setOnClickListener { radialMenu?.dismiss();onTap() }
@@ -580,7 +580,7 @@ class MainActivity : Activity(), SensorEventListener {
             setPadding(dp(17),dp(16),dp(17),dp(15))
             background=GradientDrawable().apply {
                 cornerRadius=dp(19).toFloat()
-                setColor(Color.argb(242,31,44,36))
+                setColor(Color.argb(126,31,44,36))
                 setStroke(dp(1),Color.rgb(119,139,106))
             }
         }
@@ -758,7 +758,7 @@ class MainActivity : Activity(), SensorEventListener {
             setPadding(dp(12),dp(12),dp(12),dp(12))
             background=GradientDrawable().apply {
                 cornerRadius=dp(16).toFloat()
-                setColor(Color.argb(238,31,44,36))
+                setColor(Color.argb(126,31,44,36))
             }
         }
         panel.addView(label("◎ RECON OBJECTIVES",14,sand))
@@ -798,7 +798,7 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
     private fun showObjective(o:ReconObjective) {
-        val panel=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(14),dp(10),dp(14),dp(10));setBackgroundColor(Color.rgb(37,51,40))}
+        val panel=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(14),dp(10),dp(14),dp(10));background=tacticalPanel()}
         panel.addView(label("OBJECTIVE / "+o.category,12,sage))
         panel.addView(label(o.name,17,sand))
         panel.addView(label(o.brief,13,sand))
@@ -826,7 +826,7 @@ class MainActivity : Activity(), SensorEventListener {
             setPadding(dp(16),dp(14),dp(16),dp(14))
             background=GradientDrawable().apply {
                 cornerRadius=dp(18).toFloat()
-                setColor(Color.argb(244,32,45,37))
+                setColor(Color.argb(126,32,45,37))
                 setStroke(dp(1),Color.rgb(115,137,103))
             }
         }
@@ -1044,7 +1044,7 @@ class MainActivity : Activity(), SensorEventListener {
         if (layersPopup?.isShowing == true) { layersPopup?.dismiss(); return }
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.argb(225,43,54,43))
+            background=tacticalPanel()
             setPadding(dp(12), dp(8), dp(12), dp(8))
         }
         fun option(name: String, callback: () -> Unit) {
