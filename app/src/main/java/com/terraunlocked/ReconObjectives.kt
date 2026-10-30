@@ -17,6 +17,15 @@ object ReconObjectives {
         ReconObjective("alsafalibrary","Al Safa Art & Design Library","ART",25.1768,55.2295,"Explore a design-focused public library and its architecture.","https://www.dubai.ae/web/dubai.ae/living/sports-culture/culture-arts"),
         ReconObjective("etihad","Etihad Museum","HERITAGE",25.2291,55.2650,"Museum documenting the UAE's foundation and architectural context.","https://www.dubai.ae/web/dubai.ae/living/sports-culture/culture-arts"),
         ReconObjective("alwasl","Al Wasl Plaza","ARCH",24.9617,55.1511,"Large immersive dome and public architecture at Expo City.","https://www.visitdubai.com/articles/unique-things-to-do-in-dubai"),
+        ReconObjective("marinawalk","Dubai Marina Walk","NATURE",25.0803,55.1417,"Waterside promenade, public art and marina skyline.","https://www.visitdubai.com/en/places-to-visit/dubai-marina"),
+        ReconObjective("marinamall","Dubai Marina Mall","ARCH",25.0765,55.1398,"Retail complex beside the marina waterfront.","https://www.dubaimarinamall.com/"),
+        ReconObjective("pier7","Pier 7","ARCH",25.0762,55.1395,"Circular waterfront tower with restaurants overlooking the marina.","https://www.visitdubai.com/en/places-to-visit/dubai-marina"),
+        ReconObjective("jbrwalk","The Walk at JBR","HERITAGE",25.0787,55.1343,"Walkable coastal district with outdoor cafes and public space.","https://www.visitdubai.com/en/places-to-visit/the-walk-at-jbr"),
+        ReconObjective("bluewaters","Bluewaters Island","ARCH",25.0808,55.1230,"Pedestrian island with views of Ain Dubai and the coast.","https://www.visitdubai.com/en/places-to-visit/bluewaters-island"),
+        ReconObjective("marinabeach","Marina Beach / JBR","NATURE",25.0778,55.1301,"Public beach and coastal walk next to JBR.","https://www.visitdubai.com/en/places-to-visit/jumeirah-beach-residence"),
+        ReconObjective("skydive","Skydive Dubai Drop Zone","ARCH",25.0901,55.1367,"Airfield peninsula with views over Dubai Marina and the Palm.","https://www.skydivedubai.ae/"),
+        ReconObjective("almas","Almas Tower","ARCH",25.0683,55.1418,"Distinctive lakefront tower in Jumeirah Lakes Towers.","https://www.visitdubai.com/en/places-to-visit/jumeirah-lakes-towers"),
+        ReconObjective("palmgateway","Palm Jumeirah Gateway","ARCH",25.1003,55.1545,"Gateway to Palm Jumeirah and monorail interchange.","https://www.visitdubai.com/en/places-to-visit/palm-jumeirah"),
         ReconObjective("cinemaakil","Cinema Akil","ART",25.1414,55.2264,"Independent cinema in Alserkal's cultural district.","https://artsandculture.google.com/story/ugWBALMS6kwZvg")
     )
 }
