@@ -8,8 +8,8 @@ import kotlin.math.*
 
 /** Six translucent ring segments with a transparent, non-interactive aiming centre. */
 class RadialMenuView(context:Context,private val onChoice:(Int)->Unit):View(context) {
-    private val labels=listOf("FLAG","PHOTO","SEARCH","PIN","VOICE","NOTE")
-    private val glyphs=listOf("⚑","▣","⌕","◆","●","✎")
+    private val labels=listOf("FLAG","PHOTO","SEARCH","PIN","RULER","NOTE")
+    private val glyphs=listOf("⚑","▣","⌕","◆","↔","✎")
     private val ink=Paint(Paint.ANTI_ALIAS_FLAG)
     private var pressed=-1
     private fun sector(x:Float,y:Float):Int {
