@@ -7,7 +7,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -55,3 +55,19 @@ jobs:
         with:
           name: TerraUnlocked-signed-release
           path: app/build/outputs/apk/release/app-release.apk
+
+      - name: Publish signed APK as latest GitHub Release
+        if: steps.signing.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION=$(grep -E 'versionName = ' app/build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          TAG="v$VERSION"
+          APK="app/build/outputs/apk/release/app-release.apk"
+          cp "$APK" "TerraUnlocked-$TAG.apk"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "TerraUnlocked-$TAG.apk" --clobber
+          else
+            gh release create "$TAG" "TerraUnlocked-$TAG.apk" --title "TerraUnlocked $TAG" --notes "Signed Android app update. Install over your existing signed version to retain exploration data." --latest --target "${GITHUB_SHA}"
+          fi
