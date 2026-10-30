@@ -490,23 +490,11 @@ class MainActivity : Activity(), SensorEventListener {
         map.overlays.add(object:Overlay() {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
                 if(shadow)return
-                val brush=Paint(Paint.ANTI_ALIAS_FLAG)
+                val painter=ObjectiveMarkerArt(this@MainActivity)
                 metroStations.forEach {station->
                     val p=mapView.projection.toPixels(GeoPoint(station.lat,station.lon),Point())
-                    brush.color=Color.argb(215,29,69,94)
-                    canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),dp(13).toFloat(),brush)
-                    brush.color=Color.WHITE;brush.textSize=dp(13).toFloat()
-                    brush.textAlign=Paint.Align.CENTER;brush.typeface=Typeface.DEFAULT_BOLD
-                    // Draw a train pictogram with primitives; no emoji font dependency.
-                    val x=p.x.toFloat();val y=p.y.toFloat()
-                    brush.style=Paint.Style.STROKE;brush.strokeWidth=dp(2).toFloat()
-                    canvas.drawRoundRect(x-dp(7),y-dp(8),x+dp(7),y+dp(6),dp(3).toFloat(),dp(3).toFloat(),brush)
-                    canvas.drawLine(x-dp(5),y-dp(2),x+dp(5),y-dp(2),brush)
-                    canvas.drawLine(x-dp(4),y+dp(8),x-dp(1),y+dp(5),brush)
-                    canvas.drawLine(x+dp(4),y+dp(8),x+dp(1),y+dp(5),brush)
-                    brush.style=Paint.Style.FILL
-                    canvas.drawCircle(x-dp(4),y+dp(3),dp(1).toFloat(),brush)
-                    canvas.drawCircle(x+dp(4),y+dp(3),dp(1).toFloat(),brush)
+                    if(p.x>=0 && p.y>=0 && p.x<canvas.width && p.y<canvas.height)
+                        painter.draw(canvas,p.x.toFloat(),p.y.toFloat(),"TRANSIT",false,false,false)
                 }
             }
             override fun onSingleTapConfirmed(e:MotionEvent,mapView:MapView):Boolean {
@@ -522,15 +510,14 @@ class MainActivity : Activity(), SensorEventListener {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
                 if(shadow)return
                 val prefs=getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE)
-                listOf("HOME" to "⌂","OFFICE" to "⚒").forEach { item ->
-                    val lat=prefs.getString(item.first+"_lat",null)?.toDoubleOrNull()
-                    val lon=prefs.getString(item.first+"_lon",null)?.toDoubleOrNull()
+                val painter=ObjectiveMarkerArt(this@MainActivity)
+                listOf("HOME","OFFICE").forEach {name->
+                    val lat=prefs.getString(name+"_lat",null)?.toDoubleOrNull()
+                    val lon=prefs.getString(name+"_lon",null)?.toDoubleOrNull()
                     if(lat!=null&&lon!=null) {
                         val p=mapView.projection.toPixels(GeoPoint(lat,lon),Point())
-                        val ink=Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.argb(220,31,49,37)}
-                        canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),dp(15).toFloat(),ink)
-                        ink.color=sand;ink.textSize=dp(17).toFloat();ink.textAlign=Paint.Align.CENTER
-                        canvas.drawText(item.second,p.x.toFloat(),p.y.toFloat()+dp(5),ink)
+                        if(p.x>=0 && p.y>=0 && p.x<canvas.width && p.y<canvas.height)
+                            painter.draw(canvas,p.x.toFloat(),p.y.toFloat(),name,false,false,false)
                     }
                 }
             }
