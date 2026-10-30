@@ -502,48 +502,38 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun showRadialMenu(x:Int,y:Int,where:GeoPoint) {
         radialMenu?.dismiss()
-        val size=dp(230)
-        val panel=FrameLayout(this)
-        fun item(title:String,gravity:Int,onTap:()->Unit) {
-            panel.addView(action(title).apply {
-                background=android.graphics.drawable.GradientDrawable().apply {
-                    cornerRadius=dp(12).toFloat()
-                    setColor(Color.argb(126,43,54,43))
-                    setStroke(dp(1),Color.rgb(143,158,116))
+        val size=dp(256)
+        val ring=RadialMenuView(this) { choice ->
+            radialMenu?.dismiss()
+            when(choice) {
+                0 -> showNoteEditor(where,"CHECKPOINT")
+                1 -> {
+                    attachmentPoint=where
+                    startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE);type="image/*"
+                    },82)
                 }
-                setOnClickListener { radialMenu?.dismiss();onTap() }
-            },FrameLayout.LayoutParams(dp(83),dp(45),gravity))
+                2 -> showMapLookup()
+                3 -> {
+                    notes.add(FieldNote(where.latitude,where.longitude,"Quick pin","POI","",System.currentTimeMillis(),"◆"))
+                    fieldNotes.save(notes);status.text="QUICK PIN SAVED";refresh()
+                }
+                4 -> startVoice(where)
+                5 -> showNoteEditor(where,"MEMORY")
+            }
         }
-        item("✎ NOTE",Gravity.START or Gravity.CENTER_VERTICAL) { showNoteEditor(where,"MEMORY") }
-        item("⚑ FLAG",Gravity.TOP or Gravity.CENTER_HORIZONTAL) { showNoteEditor(where,"CHECKPOINT") }
-        item("▣ PHOTO",Gravity.END or Gravity.CENTER_VERTICAL) {
-            attachmentPoint=where
-            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                addCategory(Intent.CATEGORY_OPENABLE)
-                type="image/*"
-            },82)
-        }
-        item("◆ PIN",Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL) {
-            notes.add(FieldNote(where.latitude,where.longitude,"Quick pin","POI","",System.currentTimeMillis(),"◆"))
-            fieldNotes.save(notes);status.text="QUICK PIN SAVED";refresh()
-        }
-        item("⌕ SEARCH",Gravity.BOTTOM or Gravity.END) {showMapLookup()}
-        item("● REC",Gravity.BOTTOM or Gravity.START) {startVoice(where)}
-        panel.addView(android.view.View(this).apply {background=GradientDrawable().apply {shape=GradientDrawable.OVAL;setColor(Color.TRANSPARENT);setStroke(dp(1),sand)}},FrameLayout.LayoutParams(dp(26),dp(26),Gravity.CENTER))
-        val loc=IntArray(2)
-        map.getLocationOnScreen(loc)
+        val loc=IntArray(2);map.getLocationOnScreen(loc)
         val w=resources.displayMetrics.widthPixels
         val h=resources.displayMetrics.heightPixels
         val left=(loc[0]+x-size/2).coerceIn(0,(w-size).coerceAtLeast(0))
-        val top=(loc[1]+y-size/2).coerceIn(dp(35),(h-size-dp(40)).coerceAtLeast(dp(35)))
-        radialMenu=PopupWindow(panel,size,size,true).apply {
+        val top=(loc[1]+y-size/2).coerceIn(dp(38),(h-size-dp(50)).coerceAtLeast(dp(38)))
+        radialMenu=PopupWindow(ring,size,size,true).apply {
             isOutsideTouchable=true
             setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
-            elevation=dp(6).toFloat()
+            elevation=dp(7).toFloat()
             showAtLocation(map,Gravity.TOP or Gravity.START,left,top)
         }
     }
-
     private var poiPopup:PopupWindow?=null
     private fun showCheckpointPanel() {
         val panel=LinearLayout(this).apply {
