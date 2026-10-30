@@ -244,6 +244,7 @@ class MainActivity : Activity(), SensorEventListener {
         compassView = compass
         header.addView(compass)
         header.addView(action("◉").apply {setOnClickListener {chooseMapSource()}},LinearLayout.LayoutParams(dp(36),dp(34)))
+        header.addView(action("↻").apply {contentDescription="Check for updates";setOnClickListener {checkForUpdates()}},LinearLayout.LayoutParams(dp(36),dp(34)))
         val gps = label("  ● RECON", 10, sage)
         header.addView(gps)
         gps.setOnClickListener {setMyLocation()}
