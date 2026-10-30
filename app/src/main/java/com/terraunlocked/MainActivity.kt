@@ -43,6 +43,7 @@ import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Overlay
@@ -627,6 +628,7 @@ class MainActivity : Activity(), SensorEventListener {
         viewButton.setOnClickListener { showLayers(viewButton) }
         compass.setOnClickListener { map.mapOrientation = 0f }
         map.setUseDataConnection(true)
+        applyMapSource(getSharedPreferences("terra_map_source",Context.MODE_PRIVATE).getInt("selected",0))
     }
 
 
@@ -1317,14 +1319,31 @@ class MainActivity : Activity(), SensorEventListener {
                 }
             }.setNegativeButton("CANCEL",null).show()
     }
+    private val scooterMapSource by lazy {
+        XYTileSource("CyclOSM", 0, 20, 256, ".png",
+            arrayOf("https://a.tile-cyclosm.openstreetmap.fr/cyclosm/",
+                    "https://b.tile-cyclosm.openstreetmap.fr/cyclosm/",
+                    "https://c.tile-cyclosm.openstreetmap.fr/cyclosm/"),
+            "© OpenStreetMap contributors · CyclOSM")
+    }
     private fun chooseMapSource() {
-        val names=arrayOf("OpenStreetMap","OpenTopoMap")
+        val names=arrayOf("OpenStreetMap","OpenTopoMap","CyclOSM · BIKE / SCOOTER")
+        val prefs=getSharedPreferences("terra_map_source",Context.MODE_PRIVATE)
         android.app.AlertDialog.Builder(this).setTitle("MAP SOURCE")
-            .setItems(names) {_,i->
-                map.setTileSource(if(i==0)TileSourceFactory.MAPNIK else TileSourceFactory.OpenTopo)
+            .setSingleChoiceItems(names,prefs.getInt("selected",0)) {dialog,i->
+                applyMapSource(i)
+                prefs.edit().putInt("selected",i).apply()
                 status.text="MAP SOURCE / "+names[i]
-                refresh()
-            }.show()
+                dialog.dismiss()
+            }.setNegativeButton("CANCEL",null).show()
+    }
+    private fun applyMapSource(index:Int) {
+        map.setTileSource(when(index) {
+            1 -> TileSourceFactory.OpenTopo
+            2 -> scooterMapSource
+            else -> TileSourceFactory.MAPNIK
+        })
+        map.invalidate()
     }
     private fun moveFieldPin(note:FieldNote) {
         movingObjectiveId=null
