@@ -101,6 +101,8 @@ class MainActivity : Activity(), SensorEventListener {
     private var radarExpanded=false
     private var radialMenu:PopupWindow?=null
     private var attachmentPoint:GeoPoint?=null
+    private var attachmentNoteTime:Long?=null
+    private var cameraUri:Uri?=null
     private var voicePoint:GeoPoint?=null
     private var recorder:MediaRecorder?=null
     private var audioFile:File?=null
@@ -436,7 +438,10 @@ class MainActivity : Activity(), SensorEventListener {
                 type="image/*"
             },82)
         }
-        item("◆ PIN",Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL) { showNoteEditor(where,"POI") }
+        item("◆ PIN",Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL) {
+            notes.add(FieldNote(where.latitude,where.longitude,"Quick pin","POI","",System.currentTimeMillis(),"◆"))
+            fieldNotes.save(notes);status.text="QUICK PIN SAVED";refresh()
+        }
         panel.addView(action("● REC").apply {setOnClickListener {radialMenu?.dismiss();startVoice(where)}},FrameLayout.LayoutParams(dp(75),dp(32),Gravity.CENTER))
         val loc=IntArray(2)
         map.getLocationOnScreen(loc)
@@ -532,29 +537,101 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun showExisting(note:FieldNote) {
+        val current=notes.find { it.time==note.time } ?: return
         val panel=LinearLayout(this).apply {
-            orientation=LinearLayout.VERTICAL;setPadding(dp(18),dp(12),dp(18),dp(12))
-            setBackgroundColor(Color.rgb(40,52,42))
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(16),dp(14),dp(16),dp(14))
+            background=GradientDrawable().apply {
+                cornerRadius=dp(18).toFloat()
+                setColor(Color.argb(244,32,45,37))
+                setStroke(dp(1),Color.rgb(115,137,103))
+            }
         }
-        panel.addView(label(note.kind+" / "+note.title,16,sand))
-        panel.addView(label(if(note.kind=="VOICE") "Voice recording" else if(note.kind=="PHOTO") "Photo attachment" else note.body,13,sage))
-        if(note.kind=="VOICE") panel.addView(action("▶ PLAY").apply {setOnClickListener {
-            runCatching {
-                MediaPlayer().apply {
-                    setDataSource(File(filesDir,note.body).absolutePath)
-                    setOnCompletionListener {it.release()}
-                    prepare();start()
+        panel.addView(label("FIELD INVENTORY / EDIT",12,sand))
+        val name=EditText(this).apply {
+            setText(current.title);textSize=15f;setSingleLine(true)
+            setTextColor(sand);setHintTextColor(sage);hint="Marker title"
+        }
+        panel.addView(name)
+        val memo=EditText(this).apply {
+            setText(if(current.kind=="PHOTO"||current.kind=="VOICE") "" else current.body)
+            minLines=2;maxLines=4;setTextColor(sand);setHintTextColor(sage)
+            hint="Visit notes..."
+        }
+        if(current.kind!="PHOTO"&&current.kind!="VOICE")panel.addView(memo)
+        var selected=current.icon
+        val choices=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
+        listOf("◆","⚑","★","✎","▲","●","⌖","▣").forEach {glyph->
+            choices.addView(action(glyph).apply {
+                textSize=17f
+                setOnClickListener {selected=glyph;this@MainActivity.status.text="ICON "+glyph}
+            },LinearLayout.LayoutParams(0,dp(40),1f))
+        }
+        panel.addView(choices)
+        val count=label("ATTACHMENTS / "+current.attachments.size,12,sage)
+        panel.addView(count)
+        current.attachments.forEachIndexed { index,filename ->
+            panel.addView(action("▣ PHOTO "+(index+1)+"   /   OPEN").apply {
+                setOnClickListener {
+                    val bitmap=android.graphics.BitmapFactory.decodeFile(File(filesDir,filename).absolutePath)
+                    if(bitmap!=null) android.app.AlertDialog.Builder(this@MainActivity)
+                        .setView(android.widget.ImageView(this@MainActivity).apply {
+                            setImageBitmap(bitmap);adjustViewBounds=true
+                        }).setPositiveButton("CLOSE",null).show()
                 }
-            }.onFailure { status.text="PLAYBACK ERROR" }
-        }})
-        if(note.kind=="PHOTO") panel.addView(action("▣ OPEN PHOTO").apply {setOnClickListener {
-            val bitmap=android.graphics.BitmapFactory.decodeFile(File(filesDir,note.body).absolutePath)
-            if(bitmap!=null) android.app.AlertDialog.Builder(this@MainActivity).setView(
-                android.widget.ImageView(this@MainActivity).apply {setImageBitmap(bitmap);adjustViewBounds=true}
-            ).setPositiveButton("CLOSE",null).show()
-        }})
-        val dialog=android.app.AlertDialog.Builder(this).setView(panel).setNegativeButton("CLOSE",null)
-            .setNeutralButton("DELETE") {_,_->notes.remove(note);fieldNotes.save(notes);refresh()}.show()
+            })
+        }
+        val actions=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
+        fun updateNote():FieldNote {
+            val edited=current.copy(title=name.text.toString().ifBlank{"Untitled"},
+                body=if(current.kind=="PHOTO"||current.kind=="VOICE")current.body else memo.text.toString(),
+                icon=selected)
+            val index=notes.indexOfFirst {it.time==current.time}
+            if(index>=0){notes[index]=edited;fieldNotes.save(notes);refresh()}
+            return edited
+        }
+        val dialog=android.app.AlertDialog.Builder(this).setView(panel)
+            .setNegativeButton("CLOSE",null)
+            .setPositiveButton("SAVE") {_,_->updateNote()}
+            .setNeutralButton("DELETE") {_,_->notes.removeAll {it.time==current.time};fieldNotes.save(notes);refresh()}
+            .create()
+        actions.addView(action("＋ ATTACH").apply {
+            setOnClickListener {
+                updateNote();attachmentNoteTime=current.time
+                startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE);type="image/*"
+                },83)
+                dialog.dismiss()
+            }
+        },LinearLayout.LayoutParams(0,dp(44),1f))
+        actions.addView(action("▣ QUICK PHOTO").apply {
+            setOnClickListener {
+                updateNote();attachmentNoteTime=current.time
+                val values=android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.Images.Media.DISPLAY_NAME,"terra_"+System.currentTimeMillis()+".jpg")
+                    put(android.provider.MediaStore.Images.Media.MIME_TYPE,"image/jpeg")
+                }
+                cameraUri=contentResolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values)
+                val target=cameraUri
+                if(target!=null) {
+                    startActivityForResult(Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE).apply {
+                        putExtra(android.provider.MediaStore.EXTRA_OUTPUT,target)
+                        addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    },84)
+                }else status.text="CAMERA STORAGE UNAVAILABLE"
+                dialog.dismiss()
+            }
+        },LinearLayout.LayoutParams(0,dp(44),1f))
+        panel.addView(actions)
+        if(current.kind=="VOICE") panel.addView(action("▶ PLAY AUDIO").apply {
+            setOnClickListener {runCatching {
+                MediaPlayer().apply {
+                    setDataSource(File(filesDir,current.body).absolutePath)
+                    setOnCompletionListener {it.release()};prepare();start()
+                }
+            }}
+        })
+        dialog.show()
         dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
     }
     private fun startVoice(where:GeoPoint) {
@@ -682,6 +759,30 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?) {
         super.onActivityResult(requestCode,resultCode,data)
 
+        if(requestCode==83 || requestCode==84) {
+            val id=attachmentNoteTime
+            val uri=if(requestCode==84) cameraUri else data?.data
+            if(resultCode==RESULT_OK && id!=null && uri!=null) {
+                runCatching {
+                    val file=File(filesDir,"marker_"+id+"_"+System.currentTimeMillis()+".jpg")
+                    contentResolver.openInputStream(uri)?.use { input->
+                        file.outputStream().use { output->input.copyTo(output) }
+                    } ?: error("Cannot read photo")
+                    val idx=notes.indexOfFirst {it.time==id}
+                    if(idx>=0) {
+                        notes[idx]=notes[idx].copy(attachments=notes[idx].attachments+file.name)
+                        fieldNotes.save(notes);refresh()
+                        status.text="PHOTO ATTACHED TO MARKER"
+                    }
+                }.onFailure {status.text="PHOTO SAVE FAILED"}
+            }
+            if(requestCode==84) {
+                cameraUri?.let {contentResolver.delete(it,null,null)}
+                cameraUri=null
+            }
+            attachmentNoteTime=null
+            return
+        }
         if(requestCode==82 && resultCode==RESULT_OK) {
             val point=attachmentPoint
             val uri=data?.data
