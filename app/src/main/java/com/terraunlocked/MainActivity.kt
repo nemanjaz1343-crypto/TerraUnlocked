@@ -596,17 +596,30 @@ class MainActivity : Activity(), SensorEventListener {
         panel.addView(choices)
         val count=label("ATTACHMENTS / "+current.attachments.size,12,sage)
         panel.addView(count)
-        current.attachments.forEachIndexed { index,filename ->
-            panel.addView(action("▣ PHOTO "+(index+1)+"   /   OPEN").apply {
+        val photoStrip=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
+        current.attachments.forEach { filename ->
+            val thumb=android.widget.ImageView(this).apply {
+                scaleType=android.widget.ImageView.ScaleType.CENTER_CROP
+                setImageBitmap(loadOrientedPhoto(File(filesDir,filename)))
                 setOnClickListener {
                     val bitmap=loadOrientedPhoto(File(filesDir,filename))
-                    if(bitmap!=null) android.app.AlertDialog.Builder(this@MainActivity)
-                        .setView(android.widget.ImageView(this@MainActivity).apply {
-                            setImageBitmap(bitmap);adjustViewBounds=true
-                        }).setPositiveButton("CLOSE",null).show()
+                    if(bitmap!=null)android.app.AlertDialog.Builder(this@MainActivity)
+                        .setView(android.widget.ImageView(this@MainActivity).apply {setImageBitmap(bitmap);adjustViewBounds=true})
+                        .setNegativeButton("CLOSE",null)
+                        .setNeutralButton("REMOVE") {_,_->
+                            val idx=notes.indexOfFirst {it.time==current.time}
+                            if(idx>=0){
+                                notes[idx]=notes[idx].copy(attachments=notes[idx].attachments.filterNot {it==filename})
+                                fieldNotes.save(notes);refresh()
+                            }
+                            File(filesDir,filename).delete()
+                        }.show()
                 }
-            })
+            }
+            photoStrip.addView(thumb,LinearLayout.LayoutParams(dp(90),dp(88)))
         }
+        val scroller=android.widget.HorizontalScrollView(this)
+        scroller.addView(photoStrip);panel.addView(scroller)
         val actions=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
         fun updateNote():FieldNote {
             val edited=current.copy(title=name.text.toString().ifBlank{"Untitled"},
