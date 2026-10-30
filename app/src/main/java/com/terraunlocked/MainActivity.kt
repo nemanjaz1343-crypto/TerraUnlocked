@@ -91,6 +91,7 @@ class MainActivity : Activity(), SensorEventListener {
                 records.clear();records.addAll(store.load())
             }
             status.text="GPS ACTIVE / ±"+fogOverlay.positionAccuracy.toInt()+"m"
+            updateNavigation()
             refresh()
         }
     }
@@ -103,6 +104,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var attachmentPoint:GeoPoint?=null
     private var attachmentNoteTime:Long?=null
     private var cameraUri:Uri?=null
+    private var navigationTarget:Long?=null
     private var voicePoint:GeoPoint?=null
     private var recorder:MediaRecorder?=null
     private var audioFile:File?=null
@@ -550,6 +552,14 @@ class MainActivity : Activity(), SensorEventListener {
         val matrix=android.graphics.Matrix().apply {postRotate(angle)}
         return android.graphics.Bitmap.createBitmap(bitmap,0,0,bitmap.width,bitmap.height,matrix,true)
     }
+    private fun updateNavigation() {
+        val target=notes.firstOrNull {it.time==navigationTarget} ?: return
+        val user=fogOverlay.currentPosition ?: return
+        val readings=FloatArray(2)
+        android.location.Location.distanceBetween(user.latitude,user.longitude,target.latitude,target.longitude,readings)
+        val distance=if(readings[0]>=1000f) "%.1f km".format(readings[0]/1000f) else "%.0f m".format(readings[0])
+        status.text="NAV / "+target.title.take(12)+" / "+distance+" / "+readings[1].toInt()+"°"
+    }
     private fun showExisting(note:FieldNote) {
         val current=notes.find { it.time==note.time } ?: return
         val panel=LinearLayout(this).apply {
@@ -562,6 +572,8 @@ class MainActivity : Activity(), SensorEventListener {
             }
         }
         panel.addView(label("FIELD INVENTORY / EDIT",12,sand))
+        panel.addView(label("VISITS / "+current.visits.size,11,sage))
+        panel.addView(action("⌖ NAVIGATE").apply {setOnClickListener {navigationTarget=current.time;updateNavigation()}})
         val name=EditText(this).apply {
             setText(current.title);textSize=15f;setSingleLine(true)
             setTextColor(sand);setHintTextColor(sage);hint="Marker title"
