@@ -142,9 +142,7 @@ class MainActivity : Activity(), SensorEventListener {
                     val time=System.currentTimeMillis()
                     val isolated=saved==null || secondsSinceSaved>90.0 ||
                         displacement>maxOf(120f,secondsSinceSaved.toFloat()*12f)
-                    val point=DiscoveryPoint(loc.latitude,loc.longitude,false,
-                        if(isolated && records.lastOrNull()?.manual==false)
-                            maxOf(time,records.last().timestamp+90001L) else time)
+                    val point=DiscoveryPoint(loc.latitude,loc.longitude,false,time)
                     records.add(point)
                     store.add(point)
                     last=point
@@ -152,7 +150,6 @@ class MainActivity : Activity(), SensorEventListener {
                     refresh()
                 }
                 status.text="GPS ACTIVE / ±${loc.accuracy.toInt()}m / "+if(shouldReveal) "REVEALED" else "STATIONARY"
-            }
             }
         }
     }
