@@ -1346,29 +1346,102 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
     private fun checkForUpdates() {
-        status.text="UPDATES / CHECKING GITHUB RELEASES..."
+        status.text="UPDATES / CHECKING..."
         Thread {
             val result=runCatching {
                 val conn=(java.net.URL("https://api.github.com/repos/nemanjaz1343-crypto/TerraUnlocked/releases/latest").openConnection() as java.net.HttpURLConnection).apply {
-                    connectTimeout=10000;readTimeout=10000
+                    connectTimeout=12000;readTimeout=12000
                     setRequestProperty("Accept","application/vnd.github+json")
                     setRequestProperty("User-Agent","TerraUnlocked-Android")
                 }
                 try {
-                    if(conn.responseCode!=200)throw java.io.IOException("No published release")
+                    if(conn.responseCode!=200)throw java.io.IOException("GitHub returned "+conn.responseCode)
                     org.json.JSONObject(conn.inputStream.bufferedReader().use{it.readText()})
                 } finally {conn.disconnect()}
             }
             runOnUiThread {
                 val latest=result.getOrNull()
-                if(latest==null) {status.text="UPDATES / NO RELEASE AVAILABLE";return@runOnUiThread}
-                val version=latest.optString("tag_name","Unknown")
-                val download=latest.optString("html_url","")
-                android.app.AlertDialog.Builder(this).setTitle("TERRA / UPDATES")
-                    .setMessage("Installed: "+packageManager.getPackageInfo(packageName,0).versionName+"\\nLatest published release: "+version+"\\nCheck release notes before installing.")
-                    .setPositiveButton("OPEN RELEASE") {_,_->
-                        if(download.startsWith("https://github.com/"))startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(download)))
-                    }.setNegativeButton("CLOSE",null).show()
+                if(latest==null) {
+                    status.text="UPDATES / CHECK FAILED"
+                    android.app.AlertDialog.Builder(this).setTitle("TERRA / UPDATES")
+                        .setMessage("Could not check published releases. Check your connection and try again.")
+                        .setPositiveButton("OK",null).show()
+                    return@runOnUiThread
+                }
+                val tag=latest.optString("tag_name")
+                val remote=tag.removePrefix("v").split(".").mapNotNull{it.toIntOrNull()}
+                val local=(packageManager.getPackageInfo(packageName,0).versionName ?: "0").split(".").mapNotNull{it.toIntOrNull()}
+                val cmp=(0..2).firstNotNullOfOrNull{i->
+                    val difference=(remote.getOrElse(i){0}).compareTo(local.getOrElse(i){0})
+                    if(difference==0)null else difference
+                } ?: 0
+                val assets=latest.optJSONArray("assets")
+                var apkUrl=""
+                if(assets!=null)for(i in 0 until assets.length()) {
+                    val asset=assets.optJSONObject(i) ?: continue
+                    if(asset.optString("name").endsWith(".apk")){apkUrl=asset.optString("browser_download_url");break}
+                }
+                if(cmp<=0) {
+                    status.text="UPDATES / UP TO DATE"
+                    android.app.AlertDialog.Builder(this).setTitle("TERRA / UP TO DATE")
+                        .setMessage("Installed: "+packageManager.getPackageInfo(packageName,0).versionName+"\nLatest: "+tag)
+                        .setPositiveButton("OK",null).show()
+                } else if(apkUrl.startsWith("https://")) {
+                    status.text="UPDATES / "+tag+" AVAILABLE"
+                    android.app.AlertDialog.Builder(this).setTitle("TERRA / UPDATE AVAILABLE")
+                        .setMessage("Installed: "+packageManager.getPackageInfo(packageName,0).versionName+"\nNew version: "+tag+"\n\nDownload and install the update? Your map history will stay on this device.")
+                        .setPositiveButton("UPDATE") {_,_->downloadUpdateApk(apkUrl)}
+                        .setNegativeButton("LATER",null).show()
+                } else {
+                    status.text="UPDATES / APK NOT FOUND"
+                    android.app.AlertDialog.Builder(this).setTitle("TERRA / UPDATES")
+                        .setMessage("Release "+tag+" has no downloadable APK yet.")
+                        .setPositiveButton("OK",null).show()
+                }
+            }
+        }.start()
+    }
+
+    private fun downloadUpdateApk(url:String) {
+        status.text="UPDATES / DOWNLOADING..."
+        Thread {
+            val outcome=runCatching {
+                val connection=(java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply{
+                    connectTimeout=15000;readTimeout=30000
+                    instanceFollowRedirects=true
+                    setRequestProperty("User-Agent","TerraUnlocked-Android")
+                }
+                try {
+                    if(connection.responseCode !in 200..299)throw java.io.IOException("Download error "+connection.responseCode)
+                    val file=File(cacheDir,"terra-update.apk")
+                    connection.inputStream.use{source->file.outputStream().use{sink->source.copyTo(sink)}}
+                    if(file.length()<100_000)throw java.io.IOException("Invalid APK download")
+                    val info=packageManager.getPackageArchiveInfo(file.absolutePath,0)
+                    if(info?.packageName!=packageName)throw java.io.IOException("APK package does not match TerraUnlocked")
+                    file
+                } finally {connection.disconnect()}
+            }
+            runOnUiThread {
+                val file=outcome.getOrNull()
+                if(file==null) {
+                    status.text="UPDATES / DOWNLOAD FAILED"
+                    android.app.AlertDialog.Builder(this).setTitle("TERRA / UPDATE ERROR")
+                        .setMessage(outcome.exceptionOrNull()?.message ?: "Download failed")
+                        .setPositiveButton("OK",null).show()
+                    return@runOnUiThread
+                }
+                status.text="UPDATES / READY TO INSTALL"
+                val uri=androidx.core.content.FileProvider.getUriForFile(this,"$"+"{packageName}.fileprovider",file)
+                val install=Intent(Intent.ACTION_VIEW).apply{
+                    setDataAndType(uri,"application/vnd.android.package-archive")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                try {startActivity(install)}
+                catch(e:Exception) {
+                    android.app.AlertDialog.Builder(this).setTitle("TERRA / INSTALL")
+                        .setMessage("Could not open Android installer: "+e.message)
+                        .setPositiveButton("OK",null).show()
+                }
             }
         }.start()
     }
