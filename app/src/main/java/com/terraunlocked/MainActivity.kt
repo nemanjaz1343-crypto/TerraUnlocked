@@ -106,6 +106,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var cameraUri:Uri?=null
     private var navigationTarget:Long?=null
     private lateinit var objectiveStore:ObjectiveStore
+    private var objectivesPopup:PopupWindow?=null
     private var voicePoint:GeoPoint?=null
     private var voiceNoteTime:Long?=null
     private var recorder:MediaRecorder?=null
@@ -206,6 +207,7 @@ class MainActivity : Activity(), SensorEventListener {
         store = DiscoveryStore(this)
         fieldNotes=FieldNotes(this)
         objectiveStore=ObjectiveStore(this)
+        objectiveStore.enabled=true
         notes.addAll(fieldNotes.load())
         pathStore = PathStore(this)
         segments.addAll(pathStore.load())
@@ -218,6 +220,7 @@ class MainActivity : Activity(), SensorEventListener {
         }
         val brand = label("TERRA / UNLOCKED", 12, sand).apply { setTypeface(null, Typeface.BOLD) }
         header.addView(brand, LinearLayout.LayoutParams(0, dp(40), 1f))
+        header.addView(action("◎ MISSIONS").apply {setOnClickListener {showObjectives()}},LinearLayout.LayoutParams(dp(97),dp(34)))
         sensors = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         compassEnabled = sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR) != null
         val compass = label(if (compassEnabled) "◇ N --°" else "◇ N/A", 12, sand)
@@ -258,7 +261,7 @@ class MainActivity : Activity(), SensorEventListener {
                     val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
                     kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(22)
                 } ?: return false
-                showObjective(hit);return true
+                focusObjective(hit);showObjective(hit);return true
             }
         })
         map.overlays.add(object:Overlay() {
@@ -603,11 +606,58 @@ class MainActivity : Activity(), SensorEventListener {
         val distance=if(readings[0]>=1000f) "%.1f km".format(readings[0]/1000f) else "%.0f m".format(readings[0])
         status.text="NAV / "+target.title.take(12)+" / "+distance+" / "+readings[1].toInt()+"°"
     }
+    private fun focusObjective(o:ReconObjective) {
+        followUser=false
+        if(::followButton.isInitialized)followButton.text="FOCUS ○"
+        map.controller.setZoom(17.5)
+        map.controller.animateTo(GeoPoint(o.latitude,o.longitude))
+        refresh()
+    }
     private fun showObjectives() {
-        val items=ReconObjectives.all.filterNot {objectiveStore.isHidden(it.id)}
-        android.app.AlertDialog.Builder(this).setTitle("RECON OBJECTIVES")
-            .setItems(items.map {it.name+" / "+it.category}.toTypedArray()) {_,i->showObjective(items[i])}
-            .setNegativeButton("CLOSE",null).show()
+        objectivesPopup?.dismiss()
+        val panel=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(12),dp(12),dp(12),dp(12))
+            background=GradientDrawable().apply {
+                cornerRadius=dp(16).toFloat()
+                setColor(Color.argb(238,31,44,36))
+            }
+        }
+        panel.addView(label("◎ RECON OBJECTIVES",14,sand))
+        val search=EditText(this).apply {
+            hint="⌕ Search objectives";setSingleLine(true)
+            setTextColor(sand);setHintTextColor(sage);textSize=13f
+        }
+        panel.addView(search)
+        val list=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
+        val scroll=android.widget.ScrollView(this).apply {addView(list)}
+        panel.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
+        fun populate(query:String) {
+            list.removeAllViews()
+            ReconObjectives.all.filterNot {objectiveStore.isHidden(it.id)}
+                .filter {it.name.contains(query,true)||it.category.contains(query,true)}
+                .sortedWith(compareBy<ReconObjective> {if(objectiveStore.completed(it.id))2 else if(objectiveStore.active==it.id)0 else 1}.thenBy{it.name})
+                .forEach {o ->
+                    val state=if(objectiveStore.completed(o.id))"✓ DONE" else if(objectiveStore.active==o.id)"● ACTIVE" else "◇ NEW"
+                    list.addView(action(state+"  "+o.name+" / "+o.category).apply {
+                        gravity=Gravity.CENTER_VERTICAL or Gravity.START
+                        setPadding(dp(8),0,dp(5),0)
+                        setOnClickListener { objectivesPopup?.dismiss();focusObjective(o);showObjective(o) }
+                    },LinearLayout.LayoutParams(-1,dp(46)))
+                }
+        }
+        search.addTextChangedListener(object:android.text.TextWatcher {
+            override fun beforeTextChanged(s:CharSequence?,start:Int,count:Int,after:Int) {}
+            override fun onTextChanged(s:CharSequence?,start:Int,before:Int,count:Int) {populate(s.toString())}
+            override fun afterTextChanged(s:android.text.Editable?) {}
+        })
+        populate("")
+        objectivesPopup=PopupWindow(panel,dp(310),dp(480),true).apply {
+            isOutsideTouchable=true
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+            elevation=dp(8).toFloat()
+            showAtLocation(map,Gravity.TOP or Gravity.START,dp(8),dp(84))
+        }
     }
     private fun showObjective(o:ReconObjective) {
         val panel=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(14),dp(10),dp(14),dp(10));setBackgroundColor(Color.rgb(37,51,40))}
@@ -872,8 +922,6 @@ class MainActivity : Activity(), SensorEventListener {
         option("CHECKPOINTS ${if(fogOverlay.showCheckpoints) "ON" else "OFF"}") {
             fogOverlay.showCheckpoints=!fogOverlay.showCheckpoints;refresh()
         }
-        option("OBJECTIVES ON/OFF") {objectiveStore.enabled=!objectiveStore.enabled;refresh()}
-        option("BROWSE OBJECTIVES") {showObjectives()}
         option("RULER ${if(measure) "ON" else "OFF"}") {
             measure=!measure;measurePoints.clear();status.text=if(measure) "RULER / SELECT FIRST POINT" else "RULER OFF";refresh()
         }
@@ -1089,6 +1137,7 @@ class MainActivity : Activity(), SensorEventListener {
         layersPopup?.dismiss()
         poiPopup?.dismiss()
         radialMenu?.dismiss()
+        objectivesPopup?.dismiss()
         paintPopup?.dismiss()
     }
 }
