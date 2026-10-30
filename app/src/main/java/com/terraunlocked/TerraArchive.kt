@@ -24,6 +24,13 @@ class TerraArchive(private val context:Context) {
                 zip.write(value.toByteArray(Charsets.UTF_8))
                 zip.closeEntry()
             }
+            // Persist user anchors and non-list preferences as a separate backwards-compatible entry.
+            val anchorPrefs=context.getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE)
+            val anchors=JSONObject()
+            for((key,value) in anchorPrefs.all) if(value is String)anchors.put(key,value)
+            zip.putNextEntry(ZipEntry("anchors.json"))
+            zip.write(anchors.toString().toByteArray(Charsets.UTF_8))
+            zip.closeEntry()
             val names=FieldNotes(context).load().flatMap {
                 it.attachments + (if(it.kind=="PHOTO"||it.kind=="VOICE") listOf(it.body) else emptyList())
             }.distinct()
@@ -40,11 +47,16 @@ class TerraArchive(private val context:Context) {
     fun importFrom(input:InputStream) {
         val fields=mutableMapOf<String,String>()
         val media=mutableMapOf<String,ByteArray>()
+        var anchors:JSONObject?=null
         ZipInputStream(input).use {zip->
             while(true) {
                 val entry=zip.nextEntry ?: break
                 val name=entry.name
-                if(name in keys.map {it.first}) {
+                if(name=="anchors.json") {
+                    val bytes=zip.readBytes()
+                    require(bytes.size<=100_000) {"Anchors too large"}
+                    anchors=JSONObject(bytes.toString(Charsets.UTF_8))
+                } else if(name in keys.map {it.first}) {
                     val data=zip.readBytes()
                     require(data.size<=15_000_000) {"Archive data too large"}
                     val value=data.toString(Charsets.UTF_8)
@@ -70,6 +82,11 @@ class TerraArchive(private val context:Context) {
         require(fields.keys.containsAll(keys.take(3).map {it.first})) {"Incomplete TerraUnlocked archive"}
         // Archive is validated before replacing local data.
         for((name,bytes) in media) File(context.filesDir,name).writeBytes(bytes)
+        anchors?.let {j->
+            val edit=context.getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE).edit()
+            j.keys().forEach {k->edit.putString(k,j.optString(k))}
+            edit.commit()
+        }
         for((filename,pref,key) in keys.filter {fields.containsKey(it.first)}) {
             context.getSharedPreferences(pref,Context.MODE_PRIVATE).edit().putString(key,fields.getValue(filename)).commit()
         }
