@@ -1,4 +1,4 @@
-name: Android debug APK
+name: TerraUnlocked Android APK
 on:
   push:
     branches: [main]
@@ -17,9 +17,41 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
-      - name: Build APK
+      - name: Build debug APK (development only)
         run: gradle :app:assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
         with:
-          name: TerraUnlocked-debug-apk
+          name: TerraUnlocked-development-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Check stable signing is configured
+        id: signing
+        env:
+          KEYSTORE_B64: ${{ secrets.TERRA_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.TERRA_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.TERRA_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.TERRA_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Stable signing secrets not configured; only development debug APK produced."
+          fi
+      - name: Build consistently signed release APK
+        if: steps.signing.outputs.ready == 'true'
+        env:
+          TERRA_KEYSTORE_BASE64: ${{ secrets.TERRA_KEYSTORE_BASE64 }}
+          TERRA_KEYSTORE_PASSWORD: ${{ secrets.TERRA_KEYSTORE_PASSWORD }}
+          TERRA_KEY_ALIAS: ${{ secrets.TERRA_KEY_ALIAS }}
+          TERRA_KEY_PASSWORD: ${{ secrets.TERRA_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$TERRA_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/terra-release.jks"
+          export TERRA_KEYSTORE_PATH="$RUNNER_TEMP/terra-release.jks"
+          gradle :app:assembleRelease --stacktrace
+          rm -f "$RUNNER_TEMP/terra-release.jks"
+      - uses: actions/upload-artifact@v4
+        if: steps.signing.outputs.ready == 'true'
+        with:
+          name: TerraUnlocked-signed-release
+          path: app/build/outputs/apk/release/app-release.apk
