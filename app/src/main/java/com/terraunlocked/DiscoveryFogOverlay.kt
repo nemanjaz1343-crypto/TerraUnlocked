@@ -133,7 +133,7 @@ class DiscoveryFogOverlay(
                     this.color=Color.rgb(20,30,25);textSize=12f;textAlign=Paint.Align.CENTER
                 }
                 val symbol=when(note.kind) {"CHECKPOINT"->"⚑";"POI"->"★";"MEMORY"->"●";"CAMP"->"▲";"PHOTO"->"▣";"VOICE"->"◉";else->"◆"}
-                canvas.drawText(symbol,p.x.toFloat(),p.y+4f,glyph)
+                canvas.drawText(if(note.icon=="◆" && note.kind!="POI") symbol else note.icon,p.x.toFloat(),p.y+4f,glyph)
             }
         }
         if (backtrack && records().size > 1) {
