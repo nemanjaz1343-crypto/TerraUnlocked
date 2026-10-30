@@ -21,6 +21,8 @@ class TrackingService:Service() {
     }
     private val client by lazy {LocationServices.getFusedLocationProviderClient(this)}
     private val store by lazy {DiscoveryStore(this)}
+    private val fieldNotes by lazy {FieldNotes(this)}
+    private var lastVisitCheck=0L
     private var previous:Location?=null
     private var lastSaved:Location?=null
     private val callback=object:LocationCallback() {
@@ -34,6 +36,21 @@ class TrackingService:Service() {
                     prev.distanceTo(loc)/seconds>15.0
                 if(loc.accuracy>50f || jump)return@forEach
                 previous=loc
+                val now=System.currentTimeMillis()
+                if(now-lastVisitCheck>60000L && loc.accuracy<=30f) {
+                    lastVisitCheck=now
+                    val entries=fieldNotes.load()
+                    var changed=false
+                    val updated=entries.map { note ->
+                        val d=FloatArray(1)
+                        Location.distanceBetween(loc.latitude,loc.longitude,note.latitude,note.longitude,d)
+                        val lastVisit=note.visits.lastOrNull() ?: 0L
+                        if(d[0]<=35f && now-lastVisit>21600000L) {
+                            changed=true;note.copy(visits=note.visits+now)
+                        } else note
+                    }
+                    if(changed)fieldNotes.save(updated)
+                }
                 val saved=lastSaved
                 val moved=saved==null || saved.distanceTo(loc)>=
                     maxOf(10f,1.1f*maxOf(saved.accuracy,loc.accuracy))
