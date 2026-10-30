@@ -631,7 +631,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
     private fun resolveMapLocation(raw:String) {
         if(raw.isBlank())return
-        val direct=Regex("(-?\\d{1,2}\\.\\d+)\\s*[, ]\\s*(-?\\d{1,3}\\.\\d+)").find(raw)
+        val direct=Regex("""(-?\d{1,2}\.\d+)\s*[, ]\s*(-?\d{1,3}\.\d+)""").find(raw)
         val pair=direct?.let {
             val lat=it.groupValues[1].toDoubleOrNull();val lon=it.groupValues[2].toDoubleOrNull()
             if(lat!=null&&lon!=null&&lat in -90.0..90.0&&lon in -180.0..180.0) Pair(lat,lon) else null
