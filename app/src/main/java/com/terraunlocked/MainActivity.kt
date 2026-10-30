@@ -1298,6 +1298,39 @@ class MainActivity : Activity(), SensorEventListener {
             else status.text=name+" / NOT SET"
         }
     }
+    private fun showDataMenu() {
+        val panel=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL;setPadding(dp(12),dp(12),dp(12),dp(12));background=tacticalPanel()
+        }
+        panel.addView(label("▣ DATA / SOURCES & BACKUP",14,sand))
+        fun option(name:String,fn:()->Unit) {panel.addView(action(name).apply {setOnClickListener {fn()}})}
+        option("EXPORT BACKUP ZIP") {
+            startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type="application/zip"
+                putExtra(Intent.EXTRA_TITLE,"TerraUnlocked-backup.zip")
+            },85)
+        }
+        option("IMPORT BACKUP ZIP") {
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type="application/zip"
+            },86)
+        }
+        option("IMPORT OFFLINE MAP") {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+            }
+            startActivityForResult(intent, 81)
+        }
+
+        val window=PopupWindow(panel,dp(285),dp(290),true).apply {
+            isOutsideTouchable=true
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+        }
+        window.showAtLocation(map,Gravity.CENTER,0,0)
+    }
     private fun showLayers(anchor: View) {
         if (layersPopup?.isShowing == true) { layersPopup?.dismiss(); return }
         val panel = LinearLayout(this).apply {
@@ -1332,26 +1365,7 @@ class MainActivity : Activity(), SensorEventListener {
             map.setUseDataConnection(!offline)
             status.text = if (offline) "OFFLINE / LOCAL TILES ONLY" else "ONLINE / MAP TILES ENABLED"
         }
-        option("EXPORT BACKUP ZIP") {
-            startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                addCategory(Intent.CATEGORY_OPENABLE)
-                type="application/zip"
-                putExtra(Intent.EXTRA_TITLE,"TerraUnlocked-backup.zip")
-            },85)
-        }
-        option("IMPORT BACKUP ZIP") {
-            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                addCategory(Intent.CATEGORY_OPENABLE)
-                type="application/zip"
-            },86)
-        }
-        option("IMPORT OFFLINE MAP") {
-            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                addCategory(Intent.CATEGORY_OPENABLE)
-                type = "*/*"
-            }
-            startActivityForResult(intent, 81)
-        }
+        option("DATA / BACKUP & OFFLINE") {showDataMenu()}
         option("UNDO LAST PATH") {
             if (segments.isNotEmpty()) { segments.removeAt(segments.lastIndex); pathStore.save(segments); refresh() }
         }
