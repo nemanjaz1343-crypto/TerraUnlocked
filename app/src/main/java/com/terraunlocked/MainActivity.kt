@@ -235,8 +235,10 @@ class MainActivity : Activity(), SensorEventListener {
         val compass = label(if (compassEnabled) "◇ N --°" else "◇ N/A", 12, sand)
         compassView = compass
         header.addView(compass)
+        header.addView(action("◉").apply {setOnClickListener {chooseMapSource()}},LinearLayout.LayoutParams(dp(36),dp(34)))
         val gps = label("  ● RECON", 10, sage)
         header.addView(gps)
+        gps.setOnClickListener {setMyLocation()}
         root.addView(header, LinearLayout.LayoutParams(-1, dp(40)))
         status = label("GPS OFFLINE  |  FOG 82%  |  R 20m", 10, sage)
         status.setPadding(dp(10), dp(4), 0, dp(4))
@@ -939,6 +941,7 @@ class MainActivity : Activity(), SensorEventListener {
         panel.addView(label("FIELD INVENTORY / EDIT",12,sand))
         panel.addView(label("VISITS / "+current.visits.size,11,sage))
         panel.addView(action("⌖ NAVIGATE").apply {setOnClickListener {navigationTarget=current.time;updateNavigation()}})
+        panel.addView(action("↔ MOVE PIN").apply {setOnClickListener {moveFieldPin(current)}})
         val name=EditText(this).apply {
             setText(current.title);textSize=15f;setSingleLine(true)
             setTextColor(sand);setHintTextColor(sage);hint="Marker title"
@@ -1229,6 +1232,48 @@ class MainActivity : Activity(), SensorEventListener {
             startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("https://www.rta.ae/wps/portal/rta/ae/home/smart-apps/app-details/shail/shail-app?lang=en")))
         }})
         android.app.AlertDialog.Builder(this).setView(panel).setNegativeButton("CLOSE",null).show()
+    }
+    private fun setMyLocation() {
+        val current=fogOverlay.currentPosition
+        if(current==null){status.text="GPS / LOCATION NOT AVAILABLE";return}
+        val choices=arrayOf("HOME","OFFICE","OTHER / CUSTOM PIN")
+        android.app.AlertDialog.Builder(this).setTitle("SET LOCATION")
+            .setItems(choices) {_,index->
+                when(index) {
+                    0,1 -> {
+                        val key=choices[index]
+                        val prefs=getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE)
+                        prefs.edit().putString(key+"_lat",current.latitude.toString())
+                            .putString(key+"_lon",current.longitude.toString()).apply()
+                        status.text=key+" / GPS POSITION SAVED";refresh()
+                    }
+                    else -> showNoteEditor(current,"POI")
+                }
+            }.setNegativeButton("CANCEL",null).show()
+    }
+    private fun chooseMapSource() {
+        val names=arrayOf("OpenStreetMap","OpenTopoMap")
+        android.app.AlertDialog.Builder(this).setTitle("MAP SOURCE")
+            .setItems(names) {_,i->
+                map.setTileSource(if(i==0)TileSourceFactory.MAPNIK else TileSourceFactory.OpenTopo)
+                status.text="MAP SOURCE / "+names[i]
+                refresh()
+            }.show()
+    }
+    private fun moveFieldPin(note:FieldNote) {
+        val marker=notes.find {it.time==note.time} ?: return
+        val picker=android.app.AlertDialog.Builder(this).setTitle("MOVE PIN")
+            .setMessage("Pan the map until the intended position is at the centre, then confirm.")
+            .setPositiveButton("SELECT MAP CENTRE") {_,_->
+                val p=map.mapCenter
+                android.app.AlertDialog.Builder(this).setTitle("CONFIRM NEW POSITION")
+                    .setMessage("%.5f, %.5f".format(p.latitude,p.longitude))
+                    .setPositiveButton("MOVE") {_,_->
+                        val index=notes.indexOfFirst {it.time==marker.time}
+                        if(index>=0) {notes[index]=notes[index].copy(latitude=p.latitude,longitude=p.longitude);fieldNotes.save(notes);refresh()}
+                    }.setNegativeButton("CANCEL",null).show()
+            }.setNegativeButton("CANCEL",null).show()
+        picker.show()
     }
     private fun anchor(name:String,save:Boolean) {
         val prefs=getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE)
