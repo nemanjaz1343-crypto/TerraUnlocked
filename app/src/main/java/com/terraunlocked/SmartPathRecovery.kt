@@ -23,7 +23,7 @@ object SmartPathRecovery {
         val candidates=gps.zipWithNext().filter {(a,b)->
             val seconds=(b.timestamp-a.timestamp)/1000.0
             val d=dist(a.latitude to a.longitude,b.latitude to b.longitude)
-            seconds in 5.0..180.0 && d in 25.0..180.0 && d/seconds<=11.0 &&
+            seconds in 90.0..180.0 && d in 25.0..180.0 && d/seconds<=11.0 &&
                 dist(a.latitude to a.longitude,centerLat to centerLon)<1400
         }.takeLast(75)
         if(candidates.isEmpty())return emptyList()
