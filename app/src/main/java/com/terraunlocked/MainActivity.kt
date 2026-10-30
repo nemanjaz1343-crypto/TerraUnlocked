@@ -110,6 +110,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var previewBar:LinearLayout?=null
     private var navigationTarget:Long?=null
     private var movingPinTime:Long?=null
+    private var movingObjectiveId:String?=null
     private var movePinBar:LinearLayout?=null
     private var historyCutoff:Long?=null
     private var timeMachinePopup:PopupWindow?=null
@@ -465,7 +466,7 @@ class MainActivity : Activity(), SensorEventListener {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
                 if(shadow)return
                 val prefs=getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE)
-                listOf("HOME" to "⌂","OFFICE" to "▣").forEach { item ->
+                listOf("HOME" to "⌂","OFFICE" to "⚒").forEach { item ->
                     val lat=prefs.getString(item.first+"_lat",null)?.toDoubleOrNull()
                     val lon=prefs.getString(item.first+"_lon",null)?.toDoubleOrNull()
                     if(lat!=null&&lon!=null) {
@@ -514,7 +515,7 @@ class MainActivity : Activity(), SensorEventListener {
             background=tacticalPanel();visibility=View.GONE
         }
         movePinBar=movingBar
-        movingBar.addView(action("CANCEL MOVE").apply {setOnClickListener {movingPinTime=null;movingBar.visibility=View.GONE}},LinearLayout.LayoutParams(0,dp(49),1f))
+        movingBar.addView(action("CANCEL MOVE").apply {setOnClickListener {movingPinTime=null;movingObjectiveId=null;movingBar.visibility=View.GONE}},LinearLayout.LayoutParams(0,dp(49),1f))
         movingBar.addView(action("CONFIRM NEW PIN POSITION").apply {setOnClickListener {
             val time=movingPinTime
             val index=notes.indexOfFirst {it.time==time}
@@ -523,7 +524,12 @@ class MainActivity : Activity(), SensorEventListener {
                 notes[index]=notes[index].copy(latitude=p.latitude,longitude=p.longitude)
                 fieldNotes.save(notes);status.text="PIN MOVED";refresh()
             }
-            movingPinTime=null;movingBar.visibility=View.GONE
+            movingObjectiveId?.let {id->
+                val p=map.mapCenter
+                if(objectiveStore.moveCustom(id,p.latitude,p.longitude))status.text="OBJECTIVE MOVED"
+                refresh()
+            }
+            movingObjectiveId=null;movingPinTime=null;movingBar.visibility=View.GONE
         }},LinearLayout.LayoutParams(0,dp(49),2f))
         mapArea.addView(movingBar,FrameLayout.LayoutParams(-1,dp(54),Gravity.BOTTOM))
         confirmButton.setOnClickListener {
@@ -942,6 +948,11 @@ class MainActivity : Activity(), SensorEventListener {
             }
             refresh();dialog.dismiss()
         }})
+        if(o.id.startsWith("saved_"))panel.addView(action("↔ MOVE OBJECTIVE").apply {setOnClickListener {
+            dialog.dismiss();movingObjectiveId=o.id;movingPinTime=null
+            map.controller.animateTo(GeoPoint(o.latitude,o.longitude))
+            movePinBar?.visibility=View.VISIBLE;status.text="MOVE OBJECTIVE / PAN MAP, CONFIRM"
+        }})
         panel.addView(action("HIDE OBJECTIVE").apply {setOnClickListener {objectiveStore.hide(o.id);refresh();dialog.dismiss()}})
         if(o.source.startsWith("http"))panel.addView(action("OPEN SOURCE").apply {setOnClickListener {startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(o.source)))}})
         dialog.show()
@@ -1280,6 +1291,7 @@ class MainActivity : Activity(), SensorEventListener {
             }.show()
     }
     private fun moveFieldPin(note:FieldNote) {
+        movingObjectiveId=null
         movingPinTime=note.time
         map.controller.animateTo(GeoPoint(note.latitude,note.longitude))
         movePinBar?.visibility=View.VISIBLE
