@@ -775,35 +775,11 @@ class MainActivity : Activity(), SensorEventListener {
         status.text="NAV / "+target.title.take(12)+" / "+distance+" / "+readings[1].toInt()+"°"
     }
     private fun focusObjective(o:ReconObjective,extent:Boolean=false) {
-        followUser=false
-        if(::followButton.isInitialized)followButton.text="FOCUS ○"
-        pendingObjective=o
-        previewLocation=GeoPoint(o.latitude,o.longitude)
-        previewLabel=o.name
-        previewBar?.visibility=View.VISIBLE
-        if(extent)map.controller.setZoom(17.5)
-        map.controller.animateTo(GeoPoint(o.latitude,o.longitude))
-        showObjectiveHint(o)
-        refresh()
+        // A tap opens information only; it must not activate a map reticle.
+        clearMapPreview()
+        showObjective(o)
     }
-    private fun showObjectiveHint(o:ReconObjective) {
-        val panel=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(12),dp(10),dp(12),dp(10));background=tacticalPanel()}
-        panel.addView(label(o.name,14,sand))
-        panel.addView(label(o.brief.take(100),12,sage))
-        val current=fogOverlay.currentPosition
-        if(current!=null){
-            val d=FloatArray(1)
-            android.location.Location.distanceBetween(current.latitude,current.longitude,o.latitude,o.longitude,d)
-            panel.addView(label(if(d[0]>=1000f)"%.1f km".format(d[0]/1000f) else "%.0f m".format(d[0]),12,sand))
-        }
-        val popup=PopupWindow(panel,dp(285),dp(145),false).apply {
-            isOutsideTouchable=true
-            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
-            elevation=dp(5).toFloat()
-        }
-        panel.addView(action("× CLOSE / CONFIRM BELOW FOR OPTIONS").apply {setOnClickListener {popup.dismiss()}})
-        popup.showAtLocation(map,Gravity.TOP or Gravity.CENTER_HORIZONTAL,0,dp(90))
-    }
+    private fun showObjectiveHint(o:ReconObjective) { showObjective(o) }
     private fun clearMapPreview() {
         previewLocation=null;previewLabel="";pendingObjective=null
         previewBar?.visibility=View.GONE
@@ -984,7 +960,7 @@ class MainActivity : Activity(), SensorEventListener {
         panel.addView(label("SOURCE / "+o.source,10,sage))
         val dialog=android.app.AlertDialog.Builder(this).setView(panel).setNegativeButton("CLOSE",null).create()
         panel.addView(action("⌖ SET ACTIVE").apply {setOnClickListener {
-            objectiveStore.active=o.id;map.controller.animateTo(GeoPoint(o.latitude,o.longitude));refresh();dialog.dismiss()
+            objectiveStore.active=o.id;clearMapPreview();refresh();dialog.dismiss()
         }})
         panel.addView(action("✓ COMPLETE / SAVE FIELD MARKER").apply {setOnClickListener {
             objectiveStore.complete(o.id)
@@ -996,7 +972,7 @@ class MainActivity : Activity(), SensorEventListener {
         }})
         if(o.id.startsWith("saved_"))panel.addView(action("↔ MOVE OBJECTIVE").apply {setOnClickListener {
             dialog.dismiss();movingObjectiveId=o.id;movingPinTime=null
-            map.controller.animateTo(GeoPoint(o.latitude,o.longitude))
+            followUser=false;map.controller.animateTo(GeoPoint(o.latitude,o.longitude))
             movePinBar?.visibility=View.VISIBLE;status.text="MOVE OBJECTIVE / PAN MAP, CONFIRM"
         }})
         panel.addView(action("HIDE OBJECTIVE").apply {setOnClickListener {objectiveStore.hide(o.id);refresh();dialog.dismiss()}})
@@ -1017,7 +993,8 @@ class MainActivity : Activity(), SensorEventListener {
         panel.addView(label("FIELD INVENTORY / EDIT",12,sand))
         panel.addView(label("VISITS / "+current.visits.size,11,sage))
         panel.addView(action("⌖ NAVIGATE").apply {setOnClickListener {navigationTarget=current.time;updateNavigation()}})
-        panel.addView(action("↔ MOVE PIN").apply {setOnClickListener {moveFieldPin(current)}})
+        val moveButton=action("↔ MOVE PIN")
+        panel.addView(moveButton)
         val name=EditText(this).apply {
             setText(current.title);textSize=15f;setSingleLine(true)
             setTextColor(sand);setHintTextColor(sage);hint="Marker title"
@@ -1091,6 +1068,7 @@ class MainActivity : Activity(), SensorEventListener {
             .setPositiveButton("SAVE") {_,_->updateNote()}
             .setNeutralButton("DELETE") {_,_->notes.removeAll {it.time==current.time};fieldNotes.save(notes);refresh()}
             .create()
+        moveButton.setOnClickListener {dialog.dismiss();moveFieldPin(current)}
         actions.addView(action("＋ ATTACH").apply {
             setOnClickListener {
                 updateNote();attachmentNoteTime=current.time
@@ -1356,6 +1334,8 @@ class MainActivity : Activity(), SensorEventListener {
     private fun moveFieldPin(note:FieldNote) {
         movingObjectiveId=null
         movingPinTime=note.time
+        followUser=false
+        clearMapPreview()
         map.controller.animateTo(GeoPoint(note.latitude,note.longitude))
         movePinBar?.visibility=View.VISIBLE
         status.text="MOVE PIN / PAN MAP THEN CONFIRM"
