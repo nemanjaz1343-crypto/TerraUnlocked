@@ -104,6 +104,9 @@ class MainActivity : Activity(), SensorEventListener {
     private var attachmentPoint:GeoPoint?=null
     private var attachmentNoteTime:Long?=null
     private var cameraUri:Uri?=null
+    private var previewLocation:GeoPoint?=null
+    private var previewLabel=""
+    private var previewBar:LinearLayout?=null
     private var navigationTarget:Long?=null
     private lateinit var objectiveStore:ObjectiveStore
     private var objectivesPopup:PopupWindow?=null
@@ -220,7 +223,6 @@ class MainActivity : Activity(), SensorEventListener {
         }
         val brand = label("TERRA / UNLOCKED", 12, sand).apply { setTypeface(null, Typeface.BOLD) }
         header.addView(brand, LinearLayout.LayoutParams(0, dp(40), 1f))
-        header.addView(action("⌕ MAP").apply {setOnClickListener {showMapLookup()}},LinearLayout.LayoutParams(dp(75),dp(34)))
         header.addView(action("◎ MISSIONS").apply {setOnClickListener {showObjectives()}},LinearLayout.LayoutParams(dp(97),dp(34)))
         sensors = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         compassEnabled = sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR) != null
@@ -492,7 +494,9 @@ class MainActivity : Activity(), SensorEventListener {
             notes.add(FieldNote(where.latitude,where.longitude,"Quick pin","POI","",System.currentTimeMillis(),"◆"))
             fieldNotes.save(notes);status.text="QUICK PIN SAVED";refresh()
         }
-        panel.addView(action("● REC").apply {setOnClickListener {radialMenu?.dismiss();startVoice(where)}},FrameLayout.LayoutParams(dp(75),dp(32),Gravity.CENTER))
+        item("⌕ SEARCH",Gravity.BOTTOM or Gravity.END) {showMapLookup()}
+        item("● REC",Gravity.BOTTOM or Gravity.START) {startVoice(where)}
+        panel.addView(android.view.View(this).apply {background=GradientDrawable().apply {shape=GradientDrawable.OVAL;setColor(Color.TRANSPARENT);setStroke(dp(1),sand)}},FrameLayout.LayoutParams(dp(26),dp(26),Gravity.CENTER))
         val loc=IntArray(2)
         map.getLocationOnScreen(loc)
         val w=resources.displayMetrics.widthPixels
