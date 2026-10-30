@@ -112,6 +112,9 @@ class MainActivity : Activity(), SensorEventListener {
     private var historyCutoff:Long?=null
     private var timeMachinePopup:PopupWindow?=null
     private lateinit var objectiveStore:ObjectiveStore
+    private val metroStations=mutableListOf<TransitStation>()
+    private var transitVisible=true
+    private var stationLoading=false
     private var objectivesPopup:PopupWindow?=null
     private var voicePoint:GeoPoint?=null
     private var voiceNoteTime:Long?=null
@@ -213,6 +216,7 @@ class MainActivity : Activity(), SensorEventListener {
         store = DiscoveryStore(this)
         fieldNotes=FieldNotes(this)
         objectiveStore=ObjectiveStore(this)
+        metroStations.addAll(TransitStations(this).load())
         objectiveStore.enabled=true
         notes.addAll(fieldNotes.load())
         pathStore = PathStore(this)
