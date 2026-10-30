@@ -436,7 +436,16 @@ class MainActivity : Activity(), SensorEventListener {
                     canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),dp(13).toFloat(),brush)
                     brush.color=Color.WHITE;brush.textSize=dp(13).toFloat()
                     brush.textAlign=Paint.Align.CENTER;brush.typeface=Typeface.DEFAULT_BOLD
-                    canvas.drawText("🚆",p.x.toFloat(),p.y.toFloat()+dp(4),brush)
+                    // Draw a train pictogram with primitives; no emoji font dependency.
+                    val x=p.x.toFloat();val y=p.y.toFloat()
+                    brush.style=Paint.Style.STROKE;brush.strokeWidth=dp(1.5f).toFloat()
+                    canvas.drawRoundRect(x-dp(7),y-dp(8),x+dp(7),y+dp(6),dp(3).toFloat(),dp(3).toFloat(),brush)
+                    canvas.drawLine(x-dp(5),y-dp(2),x+dp(5),y-dp(2),brush)
+                    canvas.drawLine(x-dp(4),y+dp(8),x-dp(1),y+dp(5),brush)
+                    canvas.drawLine(x+dp(4),y+dp(8),x+dp(1),y+dp(5),brush)
+                    brush.style=Paint.Style.FILL
+                    canvas.drawCircle(x-dp(4),y+dp(3),dp(1).toFloat(),brush)
+                    canvas.drawCircle(x+dp(4),y+dp(3),dp(1).toFloat(),brush)
                 }
             }
             override fun onSingleTapConfirmed(e:MotionEvent,mapView:MapView):Boolean {
