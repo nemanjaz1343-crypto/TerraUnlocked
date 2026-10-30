@@ -4,7 +4,7 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
-data class FieldNote(val latitude:Double,val longitude:Double,val title:String,val kind:String,val body:String,val time:Long)
+data class FieldNote(val latitude:Double,val longitude:Double,val title:String,val kind:String,val body:String,val time:Long,val icon:String="◆")
 class FieldNotes(context: Context) {
     private val prefs=context.getSharedPreferences("terra_notes_v1",Context.MODE_PRIVATE)
     fun load():MutableList<FieldNote> = runCatching {
@@ -12,13 +12,13 @@ class FieldNotes(context: Context) {
         (0 until json.length()).map { i ->
             val j=json.getJSONObject(i)
             FieldNote(j.getDouble("lat"),j.getDouble("lon"),j.getString("title"),
-                j.getString("kind"),j.getString("body"),j.getLong("time"))
+                j.getString("kind"),j.getString("body"),j.getLong("time"),j.optString("icon","◆"))
         }.toMutableList()
     }.getOrDefault(mutableListOf())
     fun save(items:List<FieldNote>) {
         val json=JSONArray()
         items.forEach { n -> json.put(JSONObject().put("lat",n.latitude).put("lon",n.longitude)
-            .put("title",n.title).put("kind",n.kind).put("body",n.body).put("time",n.time)) }
+            .put("title",n.title).put("kind",n.kind).put("body",n.body).put("time",n.time).put("icon",n.icon)) }
         prefs.edit().putString("notes",json.toString()).apply()
     }
 }
