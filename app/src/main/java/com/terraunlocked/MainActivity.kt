@@ -700,12 +700,12 @@ class MainActivity : Activity(), SensorEventListener {
             }.start()
             return
         }
-        val url=Regex("""https?://[^\\s]+""").find(raw)?.value
+        val url=Regex("""https?://[^\s]+""").find(raw)?.value
         val decoded=runCatching {java.net.URLDecoder.decode(raw,"UTF-8")}.getOrDefault(raw)
         val mapCoords=listOf(
-            Regex("""@(-?\\d+\\.\\d+),(-?\\d+\\.\\d+)"""),
-            Regex("""[?&](?:q|query|ll|center)=(-?\\d+\\.\\d+),(-?\\d+\\.\\d+)"""),
-            Regex("""!3d(-?\\d+\\.\\d+)!4d(-?\\d+\\.\\d+)""")
+            Regex("""@(-?\d+\.\d+),(-?\d+\.\d+)"""),
+            Regex("""[?&](?:q|query|ll|center)=(-?\d+\.\d+),(-?\d+\.\d+)"""),
+            Regex("""!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)""")
         ).firstNotNullOfOrNull {it.find(decoded)}
         if(mapCoords!=null) {
             val latitude=mapCoords.groupValues[1].toDoubleOrNull()
@@ -718,7 +718,7 @@ class MainActivity : Activity(), SensorEventListener {
             val text=runCatching {java.net.URI(url)}.getOrNull()
             val path=text?.path.orEmpty()
             val name=path.substringAfter("/place/","").substringBefore("/").replace("+"," ")
-            if(name.isNotEmpty()) {resolveAddress(name);return}
+            if(name.isNotEmpty()) {resolveAddress(java.net.URLDecoder.decode(name,"UTF-8"));return}
         }
         val embedded=Regex("""!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)""").find(raw)
         if(embedded!=null) {
