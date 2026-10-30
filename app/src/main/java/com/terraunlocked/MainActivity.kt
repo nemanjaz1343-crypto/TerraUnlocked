@@ -89,6 +89,7 @@ class MainActivity : Activity(), SensorEventListener {
             if(followUser)map.controller.animateTo(point)
             if(intent.getBooleanExtra("revealed",false)) {
                 records.clear();records.addAll(store.load())
+                maybeRecoverPaths()
             }
             status.text="GPS ACTIVE / ±"+fogOverlay.positionAccuracy.toInt()+"m"
             updateNavigation()
@@ -124,6 +125,8 @@ class MainActivity : Activity(), SensorEventListener {
     private var audioFile:File?=null
     private var inferredPaths=emptyList<InferredPath>()
     private var recoveryRunning=false
+    private var lastRecoveryScan=0L
+    private var lastRecoveryPointCount=0
     private var measure=false
     private val measurePoints=mutableListOf<GeoPoint>()
     private var filteredFixes=0
@@ -587,6 +590,7 @@ class MainActivity : Activity(), SensorEventListener {
         root.addView(controls)
         setContentView(root)
         if(metroStations.isEmpty())handler.post {refreshMetro()}
+        handler.postDelayed({maybeRecoverPaths()},12000L)
         trackButton.setOnClickListener {
             if (tracking) stopTracking() else {
                 if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED)
@@ -1374,10 +1378,18 @@ class MainActivity : Activity(), SensorEventListener {
         }
         window.showAtLocation(map,Gravity.CENTER,0,0)
     }
-    private fun scanSmartPaths() {
+    private fun maybeRecoverPaths() {
+        val now=System.currentTimeMillis()
+        if(recoveryRunning || records.size<3 || records.size==lastRecoveryPointCount)return
+        if(now-lastRecoveryScan<180000L)return
+        lastRecoveryScan=now
+        lastRecoveryPointCount=records.size
+        scanSmartPaths(silent=true)
+    }
+    private fun scanSmartPaths(silent:Boolean=false) {
         if(recoveryRunning)return
         recoveryRunning=true
-        status.text="SMART PATH / SCANNING OSM..."
+        if(!silent)status.text="SMART PATH / SCANNING OSM..."
         val snapshot=records.toList()
         val center=map.mapCenter
         Thread {
@@ -1385,10 +1397,10 @@ class MainActivity : Activity(), SensorEventListener {
             runOnUiThread {
                 recoveryRunning=false
                 if(outcome.isFailure) {
-                    status.text="SMART PATH / OSM UNAVAILABLE, ORIGINAL GPS UNCHANGED"
+                    if(!silent)status.text="SMART PATH / OSM UNAVAILABLE"
                 } else {
                     inferredPaths=outcome.getOrDefault(emptyList())
-                    status.text="SMART PATH / "+inferredPaths.size+" INFERRED GAPS (DASHED)"
+                    if(!silent)status.text="SMART PATH / "+inferredPaths.size+" INFERRED GAPS"
                     refresh()
                 }
             }
@@ -1405,8 +1417,6 @@ class MainActivity : Activity(), SensorEventListener {
             panel.addView(action(name).apply { setOnClickListener { callback(); layersPopup?.dismiss() } },
                 LinearLayout.LayoutParams(-1, dp(43)))
         }
-        option("SMART PATH / SCAN NEARBY") {scanSmartPaths()}
-        option("SMART PATH / CLEAR PREVIEW") {inferredPaths=emptyList();refresh()}
         option("EXPLORATION STATISTICS") {showExplorationStats()}
         option("TIME MACHINE") {showTimeMachine()}
         option("TRANSIT / LOAD STATIONS") {refreshMetro()}
