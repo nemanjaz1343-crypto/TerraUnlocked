@@ -237,6 +237,24 @@ class MainActivity : Activity(), SensorEventListener {
         }
         fogOverlay = DiscoveryFogOverlay({ records }, { demo }, { segments }, { notes })
         map.overlays.add(fogOverlay)
+        map.overlays.add(object:Overlay() {
+            override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
+                if(shadow)return
+                val marker=notes.firstOrNull {it.time==navigationTarget} ?: return
+                val user=fogOverlay.currentPosition ?: return
+                val results=FloatArray(2)
+                android.location.Location.distanceBetween(user.latitude,user.longitude,marker.latitude,marker.longitude,results)
+                val bearing=Math.toRadians((results[1]-mapView.mapOrientation).toDouble())
+                val cx=canvas.width/2f;val cy=dp(54).toFloat()
+                val ink=Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.rgb(241,214,143);strokeWidth=dp(3).toFloat();style=Paint.Style.STROKE}
+                val dx=kotlin.math.sin(bearing).toFloat();val dy=-kotlin.math.cos(bearing).toFloat()
+                canvas.drawCircle(cx,cy,dp(22).toFloat(),Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.argb(210,28,41,33)})
+                canvas.drawLine(cx-dx*dp(9),cy-dy*dp(9),cx+dx*dp(13),cy+dy*dp(13),ink)
+                val text=Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.WHITE;textSize=dp(10).toFloat();textAlign=Paint.Align.CENTER}
+                val distance=if(results[0]>=1000f) "%.1f km".format(results[0]/1000f) else "%.0f m".format(results[0])
+                canvas.drawText(distance,cx,cy+dp(37),text)
+            }
+        })
         map.overlays.add(object : Overlay() {
             override fun onSingleTapConfirmed(event:MotionEvent,mapView:MapView):Boolean {
                 if(mode!="VIEW") return false
