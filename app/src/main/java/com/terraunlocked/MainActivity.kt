@@ -398,6 +398,20 @@ class MainActivity : Activity(), SensorEventListener {
                 focusObjective(hit);showObjective(hit);return true
             }
         })
+        map.overlays.add(object:Overlay() {
+            override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
+                if(shadow)return
+                val point=previewLocation ?: return
+                val p=mapView.projection.toPixels(point,Point())
+                val brush=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color=sand;style=Paint.Style.STROKE;strokeWidth=dp(2).toFloat()
+                }
+                canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),dp(22).toFloat(),brush)
+                canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),dp(7).toFloat(),brush)
+                brush.style=Paint.Style.FILL
+                canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),dp(2).toFloat(),brush)
+            }
+        })
         val mapArea=FrameLayout(this)
         mapArea.addView(map,FrameLayout.LayoutParams(-1,-1))
         confirmButton=action("CONFIRM PATH").apply {
@@ -406,6 +420,25 @@ class MainActivity : Activity(), SensorEventListener {
             setBackgroundColor(Color.rgb(120,39,35))
         }
         mapArea.addView(confirmButton,FrameLayout.LayoutParams(dp(140),dp(43),Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+        val previewControls=LinearLayout(this).apply {
+            orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER
+            background=GradientDrawable().apply {
+                cornerRadius=dp(12).toFloat();setColor(Color.argb(120,28,40,32))
+                setStroke(dp(1),Color.argb(160,160,183,140))
+            }
+            visibility=View.GONE
+        }
+        previewBar=previewControls
+        previewControls.addView(action("× CANCEL").apply {setOnClickListener {clearMapPreview()}},LinearLayout.LayoutParams(0,dp(48),1f))
+        previewControls.addView(action("✓ CONFIRM OBJECTIVE").apply {setOnClickListener {
+            val point=previewLocation
+            if(point!=null) {
+                objectiveStore.addPlace(previewLabel,point.latitude,point.longitude,"Saved map target")
+                objectiveStore.enabled=true
+                clearMapPreview();status.text="OBJECTIVE SAVED";refresh()
+            }
+        }},LinearLayout.LayoutParams(0,dp(48),2f))
+        mapArea.addView(previewControls,FrameLayout.LayoutParams(-1,dp(54),Gravity.BOTTOM))
         confirmButton.setOnClickListener {
             pending.zipWithNext().forEach { (a,b) ->
                 segments.add(ManualSegment(a.latitude,a.longitude,b.latitude,b.longitude))
