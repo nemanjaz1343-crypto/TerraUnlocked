@@ -520,6 +520,7 @@ class MainActivity : Activity(), SensorEventListener {
         }
         root.addView(controls)
         setContentView(root)
+        if(metroStations.isEmpty())handler.post {refreshMetro()}
         trackButton.setOnClickListener {
             if (tracking) stopTracking() else {
                 if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED)
@@ -701,7 +702,26 @@ class MainActivity : Activity(), SensorEventListener {
         previewBar?.visibility=View.VISIBLE
         if(extent)map.controller.setZoom(17.5)
         map.controller.animateTo(GeoPoint(o.latitude,o.longitude))
+        showObjectiveHint(o)
         refresh()
+    }
+    private fun showObjectiveHint(o:ReconObjective) {
+        val panel=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(12),dp(10),dp(12),dp(10));background=tacticalPanel()}
+        panel.addView(label(o.name,14,sand))
+        panel.addView(label(o.brief.take(100),12,sage))
+        val current=fogOverlay.currentPosition
+        if(current!=null){
+            val d=FloatArray(1)
+            android.location.Location.distanceBetween(current.latitude,current.longitude,o.latitude,o.longitude,d)
+            panel.addView(label(if(d[0]>=1000f)"%.1f km".format(d[0]/1000f) else "%.0f m".format(d[0]),12,sand))
+        }
+        val popup=PopupWindow(panel,dp(285),dp(145),false).apply {
+            isOutsideTouchable=true
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+            elevation=dp(5).toFloat()
+        }
+        panel.addView(action("× CLOSE / CONFIRM BELOW FOR OPTIONS").apply {setOnClickListener {popup.dismiss()}})
+        popup.showAtLocation(map,Gravity.TOP or Gravity.CENTER_HORIZONTAL,0,dp(90))
     }
     private fun clearMapPreview() {
         previewLocation=null;previewLabel="";pendingObjective=null
