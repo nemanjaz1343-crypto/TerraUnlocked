@@ -386,9 +386,10 @@ class MainActivity : Activity(), SensorEventListener {
             }
         }
         followButton.setOnClickListener {
-            followUser=!followUser
-            followButton.text=if(followUser) "FOCUS ●" else "FOCUS ○"
-            if(followUser) fogOverlay.currentPosition?.let {map.controller.animateTo(it)}
+            followUser=true
+            followButton.text="FOCUS ●"
+            fogOverlay.currentPosition?.let {map.controller.setZoom(18.0);map.controller.animateTo(it)}
+                ?: run {status.text="FOCUS / WAITING FOR GPS"}
         }
         fun activate(selected: String, button: Button) {
             mode = if (mode == selected) "VIEW" else selected
@@ -536,6 +537,19 @@ class MainActivity : Activity(), SensorEventListener {
         dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
     }
 
+    private fun loadOrientedPhoto(file:File):android.graphics.Bitmap? {
+        val bitmap=android.graphics.BitmapFactory.decodeFile(file.absolutePath) ?: return null
+        val exif=android.media.ExifInterface(file.absolutePath)
+        val angle=when(exif.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION,1)) {
+            6 -> 90f
+            3 -> 180f
+            8 -> 270f
+            else -> 0f
+        }
+        if(angle==0f)return bitmap
+        val matrix=android.graphics.Matrix().apply {postRotate(angle)}
+        return android.graphics.Bitmap.createBitmap(bitmap,0,0,bitmap.width,bitmap.height,matrix,true)
+    }
     private fun showExisting(note:FieldNote) {
         val current=notes.find { it.time==note.time } ?: return
         val panel=LinearLayout(this).apply {
@@ -573,7 +587,7 @@ class MainActivity : Activity(), SensorEventListener {
         current.attachments.forEachIndexed { index,filename ->
             panel.addView(action("▣ PHOTO "+(index+1)+"   /   OPEN").apply {
                 setOnClickListener {
-                    val bitmap=android.graphics.BitmapFactory.decodeFile(File(filesDir,filename).absolutePath)
+                    val bitmap=loadOrientedPhoto(File(filesDir,filename))
                     if(bitmap!=null) android.app.AlertDialog.Builder(this@MainActivity)
                         .setView(android.widget.ImageView(this@MainActivity).apply {
                             setImageBitmap(bitmap);adjustViewBounds=true
