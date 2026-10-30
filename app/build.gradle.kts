@@ -5,12 +5,31 @@ plugins {
 android {
     namespace = "com.terraunlocked"
     compileSdk = 35
+    signingConfigs {
+        create("stableRelease") {
+            val storePath = System.getenv("TERRA_KEYSTORE_PATH")
+            if (!storePath.isNullOrBlank()) {
+                storeFile = file(storePath)
+                storePassword = System.getenv("TERRA_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("TERRA_KEY_ALIAS")
+                keyPassword = System.getenv("TERRA_KEY_PASSWORD")
+            }
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            if (!System.getenv("TERRA_KEYSTORE_PATH").isNullOrBlank()) {
+                signingConfig = signingConfigs.getByName("stableRelease")
+            }
+            isMinifyEnabled = false
+        }
+    }
     defaultConfig {
         applicationId = "com.terraunlocked"
         minSdk = 26
         targetSdk = 35
-        versionCode = 33
-        versionName = "0.4.4"
+        versionCode = 34
+        versionName = "0.4.5"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
