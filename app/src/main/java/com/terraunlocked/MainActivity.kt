@@ -113,7 +113,6 @@ class MainActivity : Activity(), SensorEventListener {
     private var timeMachinePopup:PopupWindow?=null
     private lateinit var objectiveStore:ObjectiveStore
     private val metroStations=mutableListOf<TransitStation>()
-    private var transitVisible=true
     private var stationLoading=false
     private var objectivesPopup:PopupWindow?=null
     private var voicePoint:GeoPoint?=null
@@ -429,7 +428,7 @@ class MainActivity : Activity(), SensorEventListener {
         })
         map.overlays.add(object:Overlay() {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
-                if(shadow||!transitVisible)return
+                if(shadow)return
                 val brush=Paint(Paint.ANTI_ALIAS_FLAG)
                 metroStations.forEach {station->
                     val p=mapView.projection.toPixels(GeoPoint(station.lat,station.lon),Point())
@@ -437,11 +436,11 @@ class MainActivity : Activity(), SensorEventListener {
                     canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),dp(13).toFloat(),brush)
                     brush.color=Color.WHITE;brush.textSize=dp(13).toFloat()
                     brush.textAlign=Paint.Align.CENTER;brush.typeface=Typeface.DEFAULT_BOLD
-                    canvas.drawText("M",p.x.toFloat(),p.y.toFloat()+dp(4),brush)
+                    canvas.drawText("🚆",p.x.toFloat(),p.y.toFloat()+dp(4),brush)
                 }
             }
             override fun onSingleTapConfirmed(e:MotionEvent,mapView:MapView):Boolean {
-                if(!transitVisible||mode!="VIEW")return false
+                if(mode!="VIEW")return false
                 val hit=metroStations.firstOrNull {station->
                     val p=mapView.projection.toPixels(GeoPoint(station.lat,station.lon),Point())
                     kotlin.math.hypot((e.x-p.x).toDouble(),(e.y-p.y).toDouble())<dp(20)
@@ -1248,7 +1247,6 @@ class MainActivity : Activity(), SensorEventListener {
         }
         option("EXPLORATION STATISTICS") {showExplorationStats()}
         option("TIME MACHINE") {showTimeMachine()}
-        option("TRANSIT / TOGGLE") {transitVisible=!transitVisible;refresh();if(transitVisible&&metroStations.isEmpty())refreshMetro()}
         option("TRANSIT / LOAD STATIONS") {refreshMetro()}
         option("HOME / GO") {anchor("HOME",false)}
         option("HOME / SAVE MAP CENTER") {anchor("HOME",true)}
