@@ -675,8 +675,10 @@ class MainActivity : Activity(), SensorEventListener {
         }
         box.addView(action("▣ PASTE & LOCATE").apply {setOnClickListener {
             val clipboard=getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-            clipboard.primaryClip?.getItemAt(0)?.coerceToText(this@MainActivity)?.toString()?.let {query.setText(it)}
-            locate()
+            val copied=clipboard.primaryClip?.getItemAt(0)?.coerceToText(this@MainActivity)?.toString()
+            if(!copied.isNullOrBlank())query.setText(copied)
+            if(query.text.isBlank())status.text="CLIPBOARD EMPTY / COPY GOOGLE MAPS LINK FIRST"
+            else locate()
         }})
         box.addView(action("⌖ SEARCH TEXT").apply {setOnClickListener {locate()}})
         popup.showAtLocation(map,Gravity.TOP or Gravity.CENTER_HORIZONTAL,0,dp(115))
