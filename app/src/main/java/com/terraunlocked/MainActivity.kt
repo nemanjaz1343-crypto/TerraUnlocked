@@ -585,7 +585,7 @@ class MainActivity : Activity(), SensorEventListener {
                     notes.add(FieldNote(where.latitude,where.longitude,"Quick pin","POI","",System.currentTimeMillis(),"◆"))
                     fieldNotes.save(notes);status.text="QUICK PIN SAVED";refresh()
                 }
-                4 -> startVoice(where)
+                4 -> {measure=!measure;measurePoints.clear();status.text=if(measure)"RULER / TAP TWO POINTS" else "RULER OFF";refresh()}
                 5 -> showNoteEditor(where,"MEMORY")
             }
         }
@@ -1257,10 +1257,6 @@ class MainActivity : Activity(), SensorEventListener {
         option("EXPLORATION STATISTICS") {showExplorationStats()}
         option("TIME MACHINE") {showTimeMachine()}
         option("TRANSIT / LOAD STATIONS") {refreshMetro()}
-        option("HOME / GO") {anchor("HOME",false)}
-        option("HOME / SAVE MAP CENTER") {anchor("HOME",true)}
-        option("OFFICE / GO") {anchor("OFFICE",false)}
-        option("OFFICE / SAVE MAP CENTER") {anchor("OFFICE",true)}
         option("FOG ${if (fogEnabled) "ON" else "OFF"}") {
             fogEnabled = !fogEnabled; fogOverlay.fogVisible = fogEnabled; refresh()
         }
@@ -1269,9 +1265,6 @@ class MainActivity : Activity(), SensorEventListener {
         }
         option("CHECKPOINTS ${if(fogOverlay.showCheckpoints) "ON" else "OFF"}") {
             fogOverlay.showCheckpoints=!fogOverlay.showCheckpoints;refresh()
-        }
-        option("RULER ${if(measure) "ON" else "OFF"}") {
-            measure=!measure;measurePoints.clear();status.text=if(measure) "RULER / SELECT FIRST POINT" else "RULER OFF";refresh()
         }
         option("BACKTRACK ${if(fogOverlay.backtrack) "ON" else "OFF"}") {
             fogOverlay.backtrack=!fogOverlay.backtrack;refresh()
@@ -1303,10 +1296,6 @@ class MainActivity : Activity(), SensorEventListener {
                 type = "*/*"
             }
             startActivityForResult(intent, 81)
-        }
-        option("MAP OSM / TOPO") {
-            map.setTileSource(if(map.tileProvider.tileSource == TileSourceFactory.MAPNIK)
-                TileSourceFactory.OpenTopo else TileSourceFactory.MAPNIK)
         }
         option("UNDO LAST PATH") {
             if (segments.isNotEmpty()) { segments.removeAt(segments.lastIndex); pathStore.save(segments); refresh() }
