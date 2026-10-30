@@ -631,6 +631,31 @@ class MainActivity : Activity(), SensorEventListener {
     }
     private fun resolveMapLocation(raw:String) {
         if(raw.isBlank())return
+        val shortLink=Regex("""https?://(?:maps\.app\.goo\.gl|goo\.gl/maps)/[^\s]+""").find(raw)?.value
+        if(shortLink!=null) {
+            status.text="MAP / RESOLVING GOOGLE MAPS LINK..."
+            Thread {
+                runCatching {
+                    val conn=(java.net.URL(shortLink).openConnection() as java.net.HttpURLConnection).apply {
+                        instanceFollowRedirects=true;connectTimeout=7000;readTimeout=7000
+                    }
+                    val resolved=try {conn.inputStream.use { };conn.url.toString()} finally {conn.disconnect()}
+                    runOnUiThread {
+                        if(resolved!=shortLink)resolveMapLocation(resolved)
+                        else status.text="MAP / SHORT LINK NOT RESOLVED"
+                    }
+                }.onFailure {runOnUiThread {status.text="MAP / LINK UNAVAILABLE"}}
+            }.start()
+            return
+        }
+        val embedded=Regex("""!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)""").find(raw)
+        if(embedded!=null) {
+            val lat=embedded.groupValues[1].toDoubleOrNull()
+            val lon=embedded.groupValues[2].toDoubleOrNull()
+            if(lat!=null && lon!=null && lat in -90.0..90.0 && lon in -180.0..180.0) {
+                showFoundLocation("Google Maps location",lat,lon);return
+            }
+        }
         val direct=Regex("""(-?\d{1,2}\.\d+)\s*[, ]\s*(-?\d{1,3}\.\d+)""").find(raw)
         val pair=direct?.let {
             val lat=it.groupValues[1].toDoubleOrNull();val lon=it.groupValues[2].toDoubleOrNull()
