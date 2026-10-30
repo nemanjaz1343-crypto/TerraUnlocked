@@ -109,6 +109,8 @@ class MainActivity : Activity(), SensorEventListener {
     private var pendingObjective:ReconObjective?=null
     private var previewBar:LinearLayout?=null
     private var navigationTarget:Long?=null
+    private var historyCutoff:Long?=null
+    private var timeMachinePopup:PopupWindow?=null
     private lateinit var objectiveStore:ObjectiveStore
     private var objectivesPopup:PopupWindow?=null
     private var voicePoint:GeoPoint?=null
@@ -244,7 +246,7 @@ class MainActivity : Activity(), SensorEventListener {
             controller.setZoom(16.0)
             controller.setCenter(GeoPoint(25.0657, 55.1403))
         }
-        fogOverlay = DiscoveryFogOverlay({ records }, { demo }, { segments }, { notes })
+        fogOverlay = DiscoveryFogOverlay({ records.filter { historyCutoff==null || it.timestamp<=historyCutoff!! } }, { if(historyCutoff==null)demo else emptyList() }, { if(historyCutoff==null)segments else emptyList() }, { notes.filter {historyCutoff==null || it.time<=historyCutoff!!} })
         map.overlays.add(fogOverlay)
         map.overlays.add(object:Overlay() {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
@@ -1064,6 +1066,62 @@ class MainActivity : Activity(), SensorEventListener {
             showAtLocation(map,Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,0,dp(61))
         }
     }
+    private fun showExplorationStats() {
+        val stats=ExplorationStats.calculate(records,notes,historyCutoff ?: Long.MAX_VALUE)
+        val panel=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(18),dp(14),dp(18),dp(14));background=tacticalPanel()}
+        panel.addView(label("◈ EXPLORATION / STATISTICS",14,sand))
+        listOf(
+            "DISTANCE  /  %.2f km".format(stats.distanceMeters/1000.0),
+            "GPS SAMPLES  /  "+stats.gpsFixes,
+            "ACTIVE DAYS  /  "+stats.sessions,
+            "DISCOVERY CELLS  /  "+stats.exploredCells,
+            "APPROX. COVERAGE  /  %.2f km²".format(stats.exploredCells*400/1000000.0),
+            "VISITED MARKERS  /  "+stats.visitedMarkers,
+            "PHOTOS  /  "+stats.photoCount
+        ).forEach {panel.addView(label(it,12,sand))}
+        panel.addView(label("Coverage is a 20m grid estimate, not surveyed area.",10,sage))
+        val window=PopupWindow(panel,dp(300),dp(320),true).apply {
+            isOutsideTouchable=true
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+            elevation=dp(6).toFloat()
+        }
+        panel.addView(action("CLOSE").apply {setOnClickListener {window.dismiss()}})
+        window.showAtLocation(map,Gravity.CENTER,0,0)
+    }
+    private fun showTimeMachine() {
+        timeMachinePopup?.dismiss()
+        val gps=records.filter {it.timestamp>0}.sortedBy {it.timestamp}
+        if(gps.isEmpty()) {status.text="TIME MACHINE / NO RECORDED HISTORY";return}
+        val earliest=gps.first().timestamp
+        val latest=maxOf(gps.last().timestamp,System.currentTimeMillis())
+        val panel=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(14),dp(12),dp(14),dp(12));background=tacticalPanel()}
+        panel.addView(label("◷ TIME MACHINE",14,sand))
+        val date=label("",12,sage);panel.addView(date)
+        val slider=SeekBar(this).apply {max=1000;progress=if(historyCutoff==null)1000 else (((historyCutoff!!-earliest).toDouble()/(latest-earliest).coerceAtLeast(1)*1000).toInt().coerceIn(0,1000))}
+        fun showAt(progress:Int) {
+            val time=earliest+((latest-earliest)*progress/1000L)
+            historyCutoff=if(progress==1000)null else time
+            date.text=if(historyCutoff==null)"LIVE / FULL MAP" else java.text.DateFormat.getDateTimeInstance().format(java.util.Date(time))
+            refresh()
+        }
+        slider.setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar:SeekBar?,progress:Int,fromUser:Boolean) {if(fromUser)showAt(progress)}
+            override fun onStartTrackingTouch(seekBar:SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar:SeekBar?) {}
+        })
+        panel.addView(slider)
+        showAt(slider.progress)
+        panel.addView(label("Slide to replay discoveries. GPS recording continues; no data is deleted.",10,sage))
+        val window=PopupWindow(panel,dp(325),dp(230),true).apply {
+            isOutsideTouchable=true
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+            elevation=dp(6).toFloat()
+            setOnDismissListener {historyCutoff=null;refresh();timeMachinePopup=null}
+        }
+        panel.addView(action("RETURN TO LIVE").apply {setOnClickListener {window.dismiss()}})
+        timeMachinePopup=window
+        window.showAtLocation(map,Gravity.TOP or Gravity.CENTER_HORIZONTAL,0,dp(110))
+    }
     private fun showLayers(anchor: View) {
         if (layersPopup?.isShowing == true) { layersPopup?.dismiss(); return }
         val panel = LinearLayout(this).apply {
@@ -1075,6 +1133,8 @@ class MainActivity : Activity(), SensorEventListener {
             panel.addView(action(name).apply { setOnClickListener { callback(); layersPopup?.dismiss() } },
                 LinearLayout.LayoutParams(-1, dp(43)))
         }
+        option("EXPLORATION STATISTICS") {showExplorationStats()}
+        option("TIME MACHINE") {showTimeMachine()}
         option("FOG ${if (fogEnabled) "ON" else "OFF"}") {
             fogEnabled = !fogEnabled; fogOverlay.fogVisible = fogEnabled; refresh()
         }
