@@ -1112,6 +1112,7 @@ class MainActivity : Activity(), SensorEventListener {
         panel.addView(slider)
         showAt(slider.progress)
         panel.addView(label("Slide to replay discoveries. GPS recording continues; no data is deleted.",10,sage))
+        panel.addView(action("STATS AT SELECTED DATE").apply {setOnClickListener {showExplorationStats()}})
         val window=PopupWindow(panel,dp(325),dp(230),true).apply {
             isOutsideTouchable=true
             setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
