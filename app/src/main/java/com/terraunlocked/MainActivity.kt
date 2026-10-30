@@ -919,9 +919,10 @@ class MainActivity : Activity(), SensorEventListener {
             val idx = records.indexOfLast { it.manual }
             if (idx >= 0) { records.removeAt(idx); store.replaceAll(records); refresh() }
         }
-        layersPopup = PopupWindow(panel, dp(240), dp(475), true).apply {
+        val viewScroll=android.widget.ScrollView(this).apply {addView(panel)}
+        layersPopup = PopupWindow(viewScroll, dp(240), dp(495), true).apply {
             isOutsideTouchable = true
-            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.rgb(43, 54, 43)))
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
             elevation = dp(8).toFloat()
             showAtLocation(map, Gravity.BOTTOM or Gravity.END, dp(8), dp(60))
         }
