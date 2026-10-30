@@ -122,6 +122,8 @@ class MainActivity : Activity(), SensorEventListener {
     private var voiceNoteTime:Long?=null
     private var recorder:MediaRecorder?=null
     private var audioFile:File?=null
+    private var inferredPaths=emptyList<InferredPath>()
+    private var recoveryRunning=false
     private var measure=false
     private val measurePoints=mutableListOf<GeoPoint>()
     private var filteredFixes=0
@@ -256,6 +258,25 @@ class MainActivity : Activity(), SensorEventListener {
         }
         fogOverlay = DiscoveryFogOverlay({ records.filter { historyCutoff==null || it.timestamp<=historyCutoff!! } }, { if(historyCutoff==null)demo else emptyList() }, { if(historyCutoff==null)segments else emptyList() }, { notes.filter {historyCutoff==null || it.time<=historyCutoff!!} })
         map.overlays.add(fogOverlay)
+        map.overlays.add(object:Overlay() {
+            override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
+                if(shadow)return
+                val ink=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color=Color.argb(160,212,196,134)
+                    strokeWidth=dp(4).toFloat();style=Paint.Style.STROKE
+                    strokeCap=Paint.Cap.ROUND
+                    pathEffect=android.graphics.DashPathEffect(floatArrayOf(dp(7).toFloat(),dp(6).toFloat()),0f)
+                }
+                inferredPaths.filter {historyCutoff==null || it.endTime<=historyCutoff!!}.forEach {candidate->
+                    val path=android.graphics.Path()
+                    candidate.points.forEachIndexed {i,pos->
+                        val p=mapView.projection.toPixels(GeoPoint(pos.first,pos.second),Point())
+                        if(i==0)path.moveTo(p.x.toFloat(),p.y.toFloat()) else path.lineTo(p.x.toFloat(),p.y.toFloat())
+                    }
+                    canvas.drawPath(path,ink)
+                }
+            }
+        })
         map.overlays.add(object:Overlay() {
             override fun onSingleTapConfirmed(e:MotionEvent,mapView:MapView):Boolean {
                 if(mode!="VIEW")return false
@@ -1353,6 +1374,26 @@ class MainActivity : Activity(), SensorEventListener {
         }
         window.showAtLocation(map,Gravity.CENTER,0,0)
     }
+    private fun scanSmartPaths() {
+        if(recoveryRunning)return
+        recoveryRunning=true
+        status.text="SMART PATH / SCANNING OSM..."
+        val snapshot=records.toList()
+        val center=map.mapCenter
+        Thread {
+            val outcome=runCatching {SmartPathRecovery.scan(snapshot,center.latitude,center.longitude)}
+            runOnUiThread {
+                recoveryRunning=false
+                if(outcome.isFailure) {
+                    status.text="SMART PATH / OSM UNAVAILABLE, ORIGINAL GPS UNCHANGED"
+                } else {
+                    inferredPaths=outcome.getOrDefault(emptyList())
+                    status.text="SMART PATH / "+inferredPaths.size+" INFERRED GAPS (DASHED)"
+                    refresh()
+                }
+            }
+        }.start()
+    }
     private fun showLayers(anchor: View) {
         if (layersPopup?.isShowing == true) { layersPopup?.dismiss(); return }
         val panel = LinearLayout(this).apply {
@@ -1364,6 +1405,8 @@ class MainActivity : Activity(), SensorEventListener {
             panel.addView(action(name).apply { setOnClickListener { callback(); layersPopup?.dismiss() } },
                 LinearLayout.LayoutParams(-1, dp(43)))
         }
+        option("SMART PATH / SCAN NEARBY") {scanSmartPaths()}
+        option("SMART PATH / CLEAR PREVIEW") {inferredPaths=emptyList();refresh()}
         option("EXPLORATION STATISTICS") {showExplorationStats()}
         option("TIME MACHINE") {showTimeMachine()}
         option("TRANSIT / LOAD STATIONS") {refreshMetro()}
