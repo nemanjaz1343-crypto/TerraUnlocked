@@ -651,20 +651,45 @@ class MainActivity : Activity(), SensorEventListener {
         map.controller.animateTo(GeoPoint(o.latitude,o.longitude))
         refresh()
     }
+    private fun clearMapPreview() {
+        previewLocation=null;previewLabel=""
+        previewBar?.visibility=View.GONE
+        refresh()
+    }
+    private fun tacticalPanel():GradientDrawable = GradientDrawable().apply {
+        cornerRadius=dp(16).toFloat()
+        setColor(Color.argb(126,29,43,34))
+        setStroke(dp(1),Color.argb(190,155,181,134))
+    }
     private fun showMapLookup() {
-        val box=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(18),dp(10),dp(18),dp(8))}
-        val query=EditText(this).apply {hint="Paste Google Maps link, coordinates or address";setSingleLine(false);minLines=2}
+        clearMapPreview()
+        val box=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(14),dp(12),dp(14),dp(12))
+            background=tacticalPanel()
+        }
+        box.addView(label("⌕ MAP / TARGET SEARCH",13,sand))
+        val query=EditText(this).apply {
+            hint="Google Maps link, coordinates or address"
+            setTextColor(sand);setHintTextColor(sage);minLines=2;maxLines=3
+        }
         box.addView(query)
-        val clip=getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-        box.addView(action("▣ PASTE FROM CLIPBOARD").apply {setOnClickListener {
-            val item=clip.primaryClip?.getItemAt(0)
-            query.setText(item?.coerceToText(this@MainActivity)?.toString() ?: "")
+        val popup=PopupWindow(box,dp(310),dp(204),true).apply {
+            isOutsideTouchable=true
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+            elevation=dp(7).toFloat()
+        }
+        fun locate() {
+            val value=query.text.toString().trim()
+            if(value.isNotEmpty()) {popup.dismiss();resolveMapLocation(value)}
+        }
+        box.addView(action("▣ PASTE & LOCATE").apply {setOnClickListener {
+            val clipboard=getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            clipboard.primaryClip?.getItemAt(0)?.coerceToText(this@MainActivity)?.toString()?.let {query.setText(it)}
+            locate()
         }})
-        val dialog=android.app.AlertDialog.Builder(this).setTitle("MAP / FIND LOCATION")
-            .setView(box).setNegativeButton("CANCEL",null).setPositiveButton("SHOW ON MAP") {_,_->
-                resolveMapLocation(query.text.toString().trim())
-            }.create()
-        dialog.show()
+        box.addView(action("⌖ SEARCH TEXT").apply {setOnClickListener {locate()}})
+        popup.showAtLocation(map,Gravity.TOP or Gravity.CENTER_HORIZONTAL,0,dp(115))
     }
     private fun resolveMapLocation(raw:String) {
         if(raw.isBlank())return
@@ -718,16 +743,13 @@ class MainActivity : Activity(), SensorEventListener {
         }.start()
     }
     private fun showFoundLocation(name:String,lat:Double,lon:Double) {
+        previewLocation=GeoPoint(lat,lon);previewLabel=name
         followUser=false;followButton.text="FOCUS ○"
-        map.controller.setZoom(18.0);map.controller.animateTo(GeoPoint(lat,lon))
-        status.text="MAP / "+name.take(35)
-        android.app.AlertDialog.Builder(this).setTitle(name)
-            .setMessage("Location found. Save as a place to explore?")
-            .setNegativeButton("JUST SHOW",null)
-            .setPositiveButton("SAVE OBJECTIVE") {_,_->
-                val place=objectiveStore.addPlace(name,lat,lon,"Saved from map lookup")
-                objectiveStore.enabled=true;refresh();showObjective(place)
-            }.show()
+        map.controller.setZoom(18.0)
+        map.controller.animateTo(previewLocation)
+        previewBar?.visibility=View.VISIBLE
+        status.text="TARGET PREVIEW / "+name.take(35)
+        refresh()
     }
     private fun showObjectives() {
         objectivesPopup?.dismiss()
