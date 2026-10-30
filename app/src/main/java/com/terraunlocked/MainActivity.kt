@@ -700,6 +700,26 @@ class MainActivity : Activity(), SensorEventListener {
             }.start()
             return
         }
+        val url=Regex("""https?://[^\\s]+""").find(raw)?.value
+        val decoded=runCatching {java.net.URLDecoder.decode(raw,"UTF-8")}.getOrDefault(raw)
+        val mapCoords=listOf(
+            Regex("""@(-?\\d+\\.\\d+),(-?\\d+\\.\\d+)"""),
+            Regex("""[?&](?:q|query|ll|center)=(-?\\d+\\.\\d+),(-?\\d+\\.\\d+)"""),
+            Regex("""!3d(-?\\d+\\.\\d+)!4d(-?\\d+\\.\\d+)""")
+        ).firstNotNullOfOrNull {it.find(decoded)}
+        if(mapCoords!=null) {
+            val latitude=mapCoords.groupValues[1].toDoubleOrNull()
+            val longitude=mapCoords.groupValues[2].toDoubleOrNull()
+            if(latitude!=null&&longitude!=null&&latitude in -90.0..90.0&&longitude in -180.0..180.0) {
+                showFoundLocation("Google Maps target",latitude,longitude);return
+            }
+        }
+        if(url!=null && ("google.com/maps" in url || "maps.google." in url)) {
+            val text=runCatching {java.net.URI(url)}.getOrNull()
+            val path=text?.path.orEmpty()
+            val name=path.substringAfter("/place/","").substringBefore("/").replace("+"," ")
+            if(name.isNotEmpty()) {resolveAddress(name);return}
+        }
         val embedded=Regex("""!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)""").find(raw)
         if(embedded!=null) {
             val lat=embedded.groupValues[1].toDoubleOrNull()
@@ -715,6 +735,9 @@ class MainActivity : Activity(), SensorEventListener {
         }
         if(pair!=null){showFoundLocation(raw.take(60),pair.first,pair.second);return}
         val query=raw.substringAfter("query=",raw).substringBefore("&").replace("+"," ")
+        resolveAddress(query)
+    }
+    private fun resolveAddress(query:String) {
         status.text="MAP / LOCATING..."
         Thread {
             try {
