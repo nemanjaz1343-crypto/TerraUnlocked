@@ -13,7 +13,8 @@ class TerraArchive(private val context:Context) {
     private val keys=listOf(
         Triple("notes.json","terra_notes_v1","notes"),
         Triple("discoveries.json","terra_discoveries_v1","points"),
-        Triple("paths.json","terra_manual_paths_v1","segments")
+        Triple("paths.json","terra_manual_paths_v1","segments"),
+        Triple("places.json","terra_objectives_v1","custom_places")
     )
     fun exportTo(output:OutputStream) {
         ZipOutputStream(output).use {zip->
@@ -66,10 +67,10 @@ class TerraArchive(private val context:Context) {
                 zip.closeEntry()
             }
         }
-        require(fields.keys.containsAll(keys.map {it.first})) {"Incomplete TerraUnlocked archive"}
+        require(fields.keys.containsAll(keys.take(3).map {it.first})) {"Incomplete TerraUnlocked archive"}
         // Archive is validated before replacing local data.
         for((name,bytes) in media) File(context.filesDir,name).writeBytes(bytes)
-        for((filename,pref,key) in keys) {
+        for((filename,pref,key) in keys.filter {fields.containsKey(it.first)}) {
             context.getSharedPreferences(pref,Context.MODE_PRIVATE).edit().putString(key,fields.getValue(filename)).commit()
         }
     }
