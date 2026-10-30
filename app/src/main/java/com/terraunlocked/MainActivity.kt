@@ -400,6 +400,14 @@ class MainActivity : Activity(), SensorEventListener {
                 } ?: return false
                 focusObjective(hit);return true
             }
+            override fun onLongPress(event:MotionEvent,mapView:MapView):Boolean {
+                if(mode!="VIEW")return false
+                val hit=(ReconObjectives.all+objectiveStore.customPlaces()).filterNot {objectiveStore.isHidden(it.id)}.firstOrNull {o->
+                    val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
+                    kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(24)
+                } ?: return false
+                focusObjective(hit,true);return true
+            }
         })
         map.overlays.add(object:Overlay() {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
@@ -641,14 +649,14 @@ class MainActivity : Activity(), SensorEventListener {
         val distance=if(readings[0]>=1000f) "%.1f km".format(readings[0]/1000f) else "%.0f m".format(readings[0])
         status.text="NAV / "+target.title.take(12)+" / "+distance+" / "+readings[1].toInt()+"°"
     }
-    private fun focusObjective(o:ReconObjective) {
+    private fun focusObjective(o:ReconObjective,extent:Boolean=false) {
         followUser=false
         if(::followButton.isInitialized)followButton.text="FOCUS ○"
         pendingObjective=o
         previewLocation=GeoPoint(o.latitude,o.longitude)
         previewLabel=o.name
         previewBar?.visibility=View.VISIBLE
-        map.controller.setZoom(17.5)
+        if(extent)map.controller.setZoom(17.5)
         map.controller.animateTo(GeoPoint(o.latitude,o.longitude))
         refresh()
     }
@@ -807,6 +815,7 @@ class MainActivity : Activity(), SensorEventListener {
                         gravity=Gravity.CENTER_VERTICAL or Gravity.START
                         setPadding(dp(8),0,dp(5),0)
                         setOnClickListener { objectivesPopup?.dismiss();focusObjective(o) }
+                        setOnLongClickListener { objectivesPopup?.dismiss();focusObjective(o,true);true }
                     },LinearLayout.LayoutParams(-1,dp(46)))
                 }
         }
