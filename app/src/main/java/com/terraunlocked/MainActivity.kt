@@ -106,6 +106,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var cameraUri:Uri?=null
     private var navigationTarget:Long?=null
     private var voicePoint:GeoPoint?=null
+    private var voiceNoteTime:Long?=null
     private var recorder:MediaRecorder?=null
     private var audioFile:File?=null
     private var measure=false
@@ -597,7 +598,7 @@ class MainActivity : Activity(), SensorEventListener {
         val count=label("ATTACHMENTS / "+current.attachments.size,12,sage)
         panel.addView(count)
         val photoStrip=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
-        current.attachments.forEach { filename ->
+        current.attachments.filterNot {it.endsWith(".m4a")}.forEach { filename ->
             val thumb=android.widget.ImageView(this).apply {
                 scaleType=android.widget.ImageView.ScaleType.CENTER_CROP
                 setImageBitmap(loadOrientedPhoto(File(filesDir,filename)))
@@ -620,6 +621,19 @@ class MainActivity : Activity(), SensorEventListener {
         }
         val scroller=android.widget.HorizontalScrollView(this)
         scroller.addView(photoStrip);panel.addView(scroller)
+        current.attachments.filter {it.endsWith(".m4a")}.forEachIndexed {i,file ->
+            panel.addView(action("▶ VOICE MEMO "+(i+1)).apply {
+                setOnClickListener {
+                    runCatching {
+                        MediaPlayer().apply {
+                            setDataSource(File(filesDir,file).absolutePath)
+                            setOnCompletionListener {it.release()}
+                            prepare();start()
+                        }
+                    }.onFailure {status.text="VOICE PLAYBACK ERROR"}
+                }
+            })
+        }
         val actions=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
         fun updateNote():FieldNote {
             val edited=current.copy(title=name.text.toString().ifBlank{"Untitled"},
@@ -662,6 +676,13 @@ class MainActivity : Activity(), SensorEventListener {
             }
         },LinearLayout.LayoutParams(0,dp(44),1f))
         panel.addView(actions)
+        panel.addView(action("● ADD VOICE MEMO").apply {
+            setOnClickListener {
+                updateNote();voiceNoteTime=current.time
+                startVoice(GeoPoint(current.latitude,current.longitude))
+                dialog.dismiss()
+            }
+        })
         panel.addView(action("＋ QUICK BRIEF").apply {
             setOnClickListener {
                 updateNote()
@@ -718,11 +739,17 @@ class MainActivity : Activity(), SensorEventListener {
         recorder?.release();recorder=null
         val file=audioFile
         val point=voicePoint
-        if(save && file!=null && file.exists() && file.length()>0 && point!=null) {
+        if(save && file!=null && file.exists() && file.length()>0 && voiceNoteTime!=null) {
+            val idx=notes.indexOfFirst {it.time==voiceNoteTime}
+            if(idx>=0) {
+                notes[idx]=notes[idx].copy(attachments=notes[idx].attachments+file.name)
+                fieldNotes.save(notes);refresh()
+            }
+        } else if(save && file!=null && file.exists() && file.length()>0 && point!=null) {
             notes.add(FieldNote(point.latitude,point.longitude,"Voice memo","VOICE",file.name,System.currentTimeMillis()))
             fieldNotes.save(notes);refresh()
         }else file?.delete()
-        audioFile=null;voicePoint=null
+        audioFile=null;voicePoint=null;voiceNoteTime=null
     }
     private fun gap(a: GeoPoint, b: GeoPoint): Float {
         val out = FloatArray(1)
