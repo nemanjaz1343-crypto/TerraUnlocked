@@ -105,6 +105,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var attachmentNoteTime:Long?=null
     private var cameraUri:Uri?=null
     private var navigationTarget:Long?=null
+    private lateinit var objectiveStore:ObjectiveStore
     private var voicePoint:GeoPoint?=null
     private var voiceNoteTime:Long?=null
     private var recorder:MediaRecorder?=null
@@ -204,6 +205,7 @@ class MainActivity : Activity(), SensorEventListener {
         Configuration.getInstance().userAgentValue = packageName
         store = DiscoveryStore(this)
         fieldNotes=FieldNotes(this)
+        objectiveStore=ObjectiveStore(this)
         notes.addAll(fieldNotes.load())
         pathStore = PathStore(this)
         segments.addAll(pathStore.load())
@@ -237,6 +239,28 @@ class MainActivity : Activity(), SensorEventListener {
         }
         fogOverlay = DiscoveryFogOverlay({ records }, { demo }, { segments }, { notes })
         map.overlays.add(fogOverlay)
+        map.overlays.add(object:Overlay() {
+            override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
+                if(shadow || !objectiveStore.enabled)return
+                val ink=Paint(Paint.ANTI_ALIAS_FLAG)
+                ReconObjectives.all.filterNot {objectiveStore.isHidden(it.id)}.forEach {o->
+                    val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
+                    ink.color=Color.argb(215,27,43,34)
+                    canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),dp(13).toFloat(),ink)
+                    ink.color=if(objectiveStore.completed(o.id))Color.GREEN else if(objectiveStore.active==o.id)Color.YELLOW else Color.CYAN
+                    ink.textSize=dp(18).toFloat();ink.textAlign=Paint.Align.CENTER
+                    canvas.drawText(if(objectiveStore.completed(o.id))"✓" else "◇",p.x.toFloat(),p.y+dp(5),ink)
+                }
+            }
+            override fun onSingleTapConfirmed(event:MotionEvent,mapView:MapView):Boolean {
+                if(!objectiveStore.enabled || mode!="VIEW")return false
+                val hit=ReconObjectives.all.filterNot {objectiveStore.isHidden(it.id)}.firstOrNull {o->
+                    val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
+                    kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(22)
+                } ?: return false
+                showObjective(hit);return true
+            }
+        })
         map.overlays.add(object:Overlay() {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
                 if(shadow)return
@@ -579,6 +603,34 @@ class MainActivity : Activity(), SensorEventListener {
         val distance=if(readings[0]>=1000f) "%.1f km".format(readings[0]/1000f) else "%.0f m".format(readings[0])
         status.text="NAV / "+target.title.take(12)+" / "+distance+" / "+readings[1].toInt()+"°"
     }
+    private fun showObjectives() {
+        val items=ReconObjectives.all.filterNot {objectiveStore.isHidden(it.id)}
+        android.app.AlertDialog.Builder(this).setTitle("RECON OBJECTIVES")
+            .setItems(items.map {it.name+" / "+it.category}.toTypedArray()) {_,i->showObjective(items[i])}
+            .setNegativeButton("CLOSE",null).show()
+    }
+    private fun showObjective(o:ReconObjective) {
+        val panel=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(14),dp(10),dp(14),dp(10));setBackgroundColor(Color.rgb(37,51,40))}
+        panel.addView(label("OBJECTIVE / "+o.category,12,sage))
+        panel.addView(label(o.name,17,sand))
+        panel.addView(label(o.brief,13,sand))
+        panel.addView(label("SOURCE / "+o.source,10,sage))
+        val dialog=android.app.AlertDialog.Builder(this).setView(panel).setNegativeButton("CLOSE",null).create()
+        panel.addView(action("⌖ SET ACTIVE").apply {setOnClickListener {
+            objectiveStore.active=o.id;map.controller.animateTo(GeoPoint(o.latitude,o.longitude));refresh();dialog.dismiss()
+        }})
+        panel.addView(action("✓ COMPLETE / SAVE FIELD MARKER").apply {setOnClickListener {
+            objectiveStore.complete(o.id)
+            if(notes.none {it.title==o.name}) {
+                notes.add(FieldNote(o.latitude,o.longitude,o.name,"CHECKPOINT",o.brief,System.currentTimeMillis(),"⚑"))
+                fieldNotes.save(notes)
+            }
+            refresh();dialog.dismiss()
+        }})
+        panel.addView(action("HIDE OBJECTIVE").apply {setOnClickListener {objectiveStore.hide(o.id);refresh();dialog.dismiss()}})
+        panel.addView(action("OPEN SOURCE").apply {setOnClickListener {startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(o.source)))}})
+        dialog.show()
+    }
     private fun showExisting(note:FieldNote) {
         val current=notes.find { it.time==note.time } ?: return
         val panel=LinearLayout(this).apply {
@@ -820,6 +872,8 @@ class MainActivity : Activity(), SensorEventListener {
         option("CHECKPOINTS ${if(fogOverlay.showCheckpoints) "ON" else "OFF"}") {
             fogOverlay.showCheckpoints=!fogOverlay.showCheckpoints;refresh()
         }
+        option("OBJECTIVES ON/OFF") {objectiveStore.enabled=!objectiveStore.enabled;refresh()}
+        option("BROWSE OBJECTIVES") {showObjectives()}
         option("RULER ${if(measure) "ON" else "OFF"}") {
             measure=!measure;measurePoints.clear();status.text=if(measure) "RULER / SELECT FIRST POINT" else "RULER OFF";refresh()
         }
