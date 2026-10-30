@@ -426,14 +426,34 @@ class MainActivity : Activity(), SensorEventListener {
         map.overlays.add(object:Overlay() {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
                 if(shadow)return
-                val ink=Paint(Paint.ANTI_ALIAS_FLAG)
-                (ReconObjectives.all+objectiveStore.customPlaces()).filterNot {objectiveStore.isHidden(it.id)}.forEach {o->
+                val painter=ObjectiveMarkerArt(this@MainActivity)
+                val user=fogOverlay.currentPosition
+                val width=canvas.width.toFloat()
+                val height=canvas.height.toFloat()
+                val all=(ReconObjectives.all+objectiveStore.customPlaces()).filterNot {objectiveStore.isHidden(it.id)}
+                val occupied=mutableListOf<Pair<Float,Float>>()
+                all.forEach {o->
                     val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
-                    ink.color=Color.argb(215,27,43,34)
-                    canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),dp(13).toFloat(),ink)
-                    ink.color=if(objectiveStore.completed(o.id))Color.GREEN else if(objectiveStore.active==o.id)Color.YELLOW else Color.CYAN
-                    ink.textSize=dp(18).toFloat();ink.textAlign=Paint.Align.CENTER
-                    canvas.drawText(if(objectiveStore.completed(o.id))"✓" else if(objectiveStore.active==o.id)"⚑" else "◆",p.x.toFloat(),p.y.toFloat()+dp(5).toFloat(),ink)
+                    val x=p.x.toFloat();val y=p.y.toFloat()
+                    val selected=objectiveStore.active==o.id || pendingObjective?.id==o.id
+                    if(x<0f||y<0f||x>width||y>height) {
+                        if(selected) {
+                            val cx=width/2f;val cy=height/2f
+                            val dx=x-cx;val dy=y-cy
+                            val factor=minOf((width/2f-dp(25))/maxOf(kotlin.math.abs(dx),1f),(height/2f-dp(35))/maxOf(kotlin.math.abs(dy),1f))
+                            painter.edge(canvas,cx+dx*factor,cy+dy*factor,kotlin.math.atan2(dy.toDouble(),dx.toDouble()),true)
+                        }
+                    } else {
+                        val distance=user?.let {
+                            val m=FloatArray(1)
+                            android.location.Location.distanceBetween(it.latitude,it.longitude,o.latitude,o.longitude,m)
+                            if(m[0]<1000f)"${m[0].toInt()} m" else "%.1f km".format(java.util.Locale.US,m[0]/1000f)
+                        }
+                        val overlap=occupied.any{kotlin.math.hypot((it.first-x).toDouble(),(it.second-y).toDouble())<dp(43)}
+                        val showDistance=selected || (distance!=null && !overlap && mapView.zoomLevelDouble>=15.5)
+                        painter.draw(canvas,x,y,o.category,selected,objectiveStore.completed(o.id),false,if(showDistance)distance else null)
+                        if(showDistance)occupied.add(x to y)
+                    }
                 }
             }
             override fun onSingleTapConfirmed(event:MotionEvent,mapView:MapView):Boolean {
