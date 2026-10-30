@@ -28,8 +28,8 @@ android {
         applicationId = "com.terraunlocked"
         minSdk = 26
         targetSdk = 35
-        versionCode = 38
-        versionName = "0.4.9"
+        versionCode = 39
+        versionName = "0.4.10"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
