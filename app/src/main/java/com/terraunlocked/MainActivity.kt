@@ -106,6 +106,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var cameraUri:Uri?=null
     private var previewLocation:GeoPoint?=null
     private var previewLabel=""
+    private var pendingObjective:ReconObjective?=null
     private var previewBar:LinearLayout?=null
     private var navigationTarget:Long?=null
     private lateinit var objectiveStore:ObjectiveStore
@@ -378,7 +379,7 @@ class MainActivity : Activity(), SensorEventListener {
         })
         map.overlays.add(object:Overlay() {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
-                if(shadow || !objectiveStore.enabled)return
+                if(shadow)return
                 val ink=Paint(Paint.ANTI_ALIAS_FLAG)
                 (ReconObjectives.all+objectiveStore.customPlaces()).filterNot {objectiveStore.isHidden(it.id)}.forEach {o->
                     val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
@@ -391,11 +392,11 @@ class MainActivity : Activity(), SensorEventListener {
             }
             override fun onSingleTapConfirmed(event:MotionEvent,mapView:MapView):Boolean {
                 if(!objectiveStore.enabled || mode!="VIEW")return false
-                val hit=ReconObjectives.all.filterNot {objectiveStore.isHidden(it.id)}.firstOrNull {o->
+                val hit=(ReconObjectives.all+objectiveStore.customPlaces()).filterNot {objectiveStore.isHidden(it.id)}.firstOrNull {o->
                     val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
                     kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(22)
                 } ?: return false
-                focusObjective(hit);showObjective(hit);return true
+                focusObjective(hit);return true
             }
         })
         map.overlays.add(object:Overlay() {
@@ -433,9 +434,13 @@ class MainActivity : Activity(), SensorEventListener {
         previewControls.addView(action("✓ CONFIRM OBJECTIVE").apply {setOnClickListener {
             val point=previewLocation
             if(point!=null) {
-                objectiveStore.addPlace(previewLabel,point.latitude,point.longitude,"Saved map target")
-                objectiveStore.enabled=true
-                clearMapPreview();status.text="OBJECTIVE SAVED";refresh()
+                val chosen=pendingObjective
+                if(chosen!=null) {clearMapPreview();showObjective(chosen)}
+                else {
+                    objectiveStore.addPlace(previewLabel,point.latitude,point.longitude,"Saved map target")
+                    objectiveStore.enabled=true
+                    clearMapPreview();status.text="OBJECTIVE SAVED";refresh()
+                }
             }
         }},LinearLayout.LayoutParams(0,dp(48),2f))
         mapArea.addView(previewControls,FrameLayout.LayoutParams(-1,dp(54),Gravity.BOTTOM))
@@ -637,12 +642,16 @@ class MainActivity : Activity(), SensorEventListener {
     private fun focusObjective(o:ReconObjective) {
         followUser=false
         if(::followButton.isInitialized)followButton.text="FOCUS ○"
+        pendingObjective=o
+        previewLocation=GeoPoint(o.latitude,o.longitude)
+        previewLabel=o.name
+        previewBar?.visibility=View.VISIBLE
         map.controller.setZoom(17.5)
         map.controller.animateTo(GeoPoint(o.latitude,o.longitude))
         refresh()
     }
     private fun clearMapPreview() {
-        previewLocation=null;previewLabel=""
+        previewLocation=null;previewLabel="";pendingObjective=null
         previewBar?.visibility=View.GONE
         refresh()
     }
@@ -795,7 +804,7 @@ class MainActivity : Activity(), SensorEventListener {
                     list.addView(action(state+"  "+o.name+" / "+o.category).apply {
                         gravity=Gravity.CENTER_VERTICAL or Gravity.START
                         setPadding(dp(8),0,dp(5),0)
-                        setOnClickListener { objectivesPopup?.dismiss();focusObjective(o);showObjective(o) }
+                        setOnClickListener { objectivesPopup?.dismiss();focusObjective(o) }
                     },LinearLayout.LayoutParams(-1,dp(46)))
                 }
         }
