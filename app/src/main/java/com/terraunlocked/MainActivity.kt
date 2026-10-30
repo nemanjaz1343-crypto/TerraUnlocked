@@ -103,18 +103,24 @@ class MainActivity : Activity(), SensorEventListener {
             result.locations.forEach { loc ->
                 if (!loc.hasAccuracy() || !loc.latitude.isFinite() || !loc.longitude.isFinite()) return@forEach
                 val prev = lastGpsSample
-                val elapsed = if(prev!=null) (loc.elapsedRealtimeNanos-prev.elapsedRealtimeNanos)/1e9 else 0.0
-                val distance = if(prev!=null) prev.distanceTo(loc) else 0f
-                val plausible = prev==null || elapsed<=0.0 ||
-                    distance <= maxOf(18f, 3f*maxOf(prev.accuracy,loc.accuracy)) ||
-                    distance/elapsed <= 12.0
-                val accurate = loc.accuracy<=25f
-                if (!plausible || !accurate) {
+                val elapsed = if (prev != null) (loc.elapsedRealtimeNanos-prev.elapsedRealtimeNanos)/1e9 else 0.0
+                val distance = if (prev != null) prev.distanceTo(loc) else 0f
+                val reliable = loc.accuracy <= 50f
+                val jump = prev != null && elapsed > 0.5 &&
+                    distance > maxOf(45f, 2f*maxOf(prev.accuracy,loc.accuracy)) &&
+                    distance / elapsed > 15.0
+                if (!reliable || jump) {
                     filteredFixes++
-                    status.text="GPS SEARCHING / ±${loc.accuracy.toInt()}m / NO REVEAL"
-                    // A GPS jump never becomes the new reference. Keep the last
-                    // trusted position and avoid making a bridge across a gap.
-                    if(filteredFixes>=6) { lastGpsSample=null;last=null;stableFixCount=0;filteredFixes=0 }
+                    status.text = if (!reliable) "GPS WEAK / ±${loc.accuracy.toInt()}m / WAITING"
+                                  else "GPS JUMP / WAITING FOR STABLE FIX"
+                    // Never reveal weak fixes. After repeated rejections, start
+                    // a fresh segment instead of connecting unrelated locations.
+                    if (filteredFixes >= 5) {
+                        lastGpsSample=null
+                        lastSavedLocation=null
+                        stableFixCount=0
+                        filteredFixes=0
+                    }
                     return@forEach
                 }
                 filteredFixes=0
@@ -123,20 +129,30 @@ class MainActivity : Activity(), SensorEventListener {
                 val position=GeoPoint(loc.latitude,loc.longitude)
                 fogOverlay.currentPosition=position
                 fogOverlay.positionAccuracy=loc.accuracy
-                if(followUser && stableFixCount>=2) map.controller.animateTo(position)
+                if(followUser) map.controller.animateTo(position)
                 refresh()
                 val saved=lastSavedLocation
-                // Stationary GPS noise must not paint an area. Require clear
-                // displacement beyond combined positioning uncertainty.
-                val moved=saved==null || saved.distanceTo(loc) >=
-                    maxOf(15f,loc.accuracy*1.8f,saved.accuracy*1.8f)
-                if(stableFixCount>=2 && moved) {
-                    val point=DiscoveryPoint(loc.latitude,loc.longitude,false,System.currentTimeMillis())
-                    records.add(point);store.add(point);last=point
+                val secondsSinceSaved=if(saved!=null) (loc.elapsedRealtimeNanos-saved.elapsedRealtimeNanos)/1e9 else 0.0
+                val displacement=if(saved!=null) saved.distanceTo(loc) else 0f
+                val minimumMovement=if(saved!=null) maxOf(10f, 1.1f*maxOf(saved.accuracy,loc.accuracy)) else 0f
+                // First reliable fix always reveals the user's current area.
+                // Later samples need real displacement, and breaks never form bridges.
+                val shouldReveal=saved==null || (displacement>=minimumMovement && secondsSinceSaved>0.0)
+                if(shouldReveal) {
+                    val time=System.currentTimeMillis()
+                    val isolated=saved==null || secondsSinceSaved>90.0 ||
+                        displacement>maxOf(120f,secondsSinceSaved.toFloat()*12f)
+                    val point=DiscoveryPoint(loc.latitude,loc.longitude,false,
+                        if(isolated && records.lastOrNull()?.manual==false)
+                            maxOf(time,records.last().timestamp+90001L) else time)
+                    records.add(point)
+                    store.add(point)
+                    last=point
                     lastSavedLocation=loc
+                    refresh()
                 }
-                status.text=if(stableFixCount<2) "GPS STABILIZING" else
-                    "GPS STABLE / ±${loc.accuracy.toInt()}m / "+if(moved) "RECON" else "STATIONARY"
+                status.text="GPS ACTIVE / ±${loc.accuracy.toInt()}m / "+if(shouldReveal) "REVEALED" else "STATIONARY"
+            }
             }
         }
     }
