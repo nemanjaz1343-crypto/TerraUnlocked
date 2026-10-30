@@ -1345,12 +1345,40 @@ class MainActivity : Activity(), SensorEventListener {
             else status.text=name+" / NOT SET"
         }
     }
+    private fun checkForUpdates() {
+        status.text="UPDATES / CHECKING GITHUB RELEASES..."
+        Thread {
+            val result=runCatching {
+                val conn=(java.net.URL("https://api.github.com/repos/nemanjaz1343-crypto/TerraUnlocked/releases/latest").openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout=10000;readTimeout=10000
+                    setRequestProperty("Accept","application/vnd.github+json")
+                    setRequestProperty("User-Agent","TerraUnlocked-Android")
+                }
+                try {
+                    if(conn.responseCode!=200)throw java.io.IOException("No published release")
+                    org.json.JSONObject(conn.inputStream.bufferedReader().use{it.readText()})
+                } finally {conn.disconnect()}
+            }
+            runOnUiThread {
+                val latest=result.getOrNull()
+                if(latest==null) {status.text="UPDATES / NO RELEASE AVAILABLE";return@runOnUiThread}
+                val version=latest.optString("tag_name","Unknown")
+                val download=latest.optString("html_url","")
+                android.app.AlertDialog.Builder(this).setTitle("TERRA / UPDATES")
+                    .setMessage("Installed: "+BuildConfig.VERSION_NAME+"\\nLatest published release: "+version+"\\nCheck release notes before installing.")
+                    .setPositiveButton("OPEN RELEASE") {_,_->
+                        if(download.startsWith("https://github.com/"))startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(download)))
+                    }.setNegativeButton("CLOSE",null).show()
+            }
+        }.start()
+    }
     private fun showDataMenu() {
         val panel=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL;setPadding(dp(12),dp(12),dp(12),dp(12));background=tacticalPanel()
         }
         panel.addView(label("▣ DATA / SOURCES & BACKUP",14,sand))
         fun option(name:String,fn:()->Unit) {panel.addView(action(name).apply {setOnClickListener {fn()}})}
+        option("CHECK FOR UPDATES") {checkForUpdates()}
         option("EXPORT BACKUP ZIP") {
             startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
