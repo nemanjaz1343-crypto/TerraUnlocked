@@ -1454,15 +1454,19 @@ class MainActivity : Activity(), SensorEventListener {
                     return@runOnUiThread
                 }
                 status.text="UPDATES / READY TO INSTALL"
-                val uri=androidx.core.content.FileProvider.getUriForFile(this,"$"+"{packageName}.fileprovider",file)
-                val install=Intent(Intent.ACTION_VIEW).apply{
-                    setDataAndType(uri,"application/vnd.android.package-archive")
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                try {startActivity(install)}
-                catch(e:Exception) {
-                    android.app.AlertDialog.Builder(this).setTitle("TERRA / INSTALL")
-                        .setMessage("Could not open Android installer: "+e.message)
+                try {
+                    val uri=androidx.core.content.FileProvider.getUriForFile(
+                        this, packageName + ".fileprovider", file
+                    )
+                    val install=Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(uri,"application/vnd.android.package-archive")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    startActivity(install)
+                } catch(e:Exception) {
+                    status.text="UPDATES / INSTALL ERROR"
+                    android.app.AlertDialog.Builder(this).setTitle("TERRA / INSTALL ERROR")
+                        .setMessage("Android installer could not start: "+(e.message ?: "Unknown error"))
                         .setPositiveButton("OK",null).show()
                 }
             }
