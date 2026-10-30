@@ -1158,6 +1158,46 @@ class MainActivity : Activity(), SensorEventListener {
         timeMachinePopup=window
         window.showAtLocation(map,Gravity.TOP or Gravity.CENTER_HORIZONTAL,0,dp(110))
     }
+    private fun refreshMetro() {
+        if(stationLoading)return
+        stationLoading=true;status.text="TRANSIT / LOADING STATIONS"
+        Thread {
+            val stations=runCatching {TransitStations(this).refresh()}.getOrDefault(emptyList())
+            runOnUiThread {
+                stationLoading=false
+                if(stations.isNotEmpty()) {metroStations.clear();metroStations.addAll(stations);refresh()}
+                status.text=if(metroStations.isEmpty())"TRANSIT DATA UNAVAILABLE" else "TRANSIT / "+metroStations.size+" STATIONS"
+            }
+        }.start()
+    }
+    private fun showTransitStation(station:TransitStation) {
+        val panel=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(15),dp(12),dp(15),dp(12));background=tacticalPanel()}
+        panel.addView(label("Ⓜ TRANSIT / METRO",13,sand))
+        panel.addView(label(station.name,16,sand))
+        fogOverlay.currentPosition?.let {origin->
+            val d=FloatArray(1)
+            android.location.Location.distanceBetween(origin.latitude,origin.longitude,station.lat,station.lon,d)
+            panel.addView(label(if(d[0]>=1000)"%.1f km".format(d[0]/1000f) else "%.0f m".format(d[0]),12,sage))
+        }
+        panel.addView(label("NEXT 3 ARRIVALS / NOT AVAILABLE WITHOUT RTA LIVE FEED",11,sage))
+        panel.addView(action("CHECK RTA S’HAIL").apply {setOnClickListener {
+            startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("https://www.rta.ae/wps/portal/rta/ae/home/smart-apps/app-details/shail/shail-app?lang=en")))
+        }})
+        android.app.AlertDialog.Builder(this).setView(panel).setNegativeButton("CLOSE",null).show()
+    }
+    private fun anchor(name:String,save:Boolean) {
+        val prefs=getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE)
+        if(save) {
+            val point=map.mapCenter
+            prefs.edit().putString(name+"_lat",point.latitude.toString()).putString(name+"_lon",point.longitude.toString()).apply()
+            status.text=name+" / SAVED AT MAP CENTER"
+        } else {
+            val lat=prefs.getString(name+"_lat",null)?.toDoubleOrNull()
+            val lon=prefs.getString(name+"_lon",null)?.toDoubleOrNull()
+            if(lat!=null&&lon!=null) {followUser=false;map.controller.animateTo(GeoPoint(lat,lon));status.text=name+" / TARGET"}
+            else status.text=name+" / NOT SET"
+        }
+    }
     private fun showLayers(anchor: View) {
         if (layersPopup?.isShowing == true) { layersPopup?.dismiss(); return }
         val panel = LinearLayout(this).apply {
@@ -1171,6 +1211,12 @@ class MainActivity : Activity(), SensorEventListener {
         }
         option("EXPLORATION STATISTICS") {showExplorationStats()}
         option("TIME MACHINE") {showTimeMachine()}
+        option("TRANSIT / TOGGLE") {transitVisible=!transitVisible;refresh();if(transitVisible&&metroStations.isEmpty())refreshMetro()}
+        option("TRANSIT / LOAD STATIONS") {refreshMetro()}
+        option("HOME / GO") {anchor("HOME",false)}
+        option("HOME / SAVE MAP CENTER") {anchor("HOME",true)}
+        option("OFFICE / GO") {anchor("OFFICE",false)}
+        option("OFFICE / SAVE MAP CENTER") {anchor("OFFICE",true)}
         option("FOG ${if (fogEnabled) "ON" else "OFF"}") {
             fogEnabled = !fogEnabled; fogOverlay.fogVisible = fogEnabled; refresh()
         }
