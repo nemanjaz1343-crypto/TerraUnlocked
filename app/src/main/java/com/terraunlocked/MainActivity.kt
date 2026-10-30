@@ -377,7 +377,7 @@ class MainActivity : Activity(), SensorEventListener {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
                 if(shadow || !objectiveStore.enabled)return
                 val ink=Paint(Paint.ANTI_ALIAS_FLAG)
-                ReconObjectives.all.filterNot {objectiveStore.isHidden(it.id)}.forEach {o->
+                (ReconObjectives.all+objectiveStore.customPlaces()).filterNot {objectiveStore.isHidden(it.id)}.forEach {o->
                     val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
                     ink.color=Color.argb(215,27,43,34)
                     canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),dp(13).toFloat(),ink)
@@ -613,6 +613,35 @@ class MainActivity : Activity(), SensorEventListener {
         map.controller.animateTo(GeoPoint(o.latitude,o.longitude))
         refresh()
     }
+    private fun findPlaceOnline() {
+        val query=EditText(this).apply {hint="Restaurant or place name, Dubai";setSingleLine(true)}
+        android.app.AlertDialog.Builder(this).setTitle("SEARCH / SAVE PLACE").setView(query)
+            .setNegativeButton("CANCEL",null).setPositiveButton("SEARCH") {_,_->
+                val term=query.text.toString().trim()
+                if(term.length<3)return@setPositiveButton
+                status.text="SEARCHING PLACES..."
+                Thread {
+                    try {
+                        val geocoder=android.location.Geocoder(this,java.util.Locale.ENGLISH)
+                        @Suppress("DEPRECATION")
+                        val results=geocoder.getFromLocationName(term+", Dubai, UAE",8) ?: emptyList()
+                        runOnUiThread {
+                            if(results.isEmpty()) {status.text="NO PLACES FOUND";return@runOnUiThread}
+                            val names=results.map{it.getAddressLine(0) ?: term}.toTypedArray()
+                            android.app.AlertDialog.Builder(this).setTitle("SELECT PLACE")
+                                .setItems(names) {_,i->
+                                    val place=results[i]
+                                    val entry=objectiveStore.addPlace(term,place.latitude,place.longitude,names[i])
+                                    objectiveStore.enabled=true
+                                    focusObjective(entry)
+                                    showObjective(entry)
+                                    status.text="PLACE SAVED / WANT TO VISIT"
+                                }.setNegativeButton("CANCEL",null).show()
+                        }
+                    } catch(e:Exception) {runOnUiThread {status.text="PLACE SEARCH UNAVAILABLE"}}
+                }.start()
+            }.show()
+    }
     private fun showObjectives() {
         objectivesPopup?.dismiss()
         val panel=LinearLayout(this).apply {
@@ -629,6 +658,7 @@ class MainActivity : Activity(), SensorEventListener {
             setTextColor(sand);setHintTextColor(sage);textSize=13f
         }
         panel.addView(search)
+        panel.addView(action("⌕ FIND RESTAURANT / PLACE ONLINE").apply {setOnClickListener {objectivesPopup?.dismiss();findPlaceOnline()}})
         val list=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
         val scroll=android.widget.ScrollView(this).apply {addView(list)}
         panel.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
@@ -678,7 +708,7 @@ class MainActivity : Activity(), SensorEventListener {
             refresh();dialog.dismiss()
         }})
         panel.addView(action("HIDE OBJECTIVE").apply {setOnClickListener {objectiveStore.hide(o.id);refresh();dialog.dismiss()}})
-        panel.addView(action("OPEN SOURCE").apply {setOnClickListener {startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(o.source)))}})
+        if(o.source.startsWith("http"))panel.addView(action("OPEN SOURCE").apply {setOnClickListener {startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(o.source)))}})
         dialog.show()
     }
     private fun showExisting(note:FieldNote) {
