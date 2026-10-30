@@ -1345,8 +1345,8 @@ class MainActivity : Activity(), SensorEventListener {
             else status.text=name+" / NOT SET"
         }
     }
-    private fun checkForUpdates() {
-        status.text="UPDATES / CHECKING..."
+    private fun checkForUpdates(silent:Boolean=false) {
+        if(!silent)status.text="UPDATES / CHECKING..."
         Thread {
             val result=runCatching {
                 val conn=(java.net.URL("https://api.github.com/repos/nemanjaz1343-crypto/TerraUnlocked/releases/latest").openConnection() as java.net.HttpURLConnection).apply {
@@ -1362,6 +1362,7 @@ class MainActivity : Activity(), SensorEventListener {
             runOnUiThread {
                 val latest=result.getOrNull()
                 if(latest==null) {
+                    if(silent)return@runOnUiThread
                     status.text="UPDATES / CHECK FAILED"
                     android.app.AlertDialog.Builder(this).setTitle("TERRA / UPDATES")
                         .setMessage("Could not check published releases. Check your connection and try again.")
@@ -1382,6 +1383,7 @@ class MainActivity : Activity(), SensorEventListener {
                     if(asset.optString("name").endsWith(".apk")){apkUrl=asset.optString("browser_download_url");break}
                 }
                 if(cmp<=0) {
+                    if(silent)return@runOnUiThread
                     status.text="UPDATES / UP TO DATE"
                     android.app.AlertDialog.Builder(this).setTitle("TERRA / UP TO DATE")
                         .setMessage("Installed: "+packageManager.getPackageInfo(packageName,0).versionName+"\nLatest: "+tag)
@@ -1393,6 +1395,7 @@ class MainActivity : Activity(), SensorEventListener {
                         .setPositiveButton("UPDATE") {_,_->downloadUpdateApk(apkUrl)}
                         .setNegativeButton("LATER",null).show()
                 } else {
+                    if(silent)return@runOnUiThread
                     status.text="UPDATES / APK NOT FOUND"
                     android.app.AlertDialog.Builder(this).setTitle("TERRA / UPDATES")
                         .setMessage("Release "+tag+" has no downloadable APK yet.")
@@ -1707,6 +1710,12 @@ class MainActivity : Activity(), SensorEventListener {
         receiverRegistered=true
         sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)?.let {
             sensors.registerListener(this,it,SensorManager.SENSOR_DELAY_UI)
+        }
+        val updatePrefs=getSharedPreferences("terra_updates",Context.MODE_PRIVATE)
+        val now=System.currentTimeMillis()
+        if(now-updatePrefs.getLong("last_check",0L)>24L*60L*60L*1000L) {
+            updatePrefs.edit().putLong("last_check",now).apply()
+            handler.postDelayed({if(!isFinishing)checkForUpdates(silent=true)},4000L)
         }
     }
     override fun onPause() {
