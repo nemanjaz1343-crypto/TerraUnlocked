@@ -20,6 +20,8 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.content.Context
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
 import android.content.Intent
 import android.net.Uri
 import java.io.File
@@ -74,6 +76,24 @@ class MainActivity : Activity(), SensorEventListener {
     private val demo = mutableListOf<DiscoveryPoint>()
     private var mode = "VIEW"
     private var tracking = false
+    private var receiverRegistered=false
+    private val trackingReceiver=object:BroadcastReceiver() {
+        override fun onReceive(context:Context,intent:Intent) {
+            if(intent.action!=TrackingService.ACTION_FIX)return
+            val lat=intent.getDoubleExtra("lat",Double.NaN)
+            val lon=intent.getDoubleExtra("lon",Double.NaN)
+            if(!lat.isFinite() || !lon.isFinite())return
+            val point=GeoPoint(lat,lon)
+            fogOverlay.currentPosition=point
+            fogOverlay.positionAccuracy=intent.getFloatExtra("accuracy",0f)
+            if(followUser)map.controller.animateTo(point)
+            if(intent.getBooleanExtra("revealed",false)) {
+                records.clear();records.addAll(store.load())
+            }
+            status.text="GPS ACTIVE / ±"+fogOverlay.positionAccuracy.toInt()+"m"
+            refresh()
+        }
+    }
     private var followUser = true
     private lateinit var followButton:Button
     private var paintPopup:PopupWindow?=null
@@ -712,23 +732,17 @@ class MainActivity : Activity(), SensorEventListener {
     }
     override fun onAccuracyChanged(sensor:Sensor?,accuracy:Int) {}
     private fun startTracking() {
-        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
-        last = null
-        lastGpsSample=null
-        lastSavedLocation=null
-        stableFixCount=0
-        tracking = true
-        trackButton.text = "STOP GPS"
-        val req = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000L)
-            .setMinUpdateDistanceMeters(8f).build()
-        client.requestLocationUpdates(req, callback, mainLooper)
-        status.text = "GPS ACQUIRING..."
+        if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED)return
+        startForegroundService(Intent(this,TrackingService::class.java).apply {action=TrackingService.ACTION_START})
+        tracking=true
+        trackButton.text="STOP GPS"
+        status.text="RECON ACTIVE / BACKGROUND ENABLED"
     }
     private fun stopTracking() {
-        tracking = false
-        client.removeLocationUpdates(callback)
-        trackButton.text = "TRACK"
-        status.text = "GPS OFFLINE  |  DATA SAVED"
+        startService(Intent(this,TrackingService::class.java).apply {action=TrackingService.ACTION_STOP})
+        tracking=false
+        trackButton.text="TRACK"
+        status.text="TRACK STOPPED"
     }
     private fun stopSimulation() {
         simulating = false
@@ -762,17 +776,23 @@ class MainActivity : Activity(), SensorEventListener {
     }
     override fun onResume() {
         super.onResume(); map.onResume()
+        tracking=TrackingService.running
+        if(::trackButton.isInitialized)trackButton.text=if(tracking)"STOP GPS" else "TRACK"
+        if(::store.isInitialized) {records.clear();records.addAll(store.load());refresh()}
+        val filter=IntentFilter(TrackingService.ACTION_FIX)
+        if(android.os.Build.VERSION.SDK_INT>=33) registerReceiver(trackingReceiver,filter,Context.RECEIVER_NOT_EXPORTED)
+        else registerReceiver(trackingReceiver,filter)
+        receiverRegistered=true
         sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)?.let {
             sensors.registerListener(this,it,SensorManager.SENSOR_DELAY_UI)
         }
     }
     override fun onPause() {
         super.onPause(); sensors.unregisterListener(this); map.onPause()
-        if (tracking) stopTracking()
+        if(receiverRegistered) {unregisterReceiver(trackingReceiver);receiverRegistered=false}
     }
     override fun onDestroy() {
         super.onDestroy()
-        if (tracking) stopTracking()
         handler.removeCallbacks(simulationStep)
         layersPopup?.dismiss()
         poiPopup?.dismiss()
