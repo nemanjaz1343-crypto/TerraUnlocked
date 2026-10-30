@@ -465,26 +465,50 @@ class MainActivity : Activity(), SensorEventListener {
     private fun showNoteEditor(where:GeoPoint,kind:String="POI") {
         val layout=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
-            setPadding(dp(15),dp(12),dp(15),dp(12))
+            setPadding(dp(17),dp(16),dp(17),dp(15))
+            background=GradientDrawable().apply {
+                cornerRadius=dp(19).toFloat()
+                setColor(Color.argb(242,31,44,36))
+                setStroke(dp(1),Color.rgb(119,139,106))
+            }
         }
-        val title=EditText(this).apply {hint="Title / callsign";setTextColor(sand);setHintTextColor(sage)}
-        val detail=EditText(this).apply {hint="Field notes";minLines=3;setTextColor(sand);setHintTextColor(sage)}
-        val kinds=listOf("POI","CHECKPOINT","MEMORY","CAMP")
-        val selector=Spinner(this).apply {
-            adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,kinds)
-            setSelection(kinds.indexOf(kind).coerceAtLeast(0))
+        layout.addView(label("FIELD ENTRY  /  "+kind,13,sand).apply {
+            setTypeface(null,Typeface.BOLD)
+        })
+        val preview=label("◆  SELECT MARKER",14,sage)
+        layout.addView(preview)
+        val iconBar=LinearLayout(this).apply {gravity=Gravity.CENTER;orientation=LinearLayout.HORIZONTAL}
+        val icons=listOf("◆","⚑","★","✎","▲","●","⌖","▣")
+        var selected=when(kind) {"CHECKPOINT"->"⚑";"MEMORY"->"✎";"CAMP"->"▲";else->"◆"}
+        fun updatePreview() { preview.text=selected+"  MARKER SELECTED" }
+        icons.forEach { glyph ->
+            iconBar.addView(action(glyph).apply {
+                textSize=16f
+                setOnClickListener {selected=glyph;updatePreview()}
+            },LinearLayout.LayoutParams(0,dp(42),1f))
         }
-        layout.setBackgroundColor(Color.rgb(39,51,41))
-        layout.addView(selector);layout.addView(title);layout.addView(detail)
-        android.app.AlertDialog.Builder(this)
+        layout.addView(iconBar)
+        updatePreview()
+        val title=EditText(this).apply {
+            hint="Name / callsign";setTextColor(sand);setHintTextColor(sage)
+            textSize=15f;setSingleLine(true)
+        }
+        val detail=EditText(this).apply {
+            hint="Add a note (optional)";minLines=2;maxLines=4
+            setTextColor(sand);setHintTextColor(sage);textSize=14f
+        }
+        layout.addView(title);layout.addView(detail)
+        val dialog=android.app.AlertDialog.Builder(this)
             .setView(layout).setNegativeButton("CANCEL",null)
             .setPositiveButton("SAVE") { _,_ ->
-                notes.add(FieldNote(where.latitude,where.longitude,title.text.toString().ifBlank{"Untitled"},
-                    selector.selectedItem.toString(),detail.text.toString(),System.currentTimeMillis()))
+                notes.add(FieldNote(where.latitude,where.longitude,
+                    title.text.toString().ifBlank{"Untitled"},kind,
+                    detail.text.toString(),System.currentTimeMillis(),selected))
                 fieldNotes.save(notes)
-                status.text="FIELD NOTE SAVED"
+                status.text="MARKER SAVED"
                 refresh()
             }.show()
+        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
     }
 
     private fun showExisting(note:FieldNote) {
