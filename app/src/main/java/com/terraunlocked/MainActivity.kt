@@ -49,6 +49,7 @@ import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Overlay
 
 class MainActivity : Activity(), SensorEventListener {
+    private val markerArt by lazy { ObjectiveMarkerArt(this) }
     private val olive = Color.rgb(31, 40, 32)
     private val sand = Color.rgb(218, 201, 156)
     private val sage = Color.rgb(155, 181, 134)
@@ -426,7 +427,7 @@ class MainActivity : Activity(), SensorEventListener {
         map.overlays.add(object:Overlay() {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
                 if(shadow)return
-                val painter=ObjectiveMarkerArt(this@MainActivity)
+                val painter=markerArt
                 val user=fogOverlay.currentPosition
                 val width=canvas.width.toFloat()
                 val height=canvas.height.toFloat()
@@ -490,7 +491,7 @@ class MainActivity : Activity(), SensorEventListener {
         map.overlays.add(object:Overlay() {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
                 if(shadow)return
-                val painter=ObjectiveMarkerArt(this@MainActivity)
+                val painter=markerArt
                 metroStations.forEach {station->
                     val p=mapView.projection.toPixels(GeoPoint(station.lat,station.lon),Point())
                     if(p.x>=0 && p.y>=0 && p.x<canvas.width && p.y<canvas.height)
@@ -510,7 +511,7 @@ class MainActivity : Activity(), SensorEventListener {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
                 if(shadow)return
                 val prefs=getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE)
-                val painter=ObjectiveMarkerArt(this@MainActivity)
+                val painter=markerArt
                 listOf("HOME","OFFICE").forEach {name->
                     val lat=prefs.getString(name+"_lat",null)?.toDoubleOrNull()
                     val lon=prefs.getString(name+"_lon",null)?.toDoubleOrNull()
