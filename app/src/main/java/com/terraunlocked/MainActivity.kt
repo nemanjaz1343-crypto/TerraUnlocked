@@ -55,6 +55,8 @@ class MainActivity : Activity(), SensorEventListener {
     private val sage = Color.rgb(155, 181, 134)
     private lateinit var map: MapView
     private lateinit var compassView: TextView
+    private lateinit var weatherView: TextView
+    private var weatherLastFetch=0L
     private lateinit var sensors: SensorManager
     private var compassEnabled = false
     private val rotation = FloatArray(9)
@@ -245,6 +247,8 @@ class MainActivity : Activity(), SensorEventListener {
         val compass = label(if (compassEnabled) "◇ N --°" else "◇ N/A", 12, sand)
         compassView = compass
         header.addView(compass)
+        weatherView=label("DXB --°",10,sage)
+        header.addView(weatherView)
         header.addView(action("◉").apply {setOnClickListener {chooseMapSource()}},LinearLayout.LayoutParams(dp(36),dp(34)))
         header.addView(action("↻").apply {contentDescription="Check for updates";setOnClickListener {checkForUpdates()}},LinearLayout.LayoutParams(dp(36),dp(34)))
         val gps = label("  ● RECON", 10, sage)
@@ -636,6 +640,7 @@ class MainActivity : Activity(), SensorEventListener {
         viewButton.setOnClickListener { showLayers(viewButton) }
         compass.setOnClickListener { map.mapOrientation = 0f }
         map.setUseDataConnection(true)
+        loadDubaiTemperature()
         applyMapSource(getSharedPreferences("terra_map_source",Context.MODE_PRIVATE).getInt("selected",0))
     }
 
@@ -1311,6 +1316,24 @@ class MainActivity : Activity(), SensorEventListener {
                     "https://b.tile-cyclosm.openstreetmap.fr/cyclosm/",
                     "https://c.tile-cyclosm.openstreetmap.fr/cyclosm/"),
             "© OpenStreetMap contributors · CyclOSM")
+    }
+    private fun loadDubaiTemperature() {
+        if(System.currentTimeMillis()-weatherLastFetch<30L*60L*1000L)return
+        weatherLastFetch=System.currentTimeMillis()
+        Thread {
+            val temp=runCatching {
+                val conn=(java.net.URL("https://api.open-meteo.com/v1/forecast?latitude=25.2048&longitude=55.2708&current=temperature_2m").openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout=8000;readTimeout=8000
+                }
+                try {
+                    if(conn.responseCode!=200)throw java.io.IOException("Weather service unavailable")
+                    org.json.JSONObject(conn.inputStream.bufferedReader().use{it.readText()}).getJSONObject("current").getDouble("temperature_2m")
+                } finally {conn.disconnect()}
+            }.getOrNull()
+            if(temp!=null)runOnUiThread {
+                if(::weatherView.isInitialized)weatherView.text=" DXB ${temp.toInt()}°C "
+            }
+        }.start()
     }
     private fun chooseMapSource() {
         val names=arrayOf("OpenStreetMap","OpenTopoMap","CyclOSM · BIKE / SCOOTER")
