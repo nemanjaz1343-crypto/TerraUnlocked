@@ -109,6 +109,8 @@ class MainActivity : Activity(), SensorEventListener {
     private var pendingObjective:ReconObjective?=null
     private var previewBar:LinearLayout?=null
     private var navigationTarget:Long?=null
+    private var movingPinTime:Long?=null
+    private var movePinBar:LinearLayout?=null
     private var historyCutoff:Long?=null
     private var timeMachinePopup:PopupWindow?=null
     private lateinit var objectiveStore:ObjectiveStore
@@ -507,6 +509,23 @@ class MainActivity : Activity(), SensorEventListener {
             }
         }},LinearLayout.LayoutParams(0,dp(48),2f))
         mapArea.addView(previewControls,FrameLayout.LayoutParams(-1,dp(54),Gravity.BOTTOM))
+        val movingBar=LinearLayout(this).apply {
+            orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER
+            background=tacticalPanel();visibility=View.GONE
+        }
+        movePinBar=movingBar
+        movingBar.addView(action("CANCEL MOVE").apply {setOnClickListener {movingPinTime=null;movingBar.visibility=View.GONE}},LinearLayout.LayoutParams(0,dp(49),1f))
+        movingBar.addView(action("CONFIRM NEW PIN POSITION").apply {setOnClickListener {
+            val time=movingPinTime
+            val index=notes.indexOfFirst {it.time==time}
+            if(index>=0){
+                val p=map.mapCenter
+                notes[index]=notes[index].copy(latitude=p.latitude,longitude=p.longitude)
+                fieldNotes.save(notes);status.text="PIN MOVED";refresh()
+            }
+            movingPinTime=null;movingBar.visibility=View.GONE
+        }},LinearLayout.LayoutParams(0,dp(49),2f))
+        mapArea.addView(movingBar,FrameLayout.LayoutParams(-1,dp(54),Gravity.BOTTOM))
         confirmButton.setOnClickListener {
             pending.zipWithNext().forEach { (a,b) ->
                 segments.add(ManualSegment(a.latitude,a.longitude,b.latitude,b.longitude))
@@ -1261,19 +1280,10 @@ class MainActivity : Activity(), SensorEventListener {
             }.show()
     }
     private fun moveFieldPin(note:FieldNote) {
-        val marker=notes.find {it.time==note.time} ?: return
-        val picker=android.app.AlertDialog.Builder(this).setTitle("MOVE PIN")
-            .setMessage("Pan the map until the intended position is at the centre, then confirm.")
-            .setPositiveButton("SELECT MAP CENTRE") {_,_->
-                val p=map.mapCenter
-                android.app.AlertDialog.Builder(this).setTitle("CONFIRM NEW POSITION")
-                    .setMessage("%.5f, %.5f".format(p.latitude,p.longitude))
-                    .setPositiveButton("MOVE") {_,_->
-                        val index=notes.indexOfFirst {it.time==marker.time}
-                        if(index>=0) {notes[index]=notes[index].copy(latitude=p.latitude,longitude=p.longitude);fieldNotes.save(notes);refresh()}
-                    }.setNegativeButton("CANCEL",null).show()
-            }.setNegativeButton("CANCEL",null).show()
-        picker.show()
+        movingPinTime=note.time
+        map.controller.animateTo(GeoPoint(note.latitude,note.longitude))
+        movePinBar?.visibility=View.VISIBLE
+        status.text="MOVE PIN / PAN MAP THEN CONFIRM"
     }
     private fun anchor(name:String,save:Boolean) {
         val prefs=getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE)
