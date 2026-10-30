@@ -121,19 +121,38 @@ class DiscoveryFogOverlay(
                 "POI" to Color.rgb(91,204,210), "MEMORY" to Color.rgb(203,150,220),
                 "CAMP" to Color.rgb(147,198,105), "PHOTO" to Color.rgb(237,174,118), "VOICE" to Color.rgb(239,118,126))
             notes().forEach { note ->
-                val p = toPoint(mapView,note.latitude,note.longitude)
-                val color = palette[note.kind] ?: Color.rgb(228,183,85)
-                val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color }
-                val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    this.color = Color.rgb(25,35,29);style=Paint.Style.STROKE;strokeWidth=3f
+                val p=toPoint(mapView,note.latitude,note.longitude)
+                val fill=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color=palette[note.kind] ?: Color.rgb(228,183,85)
                 }
-                canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),11f,fill)
-                canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),11f,outline)
-                val glyph=Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    this.color=Color.rgb(20,30,25);textSize=12f;textAlign=Paint.Align.CENTER
+                val symbol=if(note.icon=="◆" && note.kind!="POI") when(note.kind) {
+                    "CHECKPOINT"->"⚑";"MEMORY"->"✎";"PHOTO"->"▣";"VOICE"->"◉";"CAMP"->"▲";else->"◆"
+                } else note.icon
+                val iconPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color=Color.WHITE; textSize=29f; textAlign=Paint.Align.CENTER
+                    typeface=android.graphics.Typeface.DEFAULT_BOLD
+                    setShadowLayer(3f,0f,1f,Color.BLACK)
                 }
-                val symbol=when(note.kind) {"CHECKPOINT"->"⚑";"POI"->"★";"MEMORY"->"●";"CAMP"->"▲";"PHOTO"->"▣";"VOICE"->"◉";else->"◆"}
-                canvas.drawText(if(note.icon=="◆" && note.kind!="POI") symbol else note.icon,p.x.toFloat(),p.y+4f,glyph)
+                canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),18f,Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color=Color.argb(220,25,36,30)
+                })
+                canvas.drawText(symbol,p.x.toFloat(),p.y+10f,iconPaint)
+                currentPosition?.let { origin ->
+                    val result=FloatArray(1)
+                    android.location.Location.distanceBetween(origin.latitude,origin.longitude,
+                        note.latitude,note.longitude,result)
+                    val distance=if(result[0]<1000) "${result[0].toInt()} m" else "%.1f km".format(result[0]/1000f)
+                    val badge=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color=Color.argb(215,28,41,33)
+                    }
+                    val text=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color=Color.rgb(238,224,180);textSize=24f
+                        textAlign=Paint.Align.CENTER;typeface=android.graphics.Typeface.DEFAULT_BOLD
+                    }
+                    val width=text.measureText(distance)+24f
+                    canvas.drawRoundRect(p.x-width/2f,p.y+23f,p.x+width/2f,p.y+55f,11f,11f,badge)
+                    canvas.drawText(distance,p.x.toFloat(),p.y+46f,text)
+                }
             }
         }
         if (backtrack && records().size > 1) {
