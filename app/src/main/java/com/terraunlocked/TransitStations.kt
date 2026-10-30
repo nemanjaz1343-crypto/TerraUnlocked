@@ -8,13 +8,20 @@ import java.net.URL
 data class TransitStation(val name:String,val lat:Double,val lon:Double)
 class TransitStations(private val context:Context) {
     private val prefs=context.getSharedPreferences("terra_transit_v1",Context.MODE_PRIVATE)
+    private val builtIn=listOf(
+        TransitStation("DMCC",25.07086,55.13873),
+        TransitStation("Sobha Realty",25.07994,55.14754),
+        TransitStation("Dubai Internet City",25.10217,55.17390),
+        TransitStation("InsuranceMarket",25.11475,55.19091),
+        TransitStation("Ibn Battuta",25.04668,55.11749)
+    )
     fun load():List<TransitStation> = runCatching {
         val data=JSONArray(prefs.getString("stations","[]"))
         (0 until data.length()).map {i->
             val p=data.getJSONObject(i)
             TransitStation(p.getString("name"),p.getDouble("lat"),p.getDouble("lon"))
         }
-    }.getOrDefault(emptyList())
+    }.getOrDefault(emptyList()).ifEmpty {builtIn}
     fun refresh():List<TransitStation> {
         // OSM data, not live arrivals. Network request runs off the UI thread.
         val query="[out:json][timeout:30];(node[\"railway\"=\"station\"][\"station\"=\"subway\"](24.8,54.9,25.4,55.6);way[\"railway\"=\"station\"][\"station\"=\"subway\"](24.8,54.9,25.4,55.6););out center;"
