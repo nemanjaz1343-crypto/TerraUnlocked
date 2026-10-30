@@ -220,6 +220,7 @@ class MainActivity : Activity(), SensorEventListener {
         }
         val brand = label("TERRA / UNLOCKED", 12, sand).apply { setTypeface(null, Typeface.BOLD) }
         header.addView(brand, LinearLayout.LayoutParams(0, dp(40), 1f))
+        header.addView(action("⌕ MAP").apply {setOnClickListener {showMapLookup()}},LinearLayout.LayoutParams(dp(75),dp(34)))
         header.addView(action("◎ MISSIONS").apply {setOnClickListener {showObjectives()}},LinearLayout.LayoutParams(dp(97),dp(34)))
         sensors = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         compassEnabled = sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR) != null
@@ -613,33 +614,57 @@ class MainActivity : Activity(), SensorEventListener {
         map.controller.animateTo(GeoPoint(o.latitude,o.longitude))
         refresh()
     }
-    private fun findPlaceOnline() {
-        val query=EditText(this).apply {hint="Restaurant or place name, Dubai";setSingleLine(true)}
-        android.app.AlertDialog.Builder(this).setTitle("SEARCH / SAVE PLACE").setView(query)
-            .setNegativeButton("CANCEL",null).setPositiveButton("SEARCH") {_,_->
-                val term=query.text.toString().trim()
-                if(term.length<3)return@setPositiveButton
-                status.text="SEARCHING PLACES..."
-                Thread {
-                    try {
-                        val geocoder=android.location.Geocoder(this,java.util.Locale.ENGLISH)
-                        @Suppress("DEPRECATION")
-                        val results=geocoder.getFromLocationName(term+", Dubai, UAE",8) ?: emptyList()
-                        runOnUiThread {
-                            if(results.isEmpty()) {status.text="NO PLACES FOUND";return@runOnUiThread}
-                            val names=results.map{it.getAddressLine(0) ?: term}.toTypedArray()
-                            android.app.AlertDialog.Builder(this).setTitle("SELECT PLACE")
-                                .setItems(names) {_,i->
-                                    val place=results[i]
-                                    val entry=objectiveStore.addPlace(term,place.latitude,place.longitude,names[i])
-                                    objectiveStore.enabled=true
-                                    focusObjective(entry)
-                                    showObjective(entry)
-                                    status.text="PLACE SAVED / WANT TO VISIT"
-                                }.setNegativeButton("CANCEL",null).show()
-                        }
-                    } catch(e:Exception) {runOnUiThread {status.text="PLACE SEARCH UNAVAILABLE"}}
-                }.start()
+    private fun showMapLookup() {
+        val box=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(18),dp(10),dp(18),dp(8))}
+        val query=EditText(this).apply {hint="Paste Google Maps link, coordinates or address";setSingleLine(false);minLines=2}
+        box.addView(query)
+        val clip=getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        box.addView(action("▣ PASTE FROM CLIPBOARD").apply {setOnClickListener {
+            val item=clip.primaryClip?.getItemAt(0)
+            query.setText(item?.coerceToText(this@MainActivity)?.toString() ?: "")
+        }})
+        val dialog=android.app.AlertDialog.Builder(this).setTitle("MAP / FIND LOCATION")
+            .setView(box).setNegativeButton("CANCEL",null).setPositiveButton("SHOW ON MAP") {_,_->
+                resolveMapLocation(query.text.toString().trim())
+            }.create()
+        dialog.show()
+    }
+    private fun resolveMapLocation(raw:String) {
+        if(raw.isBlank())return
+        val direct=Regex("(-?\\d{1,2}\\.\\d+)\\s*[, ]\\s*(-?\\d{1,3}\\.\\d+)").find(raw)
+        val pair=direct?.let {
+            val lat=it.groupValues[1].toDoubleOrNull();val lon=it.groupValues[2].toDoubleOrNull()
+            if(lat!=null&&lon!=null&&lat in -90.0..90.0&&lon in -180.0..180.0) Pair(lat,lon) else null
+        }
+        if(pair!=null){showFoundLocation(raw.take(60),pair.first,pair.second);return}
+        val query=raw.substringAfter("query=",raw).substringBefore("&").replace("+"," ")
+        status.text="MAP / LOCATING..."
+        Thread {
+            try {
+                val geo=android.location.Geocoder(this,java.util.Locale.ENGLISH)
+                @Suppress("DEPRECATION")
+                val found=geo.getFromLocationName(query,5) ?: emptyList()
+                runOnUiThread {
+                    if(found.isEmpty())status.text="MAP / NOT FOUND: TRY ADDRESS OR COORDINATES"
+                    else if(found.size==1)showFoundLocation(found[0].getAddressLine(0) ?: query,found[0].latitude,found[0].longitude)
+                    else android.app.AlertDialog.Builder(this).setTitle("CHOOSE LOCATION")
+                        .setItems(found.map{it.getAddressLine(0) ?: query}.toTypedArray()) {_,i->
+                            showFoundLocation(found[i].getAddressLine(0) ?: query,found[i].latitude,found[i].longitude)
+                        }.show()
+                }
+            }catch(e:Exception){runOnUiThread {status.text="MAP SEARCH UNAVAILABLE / TRY COORDINATES"}}
+        }.start()
+    }
+    private fun showFoundLocation(name:String,lat:Double,lon:Double) {
+        followUser=false;followButton.text="FOCUS ○"
+        map.controller.setZoom(18.0);map.controller.animateTo(GeoPoint(lat,lon))
+        status.text="MAP / "+name.take(35)
+        android.app.AlertDialog.Builder(this).setTitle(name)
+            .setMessage("Location found. Save as a place to explore?")
+            .setNegativeButton("JUST SHOW",null)
+            .setPositiveButton("SAVE OBJECTIVE") {_,_->
+                val place=objectiveStore.addPlace(name,lat,lon,"Saved from map lookup")
+                objectiveStore.enabled=true;refresh();showObjective(place)
             }.show()
     }
     private fun showObjectives() {
@@ -658,7 +683,6 @@ class MainActivity : Activity(), SensorEventListener {
             setTextColor(sand);setHintTextColor(sage);textSize=13f
         }
         panel.addView(search)
-        panel.addView(action("⌕ FIND RESTAURANT / PLACE ONLINE").apply {setOnClickListener {objectivesPopup?.dismiss();findPlaceOnline()}})
         val list=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
         val scroll=android.widget.ScrollView(this).apply {addView(list)}
         panel.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
