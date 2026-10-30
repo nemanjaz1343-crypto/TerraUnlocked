@@ -662,6 +662,25 @@ class MainActivity : Activity(), SensorEventListener {
             }
         },LinearLayout.LayoutParams(0,dp(44),1f))
         panel.addView(actions)
+        panel.addView(action("＋ QUICK BRIEF").apply {
+            setOnClickListener {
+                updateNote()
+                val entry=EditText(this@MainActivity).apply {hint="Visit observations";minLines=2}
+                android.app.AlertDialog.Builder(this@MainActivity).setTitle("QUICK BRIEF")
+                    .setView(entry).setNegativeButton("CANCEL",null)
+                    .setPositiveButton("ADD") {_,_->
+                        val idx=notes.indexOfFirst {it.time==current.time}
+                        if(idx>=0 && entry.text.isNotBlank()) {
+                            val old=notes[idx]
+                            val date=java.text.DateFormat.getDateTimeInstance().format(java.util.Date())
+                            notes[idx]=old.copy(body=old.body+"\n["+date+"] "+entry.text.toString(),
+                                visits=old.visits+System.currentTimeMillis())
+                            fieldNotes.save(notes);refresh()
+                        }
+                    }.show()
+                dialog.dismiss()
+            }
+        })
         if(current.kind=="VOICE") panel.addView(action("▶ PLAY AUDIO").apply {
             setOnClickListener {runCatching {
                 MediaPlayer().apply {
