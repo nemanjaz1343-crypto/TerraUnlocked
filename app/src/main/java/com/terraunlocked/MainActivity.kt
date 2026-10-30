@@ -449,6 +449,23 @@ class MainActivity : Activity(), SensorEventListener {
                 showTransitStation(hit);return true
             }
         })
+        map.overlays.add(object:Overlay() {
+            override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
+                if(shadow)return
+                val prefs=getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE)
+                listOf("HOME" to "⌂","OFFICE" to "▣").forEach { item ->
+                    val lat=prefs.getString(item.first+"_lat",null)?.toDoubleOrNull()
+                    val lon=prefs.getString(item.first+"_lon",null)?.toDoubleOrNull()
+                    if(lat!=null&&lon!=null) {
+                        val p=mapView.projection.toPixels(GeoPoint(lat,lon),Point())
+                        val ink=Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.argb(220,31,49,37)}
+                        canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),dp(15).toFloat(),ink)
+                        ink.color=sand;ink.textSize=dp(17).toFloat();ink.textAlign=Paint.Align.CENTER
+                        canvas.drawText(item.second,p.x.toFloat(),p.y.toFloat()+dp(5),ink)
+                    }
+                }
+            }
+        })
         val mapArea=FrameLayout(this)
         mapArea.addView(map,FrameLayout.LayoutParams(-1,-1))
         confirmButton=action("CONFIRM PATH").apply {
