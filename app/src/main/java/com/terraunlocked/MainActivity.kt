@@ -1365,7 +1365,7 @@ class MainActivity : Activity(), SensorEventListener {
                 val version=latest.optString("tag_name","Unknown")
                 val download=latest.optString("html_url","")
                 android.app.AlertDialog.Builder(this).setTitle("TERRA / UPDATES")
-                    .setMessage("Installed: "+BuildConfig.VERSION_NAME+"\\nLatest published release: "+version+"\\nCheck release notes before installing.")
+                    .setMessage("Installed: "+packageManager.getPackageInfo(packageName,0).versionName+"\\nLatest published release: "+version+"\\nCheck release notes before installing.")
                     .setPositiveButton("OPEN RELEASE") {_,_->
                         if(download.startsWith("https://github.com/"))startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(download)))
                     }.setNegativeButton("CLOSE",null).show()
