@@ -257,6 +257,16 @@ class MainActivity : Activity(), SensorEventListener {
         fogOverlay = DiscoveryFogOverlay({ records.filter { historyCutoff==null || it.timestamp<=historyCutoff!! } }, { if(historyCutoff==null)demo else emptyList() }, { if(historyCutoff==null)segments else emptyList() }, { notes.filter {historyCutoff==null || it.time<=historyCutoff!!} })
         map.overlays.add(fogOverlay)
         map.overlays.add(object:Overlay() {
+            override fun onSingleTapConfirmed(e:MotionEvent,mapView:MapView):Boolean {
+                if(mode!="VIEW")return false
+                val pos=fogOverlay.currentPosition ?: return false
+                val pixel=mapView.projection.toPixels(pos,Point())
+                val distance=kotlin.math.hypot((e.x-pixel.x).toDouble(),(e.y-pixel.y).toDouble())
+                if(distance>dp(25))return false
+                setMyLocation();return true
+            }
+        })
+        map.overlays.add(object:Overlay() {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
                 if(shadow)return
                 val marker=notes.firstOrNull {it.time==navigationTarget} ?: return
