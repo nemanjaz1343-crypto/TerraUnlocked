@@ -1015,7 +1015,7 @@ class MainActivity : Activity(), SensorEventListener {
         super.onResume(); map.onResume()
         tracking=TrackingService.running
         if(::trackButton.isInitialized)trackButton.text=if(tracking)"STOP GPS" else "TRACK"
-        if(::store.isInitialized) {records.clear();records.addAll(store.load());refresh()}
+        if(::store.isInitialized) {records.clear();records.addAll(store.load());notes.clear();notes.addAll(fieldNotes.load());refresh()}
         val filter=IntentFilter(TrackingService.ACTION_FIX)
         if(android.os.Build.VERSION.SDK_INT>=33) registerReceiver(trackingReceiver,filter,Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(trackingReceiver,filter)
