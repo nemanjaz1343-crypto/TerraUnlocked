@@ -427,6 +427,28 @@ class MainActivity : Activity(), SensorEventListener {
                 canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),dp(2).toFloat(),brush)
             }
         })
+        map.overlays.add(object:Overlay() {
+            override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
+                if(shadow||!transitVisible)return
+                val brush=Paint(Paint.ANTI_ALIAS_FLAG)
+                metroStations.forEach {station->
+                    val p=mapView.projection.toPixels(GeoPoint(station.lat,station.lon),Point())
+                    brush.color=Color.argb(215,29,69,94)
+                    canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),dp(13).toFloat(),brush)
+                    brush.color=Color.WHITE;brush.textSize=dp(13).toFloat()
+                    brush.textAlign=Paint.Align.CENTER;brush.typeface=Typeface.DEFAULT_BOLD
+                    canvas.drawText("M",p.x.toFloat(),p.y.toFloat()+dp(4),brush)
+                }
+            }
+            override fun onSingleTapConfirmed(e:MotionEvent,mapView:MapView):Boolean {
+                if(!transitVisible||mode!="VIEW")return false
+                val hit=metroStations.firstOrNull {station->
+                    val p=mapView.projection.toPixels(GeoPoint(station.lat,station.lon),Point())
+                    kotlin.math.hypot((e.x-p.x).toDouble(),(e.y-p.y).toDouble())<dp(20)
+                } ?: return false
+                showTransitStation(hit);return true
+            }
+        })
         val mapArea=FrameLayout(this)
         mapArea.addView(map,FrameLayout.LayoutParams(-1,-1))
         confirmButton=action("CONFIRM PATH").apply {
