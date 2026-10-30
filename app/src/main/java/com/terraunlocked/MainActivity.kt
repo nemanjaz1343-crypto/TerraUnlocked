@@ -789,6 +789,19 @@ class MainActivity : Activity(), SensorEventListener {
             map.setUseDataConnection(!offline)
             status.text = if (offline) "OFFLINE / LOCAL TILES ONLY" else "ONLINE / MAP TILES ENABLED"
         }
+        option("EXPORT BACKUP ZIP") {
+            startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type="application/zip"
+                putExtra(Intent.EXTRA_TITLE,"TerraUnlocked-backup.zip")
+            },85)
+        }
+        option("IMPORT BACKUP ZIP") {
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type="application/zip"
+            },86)
+        }
         option("IMPORT OFFLINE MAP") {
             val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
@@ -817,6 +830,26 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?) {
         super.onActivityResult(requestCode,resultCode,data)
 
+        if(requestCode==85 || requestCode==86) {
+            val uri=data?.data
+            if(resultCode==RESULT_OK && uri!=null) {
+                runCatching {
+                    if(requestCode==85) {
+                        contentResolver.openOutputStream(uri)?.use {TerraArchive(this).exportTo(it)}
+                            ?: error("Cannot write backup")
+                        status.text="BACKUP EXPORTED"
+                    } else {
+                        contentResolver.openInputStream(uri)?.use {TerraArchive(this).importFrom(it)}
+                            ?: error("Cannot read backup")
+                        notes.clear();notes.addAll(fieldNotes.load())
+                        records.clear();records.addAll(store.load())
+                        segments.clear();segments.addAll(pathStore.load())
+                        refresh();status.text="BACKUP IMPORTED"
+                    }
+                }.onFailure {status.text="BACKUP ERROR / "+it.javaClass.simpleName}
+            }
+            return
+        }
         if(requestCode==83 || requestCode==84) {
             val id=attachmentNoteTime
             val uri=if(requestCode==84) cameraUri else data?.data
