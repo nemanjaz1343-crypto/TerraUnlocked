@@ -1211,7 +1211,7 @@ class MainActivity : Activity(), SensorEventListener {
             runOnUiThread {
                 stationLoading=false
                 if(stations.isNotEmpty()) {metroStations.clear();metroStations.addAll(stations);refresh()}
-                status.text=if(metroStations.isEmpty())"TRANSIT DATA UNAVAILABLE" else "TRANSIT / "+metroStations.size+" STATIONS"
+                status.text=if(stations.isEmpty())"TRANSIT / OFFLINE STATIONS ("+metroStations.size+")" else "TRANSIT / "+metroStations.size+" STATIONS"
             }
         }.start()
     }
