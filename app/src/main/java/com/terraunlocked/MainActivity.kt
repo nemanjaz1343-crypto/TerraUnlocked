@@ -244,28 +244,6 @@ class MainActivity : Activity(), SensorEventListener {
         map.overlays.add(fogOverlay)
         map.overlays.add(object:Overlay() {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
-                if(shadow || !objectiveStore.enabled)return
-                val ink=Paint(Paint.ANTI_ALIAS_FLAG)
-                ReconObjectives.all.filterNot {objectiveStore.isHidden(it.id)}.forEach {o->
-                    val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
-                    ink.color=Color.argb(215,27,43,34)
-                    canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),dp(13).toFloat(),ink)
-                    ink.color=if(objectiveStore.completed(o.id))Color.GREEN else if(objectiveStore.active==o.id)Color.YELLOW else Color.CYAN
-                    ink.textSize=dp(18).toFloat();ink.textAlign=Paint.Align.CENTER
-                    canvas.drawText(if(objectiveStore.completed(o.id))"✓" else "◇",p.x.toFloat(),p.y.toFloat()+dp(5).toFloat(),ink)
-                }
-            }
-            override fun onSingleTapConfirmed(event:MotionEvent,mapView:MapView):Boolean {
-                if(!objectiveStore.enabled || mode!="VIEW")return false
-                val hit=ReconObjectives.all.filterNot {objectiveStore.isHidden(it.id)}.firstOrNull {o->
-                    val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
-                    kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(22)
-                } ?: return false
-                focusObjective(hit);showObjective(hit);return true
-            }
-        })
-        map.overlays.add(object:Overlay() {
-            override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
                 if(shadow)return
                 val marker=notes.firstOrNull {it.time==navigationTarget} ?: return
                 val user=fogOverlay.currentPosition ?: return
@@ -393,6 +371,28 @@ class MainActivity : Activity(), SensorEventListener {
                     return true
                 }
                 return false
+            }
+        })
+        map.overlays.add(object:Overlay() {
+            override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
+                if(shadow || !objectiveStore.enabled)return
+                val ink=Paint(Paint.ANTI_ALIAS_FLAG)
+                ReconObjectives.all.filterNot {objectiveStore.isHidden(it.id)}.forEach {o->
+                    val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
+                    ink.color=Color.argb(215,27,43,34)
+                    canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),dp(13).toFloat(),ink)
+                    ink.color=if(objectiveStore.completed(o.id))Color.GREEN else if(objectiveStore.active==o.id)Color.YELLOW else Color.CYAN
+                    ink.textSize=dp(18).toFloat();ink.textAlign=Paint.Align.CENTER
+                    canvas.drawText(if(objectiveStore.completed(o.id))"✓" else if(objectiveStore.active==o.id)"⚑" else "◆",p.x.toFloat(),p.y.toFloat()+dp(5).toFloat(),ink)
+                }
+            }
+            override fun onSingleTapConfirmed(event:MotionEvent,mapView:MapView):Boolean {
+                if(!objectiveStore.enabled || mode!="VIEW")return false
+                val hit=ReconObjectives.all.filterNot {objectiveStore.isHidden(it.id)}.firstOrNull {o->
+                    val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
+                    kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(22)
+                } ?: return false
+                focusObjective(hit);showObjective(hit);return true
             }
         })
         val mapArea=FrameLayout(this)
