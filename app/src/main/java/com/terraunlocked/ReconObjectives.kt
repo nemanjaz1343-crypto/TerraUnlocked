@@ -55,5 +55,17 @@ class ObjectiveStore(context:Context) {
         prefs.edit().putString("custom_places",arr.toString()).apply()
         return item
     }
+    fun moveCustom(id:String,lat:Double,lon:Double):Boolean {
+        val arr=org.json.JSONArray(prefs.getString("custom_places","[]"))
+        for(i in 0 until arr.length()){
+            val item=arr.getJSONObject(i)
+            if(item.optString("id")==id){
+                item.put("lat",lat);item.put("lon",lon)
+                prefs.edit().putString("custom_places",arr.toString()).apply()
+                return true
+            }
+        }
+        return false
+    }
     fun resetHiding(){ReconObjectives.all.forEach{hide(it.id,false)}}
 }
