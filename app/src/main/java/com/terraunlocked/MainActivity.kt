@@ -579,6 +579,24 @@ class MainActivity : Activity(), SensorEventListener {
             }
             movingObjectiveId=null;movingPinTime=null;movingBar.visibility=View.GONE
         }},LinearLayout.LayoutParams(0,dp(49),2f))
+        // Center reticle is only visible while relocating a pin, not when reading a place.
+        val moveReticle=object:View(this) {
+            private val ink=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color=Color.rgb(246,211,132);strokeWidth=dp(2).toFloat();style=Paint.Style.STROKE
+            }
+            override fun onDraw(c:Canvas) {
+                super.onDraw(c)
+                if(movingPinTime==null && movingObjectiveId==null)return
+                val x=width/2f;val y=height/2f
+                c.drawCircle(x,y,dp(13).toFloat(),ink)
+                c.drawLine(x-dp(23),y,x-dp(16),y,ink)
+                c.drawLine(x+dp(16),y,x+dp(23),y,ink)
+                c.drawLine(x,y-dp(23),x,y-dp(16),ink)
+                c.drawLine(x,y+dp(16),x,y+dp(23),ink)
+            }
+        }
+        mapArea.addView(moveReticle,FrameLayout.LayoutParams(-1,-1))
+        moveReticle.isClickable=false
         mapArea.addView(movingBar,FrameLayout.LayoutParams(-1,dp(54),Gravity.BOTTOM))
         confirmButton.setOnClickListener {
             pending.zipWithNext().forEach { (a,b) ->
