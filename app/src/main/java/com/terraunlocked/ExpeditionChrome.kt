@@ -194,6 +194,22 @@ internal class ExpeditionHeaderView(context:Context,
 internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):View(context) {
     var selected:Int=2;set(value){field=value;invalidate()}
     var trackingActive:Boolean=false;set(value){field=value;invalidate()}
+    var gpsSearching:Boolean=false;set(value){
+        if(field==value)return
+        field=value
+        if(value){if(isAttachedToWindow)radar.start()}
+        else {radar.cancel();scanPhase=0f}
+        invalidate()
+    }
+    private var scanPhase=0f
+    private val radar=android.animation.ValueAnimator.ofFloat(0f,1f).apply {
+        duration=1450L
+        repeatCount=android.animation.ValueAnimator.INFINITE
+        interpolator=android.view.animation.LinearInterpolator()
+        addUpdateListener{scanPhase=it.animatedValue as Float;invalidate()}
+    }
+    override fun onAttachedToWindow(){super.onAttachedToWindow();if(gpsSearching)radar.start()}
+    override fun onDetachedFromWindow(){radar.cancel();super.onDetachedFromWindow()}
     private var pressedIndex=-1
     private val d=resources.displayMetrics.density
     private val labels=arrayOf("TRACK","FOLLOW","MARK","ERASE","MAP")
@@ -212,7 +228,17 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
             if(i>0 && i!=selected && i-1!=selected)
                 ExpeditionArt.rule(c,3*d+i*step,11*d,3*d+i*step,h-10*d,ExpeditionArt.muted,.75f*d)
             ExpeditionArt.icon(c,icons[i],x,17*d,21*d,ExpeditionArt.light)
-            ExpeditionArt.label(c,if(i==0 && trackingActive)"STOP" else labels[i],x,h-8*d,10.5f*d,ExpeditionArt.light,false,.4f*d)
+            if(i==0 && gpsSearching){
+                // Two widening radar rings show that Android has not delivered its first fix.
+                val ring=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    style=Paint.Style.STROKE;strokeWidth=1.2f*d
+                    color=Color.argb(((1f-scanPhase)*210).toInt(),230,193,107)
+                }
+                c.drawCircle(x,17*d,(10f+10f*scanPhase)*d,ring)
+                ring.alpha=((scanPhase)*135).toInt()
+                c.drawCircle(x,17*d,(10f+10f*((scanPhase+0.5f)%1f))*d,ring)
+            }
+            ExpeditionArt.label(c,if(i==0 && gpsSearching)"SEARCH" else if(i==0 && trackingActive)"STOP" else labels[i],x,h-8*d,10.5f*d,ExpeditionArt.light,false,.4f*d)
             if(i==0 && trackingActive){
                 ExpeditionArt.p.style=Paint.Style.FILL
                 ExpeditionArt.p.color=Color.rgb(181,216,132)
@@ -250,13 +276,13 @@ internal class ExpeditionMarkPanelView(context:Context,val onSelect:(Int)->Unit)
         val bottom=h-15*d
         ExpeditionArt.panel(c,RectF(1.5f*d,1.5f*d,w-1.5f*d,bottom),false,9*d)
         val step=(w-4*d)/5
-        val names=arrayOf("redo","undo","path","paint","lasso")
+        val names=arrayOf("undo","redo","path","paint","lasso")
         for(i in 0..4){
             val x=2*d+(i+.5f)*step
             if(i==selected && i>=2)
                 ExpeditionArt.panel(c,RectF(x-step*.36f,5*d,x+step*.36f,bottom-5*d),true,6*d)
             if(i==2)ExpeditionArt.rule(c,x-step/2,10*d,x-step/2,bottom-8*d,ExpeditionArt.muted,.8f*d)
-            ExpeditionArt.icon(c,names[i],x,21*d,21*d,if((i==0&&!canRedo)||(i==1&&!canUndo))ExpeditionArt.muted else ExpeditionArt.light)
+            ExpeditionArt.icon(c,names[i],x,21*d,21*d,if((i==0&&!canUndo)||(i==1&&!canRedo))ExpeditionArt.muted else ExpeditionArt.light)
             if(i>=2)ExpeditionArt.label(c,names[i].uppercase(),x,bottom-7*d,9.5f*d)
         }
         val tri=Path().apply {moveTo(w/2-12*d,bottom);lineTo(w/2,bottom+13*d);lineTo(w/2+12*d,bottom)}
