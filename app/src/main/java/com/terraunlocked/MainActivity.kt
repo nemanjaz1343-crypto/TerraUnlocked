@@ -1256,6 +1256,18 @@ class MainActivity : Activity(), SensorEventListener {
             "DISTANCE THIS MONTH / %.2f km".format(ExplorationStats.distanceThisMonth(records)/1000.0),
             "DISTANCE TODAY / %.2f km".format(ExplorationStats.distanceToday(records)/1000.0)
         ).forEach {panel.addView(label(it,12,sand))}
+        panel.addView(label("EXPEDITION MILESTONES",13,sand))
+        val goals=listOf(
+            Triple("FIRST 5 KM",stats.distanceMeters,5000.0),
+            Triple("10 FIELD DAYS",stats.sessions.toDouble(),10.0),
+            Triple("20 LOCATIONS",notes.size.toDouble(),20.0),
+            Triple("100 DISCOVERY CELLS",stats.exploredCells.toDouble(),100.0)
+        )
+        goals.forEach { (name,progress,target)->
+            val done=progress>=target
+            val amount=if(target>=1000.0)"%.1f / %.0f".format(java.util.Locale.US,progress/1000.0,target/1000.0) else "${progress.toInt()} / ${target.toInt()}"
+            panel.addView(label((if(done)"✓ " else "○ ")+name+"  "+amount,11,if(done)sage else sand))
+        }
         panel.addView(label("Coverage is a 20m grid estimate, not surveyed area.",10,sage))
         val window=PopupWindow(android.widget.ScrollView(this).apply{addView(panel)},dp(310),dp(430),true).apply {
             isOutsideTouchable=true
