@@ -15,7 +15,7 @@ object ExplorationStats {
             if(seconds<=0.0 || seconds>90.0)return@filter false
             val meters=FloatArray(1)
             Location.distanceBetween(a.latitude,a.longitude,b.latitude,b.longitude,meters)
-            meters[0] in 5f..120f && meters[0]/seconds<=12.0
+            meters[0] in 5f..1500f && meters[0]/seconds<=55.0
         }
     }
 
