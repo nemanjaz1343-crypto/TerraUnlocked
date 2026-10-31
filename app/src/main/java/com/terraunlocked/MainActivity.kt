@@ -152,10 +152,16 @@ class MainActivity : Activity(), SensorEventListener {
             if(followUser)map.controller.animateTo(point)
             val revealed=intent.getBooleanExtra("revealed",false)
             if(revealed) {
-                records.clear();records.addAll(store.load())
+                // Service has already saved the fix; avoid loading all historical JSON.
+                val t=intent.getLongExtra("timestamp",System.currentTimeMillis())
+                if(records.lastOrNull()?.timestamp!=t)
+                    records.add(DiscoveryPoint(lat,lon,false,t))
             }
-            expeditionBottom?.gpsSearching=false
-        status.text=(if(intent.getBooleanExtra("eco",false))"GPS ECO" else "GPS ACTIVE")+" / ±"+fogOverlay.positionAccuracy.toInt()+"m"
+            val weak=intent.getBooleanExtra("weak",false)
+            if(!weak)expeditionBottom?.gpsSearching=false
+            status.text=(if(weak)"GPS LOW ACCURACY" else
+                if(intent.getBooleanExtra("eco",false))"GPS ECO" else "GPS ACTIVE")+
+                " / ±"+fogOverlay.positionAccuracy.toInt()+"m / R "+radius+"m"
             val now=System.currentTimeMillis()
             if(now-lastGpsUiRefresh>=3500L) {
                 lastGpsUiRefresh=now
