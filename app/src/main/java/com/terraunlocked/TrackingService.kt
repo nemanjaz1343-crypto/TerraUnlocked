@@ -37,9 +37,9 @@ class TrackingService:Service() {
         ecoMode=eco
         lastSwitch=now
         val request=if(eco) {
-            LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY,20000L)
-                .setMinUpdateIntervalMillis(10000L).setMaxUpdateDelayMillis(30000L)
-                .setMinUpdateDistanceMeters(10f).build()
+            LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,15000L)
+                .setMinUpdateIntervalMillis(5000L).setMaxUpdateDelayMillis(15000L)
+                .setMinUpdateDistanceMeters(0f).build()
         } else {
             LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,5000L)
                 .setMinUpdateIntervalMillis(2500L).setMaxUpdateDelayMillis(10000L)
@@ -74,6 +74,18 @@ class TrackingService:Service() {
                 val jump=prev!=null && seconds>0.5 &&
                     prev.distanceTo(loc)>maxOf(45f,2f*maxOf(prev.accuracy,loc.accuracy)) &&
                     prev.distanceTo(loc)/seconds>55.0
+                // Re-enter active mode from movement, even with temporarily weak accuracy.
+                // Do this before rejecting locations to prevent a stuck ECO mode in cars.
+                val anchorBeforeFilter=motionAnchor
+                if(ecoMode && anchorBeforeFilter!=null) {
+                    val traveled=anchorBeforeFilter.distanceTo(loc)
+                    if((loc.hasSpeed() && loc.speed>3f) ||
+                       (loc.accuracy<=100f && traveled>maxOf(35f,2f*loc.accuracy))) {
+                        switchMode(false)
+                        motionAnchor=loc
+                        stationarySince=android.os.SystemClock.elapsedRealtime()
+                    }
+                }
                 if(loc.accuracy>65f || jump) {
                     if(prev!=null && seconds>45.0)previous=null
                     return@forEach
@@ -124,6 +136,7 @@ class TrackingService:Service() {
                     putExtra("accuracy",loc.accuracy)
                     putExtra("revealed",moved)
                     putExtra("eco",ecoMode)
+                    putExtra("speed",if(loc.hasSpeed())loc.speed else -1f)
                 })
                 }
             }
