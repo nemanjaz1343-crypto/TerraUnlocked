@@ -427,7 +427,6 @@ class MainActivity : Activity(), SensorEventListener {
                     if(i==0 || i==lasso.lastIndex)canvas.drawCircle(pixel.x.toFloat(),pixel.y.toFloat(),dp(2).toFloat(),ink)
                 }
                 if(lassoFinished && lasso.size>=3)line.close()
-                if(lasso.size>=3)line.close()
                 canvas.drawPath(line,ink)
             }
         })
@@ -441,6 +440,7 @@ class MainActivity : Activity(), SensorEventListener {
                     val geo=GeoPoint(location.latitude,location.longitude)
                     when(event.actionMasked) {
                         MotionEvent.ACTION_DOWN -> {
+                            lassoFinished=false
                             lasso.clear()
                             confirmButton.visibility=View.GONE
                             lasso.add(geo)
@@ -457,13 +457,14 @@ class MainActivity : Activity(), SensorEventListener {
                         MotionEvent.ACTION_UP -> {
                             if(lasso.size>=3) {
                                 lasso.add(geo)
+                                lassoFinished=true
                                 confirmButton.text="CONFIRM LASSO"
                                 confirmButton.visibility=View.VISIBLE
                                 status.text="LASSO / REVIEW OUTLINE THEN CONFIRM"
-                            } else status.text="LASSO / DRAW A LARGER AREA"
+                            } else {lasso.clear();lassoFinished=false;status.text="LASSO / DRAW A LARGER AREA"}
                             refresh()
                         }
-                        MotionEvent.ACTION_CANCEL -> {lasso.clear();confirmButton.visibility=View.GONE;refresh()}
+                        MotionEvent.ACTION_CANCEL -> {lasso.clear();lassoFinished=false;confirmButton.visibility=View.GONE;refresh()}
                     }
                     return true
                 }
@@ -767,7 +768,6 @@ class MainActivity : Activity(), SensorEventListener {
         }
         expeditionBottom=controls
         controls.selected=-1
-        controls.trackActive=tracking
         controls.trackingActive=tracking
         fun chooseMark(next:String) {
             mode=next
