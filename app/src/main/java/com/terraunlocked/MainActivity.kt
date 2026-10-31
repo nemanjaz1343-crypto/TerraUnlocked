@@ -187,6 +187,47 @@ class MainActivity : Activity(), SensorEventListener {
     private val metroStations=mutableListOf<TransitStation>()
     private var stationLoading=false
     private var objectivesPopup:PopupWindow?=null
+    private var objectiveBubble:PopupWindow?=null
+    private var objectiveBubblePlace:ReconObjective?=null
+    private var objectiveBubbleTail:ObjectiveBubbleTail?=null
+    private var objectiveBubbleStack:LinearLayout?=null
+    private var objectiveBubbleBody:LinearLayout?=null
+    private var objectiveBubbleBelow=false
+
+    private fun updateObjectiveBubblePosition() {
+        val popup=objectiveBubble ?: return
+        val place=objectiveBubblePlace ?: return
+        if(!popup.isShowing || map.width<=0 || map.height<=0)return
+        val marker=map.projection.toPixels(GeoPoint(place.latitude,place.longitude),Point())
+        if(marker.x<0 || marker.y<0 || marker.x>map.width || marker.y>map.height) {
+            popup.dismiss();return
+        }
+        val screen=IntArray(2);map.getLocationOnScreen(screen)
+        val width=popup.width
+        val content=popup.contentView
+        content.measure(
+            View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED))
+        val height=content.measuredHeight
+        val placeAbove=marker.y>height+dp(23)
+        if(objectiveBubbleBelow==placeAbove) {
+            objectiveBubbleBelow=!placeAbove
+            val stack=objectiveBubbleStack
+            val tail=objectiveBubbleTail
+            if(stack!=null && tail!=null) {
+                stack.removeView(tail)
+                tail.pointingUp=!placeAbove
+                stack.addView(tail,if(placeAbove)stack.childCount else 0)
+            }
+        }
+        val left=(screen[0]+marker.x-width/2).coerceIn(screen[0]+dp(8),
+            screen[0]+map.width-width-dp(8))
+        val top=if(placeAbove)screen[1]+marker.y-height-dp(7)
+            else screen[1]+marker.y+dp(7)
+        objectiveBubbleTail?.anchorX=(screen[0]+marker.x-left).toFloat()
+        popup.update(left,top,-1,-1)
+    }
+
     private var voicePoint:GeoPoint?=null
     private var voiceNoteTime:Long?=null
     private var recorder:MediaRecorder?=null
@@ -848,6 +889,16 @@ class MainActivity : Activity(), SensorEventListener {
             }
         }
         viewButton.setOnClickListener {showLayers(viewButton)}
+        map.addMapListener(object:org.osmdroid.events.MapListener {
+            override fun onScroll(event:org.osmdroid.events.ScrollEvent?):Boolean {
+                handler.post{updateObjectiveBubblePosition()}
+                return false
+            }
+            override fun onZoom(event:org.osmdroid.events.ZoomEvent?):Boolean {
+                handler.post{updateObjectiveBubblePosition()}
+                return false
+            }
+        })
         map.setUseDataConnection(true)
         loadDubaiTemperature()
         applyMapSource(getSharedPreferences("terra_map_source",Context.MODE_PRIVATE).getInt("selected",0))
@@ -994,8 +1045,9 @@ class MainActivity : Activity(), SensorEventListener {
         followUser=false
         if(extent && map.zoomLevelDouble<17.0)map.controller.setZoom(17.0)
         map.controller.animateTo(GeoPoint(o.latitude,o.longitude))
-        status.text="MISSION / "+o.name.take(36)+" / TAP MAP ICON FOR DETAILS"
+        status.text="MISSION / "+o.name.take(36)
         refresh()
+        handler.postDelayed({if(!isFinishing)showObjective(o)},420L)
     }
     private fun showObjectiveHint(o:ReconObjective) { showObjective(o) }
     private fun clearMapPreview() {
@@ -1171,35 +1223,98 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
     private fun showObjective(o:ReconObjective) {
-        val panel=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(14),dp(10),dp(14),dp(10));background=tacticalPanel()}
-        panel.addView(label("OBJECTIVE / "+o.category,12,sage))
-        panel.addView(label(o.name,17,sand))
-        panel.addView(label(o.brief,13,sand))
+        objectiveBubble?.dismiss()
+        objectiveBubblePlace=o
+        objectiveBubbleBelow=false
+        val width=dp(296).coerceAtMost((map.width-dp(24)).coerceAtLeast(dp(220)))
+        val stack=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
+        val body=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(11),dp(10),dp(11),dp(10))
+            background=GradientDrawable().apply {
+                cornerRadius=dp(11).toFloat()
+                setColor(Color.rgb(25,34,27))
+                setStroke(dp(1),Color.rgb(195,160,93))
+            }
+        }
+        body.addView(label("FIELD OBJECTIVE / "+o.category,10,sage))
+        body.addView(label(o.name,17,sand).apply{
+            setTypeface(Typeface.SERIF,Typeface.BOLD)
+            setSingleLine(true);ellipsize=android.text.TextUtils.TruncateAt.END
+        })
+        body.addView(label(o.brief,12,sand).apply {
+            maxLines=2;ellipsize=android.text.TextUtils.TruncateAt.END
+        })
         fogOverlay.currentPosition?.let {position->
             val out=FloatArray(1)
-            android.location.Location.distanceBetween(position.latitude,position.longitude,o.latitude,o.longitude,out)
-            panel.addView(label("DISTANCE / "+(if(out[0]>=1000f)"%.1f km".format(java.util.Locale.US,out[0]/1000f) else "${out[0].toInt()} m"),12,sage))
+            android.location.Location.distanceBetween(position.latitude,position.longitude,
+                o.latitude,o.longitude,out)
+            val distance=if(out[0]>=1000f)
+                "%.1f km".format(java.util.Locale.US,out[0]/1000f)
+                else "${out[0].toInt()} m"
+            body.addView(label("DISTANCE / "+distance,11,sage))
         }
-        val dialog=android.app.AlertDialog.Builder(this).setView(panel).setNegativeButton("CLOSE",null).create()
-        panel.addView(action("⌖ SET ACTIVE").apply {setOnClickListener {
-            objectiveStore.active=o.id;clearMapPreview();refresh();dialog.dismiss()
-        }})
-        panel.addView(action("✓ COMPLETE / SAVE FIELD MARKER").apply {setOnClickListener {
-            objectiveStore.complete(o.id)
-            if(notes.none {it.title==o.name}) {
-                notes.add(FieldNote(o.latitude,o.longitude,o.name,"CHECKPOINT",o.brief,System.currentTimeMillis(),"⚑"))
-                fieldNotes.save(notes)
+        val popup=PopupWindow(stack,width,-2,true).apply{
+            isOutsideTouchable=true
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+            elevation=dp(7).toFloat()
+        }
+        fun actionRow(vararg entries:Pair<String,()->Unit>) {
+            val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+            for((caption,click) in entries) {
+                row.addView(action(caption).apply {
+                    applyExpeditionStyle(this)
+                    textSize=10f;maxLines=2
+                    setOnClickListener {click()}
+                },LinearLayout.LayoutParams(0,dp(36),1f))
             }
-            refresh();dialog.dismiss()
-        }})
-        if(o.id.startsWith("saved_"))panel.addView(action("↔ MOVE OBJECTIVE").apply {setOnClickListener {
-            dialog.dismiss();movingObjectiveId=o.id;movingPinTime=null
-            followUser=false;map.controller.animateTo(GeoPoint(o.latitude,o.longitude))
-            movePinBar?.visibility=View.VISIBLE;status.text="MOVE OBJECTIVE / PAN MAP, CONFIRM"
-        }})
-        panel.addView(action("HIDE OBJECTIVE").apply {setOnClickListener {objectiveStore.hide(o.id);refresh();dialog.dismiss()}})
-        if(o.source.startsWith("http"))panel.addView(action("OPEN SOURCE").apply {setOnClickListener {startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(o.source)))}})
-        dialog.show()
+            body.addView(row)
+        }
+        actionRow(
+            "⌖ SET ACTIVE" to {
+                objectiveStore.active=o.id;refresh();popup.dismiss()
+                status.text="MISSION ACTIVE / "+o.name.take(30)
+            },
+            "✓ COMPLETE" to {
+                objectiveStore.complete(o.id)
+                if(notes.none{it.title==o.name}) {
+                    notes.add(FieldNote(o.latitude,o.longitude,o.name,"CHECKPOINT",o.brief,System.currentTimeMillis(),"⚑"))
+                    fieldNotes.save(notes)
+                }
+                refresh();popup.dismiss()
+            }
+        )
+        actionRow(
+            "HIDE" to {objectiveStore.hide(o.id);refresh();popup.dismiss()},
+            (if(o.id.startsWith("saved_"))"MOVE PIN" else "SOURCE") to {
+                popup.dismiss()
+                if(o.id.startsWith("saved_")) {
+                    movingObjectiveId=o.id;movingPinTime=null;followUser=false
+                    map.controller.animateTo(GeoPoint(o.latitude,o.longitude))
+                    movePinBar?.visibility=View.VISIBLE
+                    status.text="MOVE OBJECTIVE / PAN MAP, CONFIRM"
+                } else if(o.source.startsWith("http")) {
+                    startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(o.source)))
+                }
+            }
+        )
+        val tail=ObjectiveBubbleTail(this).apply {
+            pointingUp=false
+            minimumHeight=dp(11)
+        }
+        stack.addView(body,LinearLayout.LayoutParams(-1,-2))
+        stack.addView(tail,LinearLayout.LayoutParams(-1,dp(11)))
+        objectiveBubbleStack=stack;objectiveBubbleBody=body;objectiveBubbleTail=tail
+        objectiveBubble=popup
+        popup.setOnDismissListener {
+            if(objectiveBubble===popup) {
+                objectiveBubble=null;objectiveBubblePlace=null
+                objectiveBubbleTail=null;objectiveBubbleStack=null;objectiveBubbleBody=null
+            }
+        }
+        // First layout and viewport positioning happen after the callout enters WindowManager.
+        popup.showAtLocation(map,Gravity.TOP or Gravity.START,0,0)
+        handler.post {updateObjectiveBubblePosition()}
     }
     private fun showExpeditionJournal() {
         notes.clear();notes.addAll(fieldNotes.load())
