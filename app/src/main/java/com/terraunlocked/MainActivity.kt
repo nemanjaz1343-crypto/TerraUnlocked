@@ -244,21 +244,23 @@ class MainActivity : Activity(), SensorEventListener {
             setPadding(dp(9), 0, dp(9), 0)
             setBackgroundColor(olive)
         }
-        val brand = label("TERRA / UNLOCKED", 12, sand).apply { setTypeface(null, Typeface.BOLD) }
-        header.addView(brand, LinearLayout.LayoutParams(0, dp(40), 1f))
-        header.addView(action("◎ MISSIONS").apply {setOnClickListener {showObjectives()}},LinearLayout.LayoutParams(dp(97),dp(34)))
+        val brand = label("TERRA", 14, sand).apply {setTypeface(null,Typeface.BOLD);setSingleLine(true)}
+        header.addView(brand,LinearLayout.LayoutParams(0,dp(40),1f))
+        header.addView(action("MISSIONS").apply {setOnClickListener {showObjectives()}},LinearLayout.LayoutParams(dp(76),dp(32)))
         sensors = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         compassEnabled = sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR) != null
-        val compass = label(if (compassEnabled) "◇ N --°" else "◇ N/A", 12, sand)
-        compassView = compass
-        header.addView(compass)
-        weatherView=label("DXB --°",10,sage)
-        header.addView(weatherView)
-        header.addView(action("◉").apply {setOnClickListener {chooseMapSource()}},LinearLayout.LayoutParams(dp(36),dp(34)))
-        header.addView(action("↻").apply {contentDescription="Check for updates";setOnClickListener {checkForUpdates()}},LinearLayout.LayoutParams(dp(36),dp(34)))
-        val gps = label("  ● RECON", 10, sage)
-        header.addView(gps)
+        val compass = label(if(compassEnabled)"N --°" else "N/A",11,sand).apply {
+            setSingleLine(true);gravity=Gravity.CENTER
+        }
+        compassView=compass
+        header.addView(compass,LinearLayout.LayoutParams(dp(55),dp(40)))
+        weatherView=label("DXB --°",10,sage).apply {setSingleLine(true);gravity=Gravity.CENTER}
+        header.addView(weatherView,LinearLayout.LayoutParams(dp(64),dp(40)))
+        header.addView(action("MAP").apply {setOnClickListener {chooseMapSource()}},LinearLayout.LayoutParams(dp(43),dp(32)))
+        header.addView(action("↻").apply {contentDescription="Check for updates";setOnClickListener {checkForUpdates()}},LinearLayout.LayoutParams(dp(32),dp(32)))
+        val gps = label("●",12,sage)
         gps.setOnClickListener {setMyLocation()}
+        // GPS status lives in the status line to avoid header overlap.
         root.addView(header, LinearLayout.LayoutParams(-1, dp(40)))
         status = label("GPS OFFLINE  |  FOG 82%  |  R 20m", 10, sage)
         status.setPadding(dp(10), dp(4), 0, dp(4))
@@ -997,7 +999,7 @@ class MainActivity : Activity(), SensorEventListener {
         val current=notes.find { it.time==note.time } ?: return
         val panel=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
-            setPadding(dp(16),dp(14),dp(16),dp(14))
+            setPadding(dp(12),dp(10),dp(12),dp(10))
             background=GradientDrawable().apply {
                 cornerRadius=dp(18).toFloat()
                 setColor(Color.argb(126,32,45,37))
@@ -1030,7 +1032,7 @@ class MainActivity : Activity(), SensorEventListener {
             choices.addView(action(glyph).apply {
                 textSize=17f
                 setOnClickListener {selected=glyph;this@MainActivity.status.text="ICON "+glyph}
-            },LinearLayout.LayoutParams(0,dp(40),1f))
+            },LinearLayout.LayoutParams(0,dp(32),1f))
         }
         panel.addView(choices)
         val count=label("ATTACHMENTS / "+current.attachments.size,12,sage)
@@ -1325,7 +1327,7 @@ class MainActivity : Activity(), SensorEventListener {
                 } finally {conn.disconnect()}
             }.getOrNull()
             if(temp!=null)runOnUiThread {
-                if(::weatherView.isInitialized)weatherView.text=" DXB ${temp.toInt()}°C "
+                if(::weatherView.isInitialized)weatherView.text="DXB ${temp.toInt()}°"
             }
         }.start()
     }
