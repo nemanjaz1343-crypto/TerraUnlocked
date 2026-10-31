@@ -1251,10 +1251,13 @@ class MainActivity : Activity(), SensorEventListener {
             "DISCOVERY CELLS  /  "+stats.exploredCells,
             "APPROX. COVERAGE  /  %.2f km²".format(stats.exploredCells*400/1000000.0),
             "VISITED MARKERS  /  "+stats.visitedMarkers,
-            "PHOTOS  /  "+stats.photoCount
+            "PHOTOS  /  "+stats.photoCount,
+            "GPS GAPS TO REVIEW  /  "+ExplorationStats.gpsGaps(records),
+            "DISTANCE THIS MONTH / %.2f km".format(ExplorationStats.distanceThisMonth(records)/1000.0),
+            "DISTANCE TODAY / %.2f km".format(ExplorationStats.distanceToday(records)/1000.0)
         ).forEach {panel.addView(label(it,12,sand))}
         panel.addView(label("Coverage is a 20m grid estimate, not surveyed area.",10,sage))
-        val window=PopupWindow(panel,dp(300),dp(320),true).apply {
+        val window=PopupWindow(android.widget.ScrollView(this).apply{addView(panel)},dp(310),dp(430),true).apply {
             isOutsideTouchable=true
             setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
             elevation=dp(6).toFloat()
@@ -1589,6 +1592,8 @@ class MainActivity : Activity(), SensorEventListener {
                 LinearLayout.LayoutParams(-1, dp(43)))
         }
         option("EXPEDITION JOURNAL") {showExpeditionJournal()}
+        option("RECOVER GPS GAPS / PREVIEW") {scanSmartPaths()}
+        option("HIDE INFERRED PATHS") {inferredPaths=emptyList();refresh()}
         option("EXPLORATION STATISTICS") {showExplorationStats()}
         option("TIME MACHINE") {showTimeMachine()}
         option("TRANSIT / LOAD STATIONS") {refreshMetro()}
