@@ -415,6 +415,22 @@ class MainActivity : Activity(), SensorEventListener {
                 return false
             }
         })
+        map.overlays.add(object:Overlay() {
+            override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
+                if(shadow || lasso.isEmpty())return
+                val ink=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color=sand;strokeWidth=dp(2).toFloat();style=Paint.Style.STROKE
+                }
+                val line=android.graphics.Path()
+                lasso.forEachIndexed{i,p->
+                    val pixel=mapView.projection.toPixels(p,Point())
+                    if(i==0)line.moveTo(pixel.x.toFloat(),pixel.y.toFloat())
+                    else line.lineTo(pixel.x.toFloat(),pixel.y.toFloat())
+                    canvas.drawCircle(pixel.x.toFloat(),pixel.y.toFloat(),dp(3).toFloat(),ink)
+                }
+                canvas.drawPath(line,ink)
+            }
+        })
         map.overlays.add(object : Overlay() {
             private var strokeLast: GeoPoint? = null
             override fun onTouchEvent(event: MotionEvent, mapView: MapView): Boolean {
@@ -464,6 +480,7 @@ class MainActivity : Activity(), SensorEventListener {
                         gap(GeoPoint(it.bLat, it.bLon), geo) < radius * 1.5f
                     }
                     if (records.size + segments.size != before) {
+                        // Eraser remains separate; MARK history covers path, paint and lasso.
                         store.replaceAll(records)
                         pathStore.save(segments)
                         refresh()
