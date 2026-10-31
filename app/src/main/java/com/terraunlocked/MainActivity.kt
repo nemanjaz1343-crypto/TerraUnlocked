@@ -96,7 +96,7 @@ class MainActivity : Activity(), SensorEventListener {
             if(revealed) {
                 records.clear();records.addAll(store.load())
             }
-            status.text="GPS ACTIVE / ±"+fogOverlay.positionAccuracy.toInt()+"m"
+            status.text=(if(intent.getBooleanExtra("eco",false))"GPS ECO" else "GPS ACTIVE")+" / ±"+fogOverlay.positionAccuracy.toInt()+"m"
             val now=System.currentTimeMillis()
             if(now-lastGpsUiRefresh>=3500L) {
                 lastGpsUiRefresh=now
