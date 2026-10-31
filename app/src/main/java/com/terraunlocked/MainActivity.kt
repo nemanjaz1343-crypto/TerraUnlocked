@@ -995,6 +995,40 @@ class MainActivity : Activity(), SensorEventListener {
         if(o.source.startsWith("http"))panel.addView(action("OPEN SOURCE").apply {setOnClickListener {startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(o.source)))}})
         dialog.show()
     }
+    private fun showExpeditionJournal() {
+        notes.clear();notes.addAll(fieldNotes.load())
+        val panel=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(12),dp(12),dp(12),dp(12));background=tacticalPanel()}
+        panel.addView(label("EXPEDITION / FIELD JOURNAL",16,sand))
+        panel.addView(label("${notes.size} PLACES / ${notes.count{it.visits.isNotEmpty()}} REVISITED",11,sage))
+        val search=EditText(this).apply {hint="Search journal";setSingleLine(true);textSize=14f;setTextColor(sand);setHintTextColor(sage)}
+        panel.addView(search)
+        val list=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
+        panel.addView(android.widget.ScrollView(this).apply {addView(list)},LinearLayout.LayoutParams(-1,dp(350)))
+        val dialog=android.app.AlertDialog.Builder(this).setView(panel).setNegativeButton("CLOSE",null).create()
+        fun populate(query:String) {
+            list.removeAllViews()
+            val entries=notes.filter{it.title.contains(query,true)||it.body.contains(query,true)}
+                .sortedByDescending{maxOf(it.time,it.visits.lastOrNull()?:0L)}
+            if(entries.isEmpty())list.addView(label("No records yet. Add a pin on the map.",12,sage))
+            entries.forEach {entry->
+                val date=java.text.SimpleDateFormat("dd MMM yyyy",java.util.Locale.getDefault()).format(java.util.Date(entry.time))
+                val photos=entry.attachments.count{!it.endsWith(".m4a")}+(if(entry.kind=="PHOTO")1 else 0)
+                val card=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(10),dp(8),dp(10),dp(8));background=tacticalPanel()}
+                card.addView(label(entry.title,15,sand))
+                card.addView(label("$date / ${entry.visits.size} VISITS / $photos PHOTOS",11,sage))
+                if(entry.body.isNotBlank()&&entry.kind!="VOICE")card.addView(label(entry.body.take(100),12,sand))
+                card.setOnClickListener {dialog.dismiss();showExisting(entry)}
+                list.addView(card,LinearLayout.LayoutParams(-1,-2).apply {bottomMargin=dp(7)})
+            }
+        }
+        search.addTextChangedListener(object:android.text.TextWatcher {
+            override fun beforeTextChanged(s:CharSequence?,start:Int,count:Int,after:Int){}
+            override fun onTextChanged(s:CharSequence?,start:Int,before:Int,count:Int){populate(s.toString())}
+            override fun afterTextChanged(s:android.text.Editable?){}
+        })
+        populate("")
+        dialog.show()
+    }
     private fun showExisting(note:FieldNote) {
         val current=notes.find { it.time==note.time } ?: return
         val panel=LinearLayout(this).apply {
@@ -1007,6 +1041,7 @@ class MainActivity : Activity(), SensorEventListener {
             }
         }
         panel.addView(label("FIELD JOURNAL / PIN DETAILS",12,sand))
+        panel.addView(label("RECORDED / "+java.text.SimpleDateFormat("dd MMM yyyy HH:mm",java.util.Locale.getDefault()).format(java.util.Date(current.time))+" / "+current.visits.size+" VISITS",11,sage))
 
         fogOverlay.currentPosition?.let {position->
             val out=FloatArray(1)
@@ -1553,6 +1588,7 @@ class MainActivity : Activity(), SensorEventListener {
             panel.addView(action(name).apply { setOnClickListener { callback(); layersPopup?.dismiss() } },
                 LinearLayout.LayoutParams(-1, dp(43)))
         }
+        option("EXPEDITION JOURNAL") {showExpeditionJournal()}
         option("EXPLORATION STATISTICS") {showExplorationStats()}
         option("TIME MACHINE") {showTimeMachine()}
         option("TRANSIT / LOAD STATIONS") {refreshMetro()}
