@@ -33,8 +33,8 @@ class TrackingService:Service() {
                 val seconds=if(prev!=null)(loc.elapsedRealtimeNanos-prev.elapsedRealtimeNanos)/1e9 else 0.0
                 val jump=prev!=null && seconds>0.5 &&
                     prev.distanceTo(loc)>maxOf(45f,2f*maxOf(prev.accuracy,loc.accuracy)) &&
-                    prev.distanceTo(loc)/seconds>15.0
-                if(loc.accuracy>50f || jump)return@forEach
+                    prev.distanceTo(loc)/seconds>55.0
+                if(loc.accuracy>65f || jump)return@forEach
                 previous=loc
                 val now=System.currentTimeMillis()
                 if(now-lastVisitCheck>60000L && loc.accuracy<=30f) {
@@ -53,7 +53,7 @@ class TrackingService:Service() {
                 }
                 val saved=lastSaved
                 val moved=saved==null || saved.distanceTo(loc)>=
-                    maxOf(10f,1.1f*maxOf(saved.accuracy,loc.accuracy))
+                    maxOf(12f,1.1f*maxOf(saved.accuracy,loc.accuracy))
                 if(moved) {
                     store.add(DiscoveryPoint(loc.latitude,loc.longitude,false,System.currentTimeMillis()))
                     lastSaved=loc
@@ -92,8 +92,10 @@ class TrackingService:Service() {
         else startForeground(1801,notification)
         running=true
         sendBroadcast(Intent(ACTION_STATE).setPackage(packageName).putExtra("running",true))
-        val request=LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,5000L)
-            .setMinUpdateDistanceMeters(5f).build()
+        val request=LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,8000L)
+            .setMinUpdateIntervalMillis(4000L)
+            .setMaxUpdateDelayMillis(12000L)
+            .setMinUpdateDistanceMeters(8f).build()
         client.requestLocationUpdates(request,callback,mainLooper)
         return START_STICKY
     }
