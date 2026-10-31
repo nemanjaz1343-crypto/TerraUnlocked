@@ -307,7 +307,7 @@ class MainActivity : Activity(), SensorEventListener {
             onMap={chooseMapSource()},
             onUpdate={checkForUpdates()},
             onNorth={map.mapOrientation=0f}
-        ).also {root.addView(it,LinearLayout.LayoutParams(-1,dp(54)))}
+        ).also {root.addView(it,LinearLayout.LayoutParams(-1,dp(45)))}
         // The status text remains available to services; no extra row obscures the map.
         status=label("GPS OFFLINE",10,sage).apply{visibility=View.GONE}
         root.addView(status)
@@ -741,10 +741,10 @@ class MainActivity : Activity(), SensorEventListener {
         }
         expeditionPalette=palette
         palette.visibility=View.GONE
-        val paletteParams=FrameLayout.LayoutParams(dp(258),dp(83),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
+        val paletteParams=FrameLayout.LayoutParams(dp(242),dp(70),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
         paletteParams.bottomMargin=dp(12)
         mapArea.addView(palette,paletteParams)
-        root.addView(controls,LinearLayout.LayoutParams(-1,dp(56)))
+        root.addView(controls,LinearLayout.LayoutParams(-1,dp(49)))
         setContentView(root)
         if(metroStations.isEmpty())handler.post{refreshMetro()}
         handler.postDelayed({maybeRecoverPaths()},12000L)
