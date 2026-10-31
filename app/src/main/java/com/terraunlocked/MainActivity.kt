@@ -1518,6 +1518,34 @@ class MainActivity : Activity(), SensorEventListener {
             }
         }.start()
     }
+    private fun preloadOfflineArea() {
+        if(offline){status.text="OFFLINE / SWITCH ONLINE TO CACHE TILES";return}
+        val center=map.mapCenter
+        val lat=Math.toRadians(center.latitude.coerceIn(-85.0,85.0))
+        val lon=center.longitude
+        val tiles=mutableListOf<Long>()
+        for(z in 14..17){
+            val scale=1 shl z
+            val x=((lon+180.0)/360.0*scale).toInt().coerceIn(0,scale-1)
+            val y=((1.0-kotlin.math.ln(kotlin.math.tan(lat)+1.0/kotlin.math.cos(lat))/Math.PI)/2.0*scale).toInt().coerceIn(0,scale-1)
+            val radius=if(z>=16)4 else 2
+            for(dx in -radius..radius)for(dy in -radius..radius){
+                val xx=x+dx;val yy=y+dy
+                if(xx in 0 until scale && yy in 0 until scale)
+                    tiles.add(org.osmdroid.util.MapTileIndex.getTileIndex(z,xx,yy))
+            }
+        }
+        status.text="OFFLINE CACHE / PREPARING ${tiles.size} MAP TILES"
+        var index=0
+        val task=object:Runnable {
+            override fun run(){
+                if(index>=tiles.size){status.text="OFFLINE CACHE / REQUESTED ${tiles.size} TILES";return}
+                repeat(5) {if(index<tiles.size){map.tileProvider.getMapTile(tiles[index]);index++}}
+                handler.postDelayed(this,250L)
+            }
+        }
+        handler.post(task)
+    }
     private fun showDataMenu() {
         val panel=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL;setPadding(dp(12),dp(12),dp(12),dp(12));background=tacticalPanel()
@@ -1617,6 +1645,7 @@ class MainActivity : Activity(), SensorEventListener {
             map.setUseDataConnection(!offline)
             status.text = if (offline) "OFFLINE / LOCAL TILES ONLY" else "ONLINE / MAP TILES ENABLED"
         }
+        option("PRELOAD NEARBY MAP TILES") {preloadOfflineArea()}
         option("DATA / BACKUP & OFFLINE") {showDataMenu()}
         option("UNDO LAST PATH") {
             if (segments.isNotEmpty()) { segments.removeAt(segments.lastIndex); pathStore.save(segments); refresh() }
