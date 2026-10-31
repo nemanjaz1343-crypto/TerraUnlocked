@@ -714,18 +714,18 @@ class MainActivity : Activity(), SensorEventListener {
         }
         root.addView(mapArea,LinearLayout.LayoutParams(-1,0,1f))
         val markTools=LinearLayout(this).apply {
-            setBackgroundColor(Color.rgb(25,32,25));gravity=Gravity.CENTER
+            gravity=Gravity.CENTER; background=tacticalPanel()
             visibility=View.GONE
         }
         fun tool(label:String,click:()->Unit) {
-            markTools.addView(action(label).apply{applyExpeditionStyle(this);textSize=10f;setOnClickListener{click()}},LinearLayout.LayoutParams(0,dp(39),1f))
+            markTools.addView(action(label).apply{applyExpeditionStyle(this);textSize=10f;setOnClickListener{click()}},LinearLayout.LayoutParams(0,dp(59),1f))
         }
         val controls=LinearLayout(this).apply {setBackgroundColor(olive);gravity=Gravity.CENTER}
-        trackButton=action("TRACK")
-        followButton=action("FOLLOW")
-        val markButton=action("MARK")
-        val eraseButton=action("ERASE")
-        val viewButton=action("VIEW")
+        trackButton=action("◎\nTRACK")
+        followButton=action("➤\nFOLLOW")
+        val markButton=action("✎\nMARK")
+        val eraseButton=action("◇\nERASE")
+        val viewButton=action("▱\nMAP")
         fun chooseMark(next:String) {
             mode=next
             pending.clear();lasso.clear()
@@ -738,17 +738,20 @@ class MainActivity : Activity(), SensorEventListener {
             }
             refresh()
         }
-        tool("↶ UNDO"){markUndoAction()}
-        tool("↷ REDO"){markRedoAction()}
-        tool("PATH"){chooseMark("PATH")}
-        tool("PAINT"){chooseMark("PAINT")}
-        tool("LASSO"){chooseMark("LASSO")}
-        tool("✓ APPLY"){if(mode=="LASSO")commitLasso() else if(mode=="PATH" && pending.size>=2)confirmButton.performClick()}
+        tool("↶"){markUndoAction()}
+        tool("↷"){markRedoAction()}
+        tool("⌁\nPATH"){chooseMark("PATH")}
+        tool("✎\nPAINT"){chooseMark("PAINT")}
+        tool("◌\nLASSO"){chooseMark("LASSO")}
+        tool("✓"){if(mode=="LASSO")commitLasso() else if(mode=="PATH" && pending.size>=2)confirmButton.performClick()}
         listOf(trackButton,followButton,markButton,eraseButton,viewButton).forEach {
             applyExpeditionStyle(it)
-            controls.addView(it,LinearLayout.LayoutParams(0,dp(35),1f))
+            it.textSize=11f
+            controls.addView(it,LinearLayout.LayoutParams(0,dp(55),1f))
         }
-        root.addView(markTools)
+        val markFloatParams=FrameLayout.LayoutParams(-1,dp(69),Gravity.BOTTOM)
+        markFloatParams.leftMargin=dp(67);markFloatParams.rightMargin=dp(67);markFloatParams.bottomMargin=dp(10)
+        mapArea.addView(markTools,markFloatParams)
         root.addView(controls)
         setContentView(root)
         if(metroStations.isEmpty())handler.post {refreshMetro()}
@@ -762,7 +765,7 @@ class MainActivity : Activity(), SensorEventListener {
         }
         followButton.setOnClickListener {
             followUser=true
-            followButton.text="FOLLOW ●"
+            followButton.text="➤\nFOLLOW"
             fogOverlay.currentPosition?.let{map.controller.setZoom(18.0);map.controller.animateTo(it)}
                 ?:run{status.text="FOLLOW / WAITING FOR GPS"}
         }
