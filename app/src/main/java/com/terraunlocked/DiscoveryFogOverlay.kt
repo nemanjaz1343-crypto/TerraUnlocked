@@ -61,6 +61,10 @@ class DiscoveryFogOverlay(
     // A small feather at its outer edge adds mist without overlapping bright halos.
     private var organicMask:android.graphics.Bitmap?=null
     private var maskKey:String=""
+    private var cachedOrigin:GeoPoint?=null
+    private var cachedOriginPixel:Point?=null
+    private var cachedShiftX=0f
+    private var cachedShiftY=0f
     private val maskPaint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
         xfermode=android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT)
     }
@@ -71,10 +75,24 @@ class DiscoveryFogOverlay(
         val center=map.mapCenter
         val last=points.lastOrNull()
         val end=manualSegments.lastOrNull()
-        val key="$mw:$mh:${map.zoomLevelDouble}:${map.mapOrientation}:${center.latitude}:${center.longitude}:"+
+        val key="$mw:$mh:${map.zoomLevelDouble}:${map.mapOrientation}:"+
             "${points.size}:${last?.latitude}:${last?.longitude}:${last?.timestamp}:"+
             "${manualSegments.size}:${end?.aLat}:${end?.bLon}:$radiusMeters"
-        organicMask?.let{if(key==maskKey && !it.isRecycled)return it}
+        organicMask?.let {cached->
+            val origin=cachedOrigin
+            val anchor=cachedOriginPixel
+            if(key==maskKey && !cached.isRecycled && origin!=null && anchor!=null) {
+                val projected=map.projection.toPixels(origin,Point())
+                val dx=(projected.x-anchor.x).toFloat()
+                val dy=(projected.y-anchor.y).toFloat()
+                // Shift the cached fog layer for small pans; regenerate beyond the margin.
+                if(kotlin.math.abs(dx)<=20f && kotlin.math.abs(dy)<=20f) {
+                    cachedShiftX=dx;cachedShiftY=dy
+                    return cached
+                }
+            }
+        }
+        cachedShiftX=0f;cachedShiftY=0f
         val bitmap=android.graphics.Bitmap.createBitmap(mw,mh,android.graphics.Bitmap.Config.ARGB_8888)
         val maskCanvas=Canvas(bitmap)
         val ink=Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -129,19 +147,24 @@ class DiscoveryFogOverlay(
         bitmap.setPixels(pixels,0,mw,0,0,mw,mh)
         organicMask?.recycle()
         organicMask=bitmap;maskKey=key
+        cachedOrigin=GeoPoint(center.latitude,center.longitude)
+        cachedOriginPixel=map.projection.toPixels(cachedOrigin,Point())
         return bitmap
     }
 
     override fun draw(canvas: Canvas, mapView: MapView, shadow: Boolean) {
         if (shadow) return
-        val points = records() + demo()
+        val live=records()
+        val simulated=demo()
+        val points=if(simulated.isEmpty())live else live+simulated
         if (fogVisible) {
             val blended=organicMaskFor(mapView,canvas.width,canvas.height,points,segments())
             val layer=canvas.saveLayer(0f,0f,canvas.width.toFloat(),canvas.height.toFloat(),null)
             fogPaint.alpha=opacity.coerceIn(0,255)
             canvas.drawRect(0f,0f,canvas.width.toFloat(),canvas.height.toFloat(),fogPaint)
             canvas.drawBitmap(blended,null,
-                android.graphics.RectF(0f,0f,canvas.width.toFloat(),canvas.height.toFloat()),maskPaint)
+                android.graphics.RectF(cachedShiftX,cachedShiftY,
+                    canvas.width.toFloat()+cachedShiftX,canvas.height.toFloat()+cachedShiftY),maskPaint)
             canvas.restoreToCount(layer)
         }
         if (showRoute) {
