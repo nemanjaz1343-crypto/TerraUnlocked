@@ -210,22 +210,44 @@ class DiscoveryFogOverlay(
             }
         }
         currentPosition?.let { loc ->
-            val p = toPoint(mapView,loc.latitude,loc.longitude)
-            val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color=Color.argb(85,107,185,226); style=Paint.Style.FILL
+            val pixel=toPoint(mapView,loc.latitude,loc.longitude)
+            val x=pixel.x.toFloat();val y=pixel.y.toFloat()
+            val red=Color.rgb(226,76,65)
+            // Compact red expedition pointer with a soft accuracy aura.
+            val halo=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color=Color.argb(58,226,76,65);style=Paint.Style.FILL
             }
-            canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),15f,ring)
-            val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color=Color.rgb(95,202,255);style=Paint.Style.FILL }
-            canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),7f,dot)
-            val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.WHITE;style=Paint.Style.STROKE;strokeWidth=2f}
-            canvas.drawCircle(p.x.toFloat(),p.y.toFloat(),7f,border)
-            val angle=Math.toRadians(northAzimuth.toDouble())
-            val nx=kotlin.math.sin(angle).toFloat()
-            val ny=-kotlin.math.cos(angle).toFloat()
-            val arrow=Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color=Color.rgb(255,210,116);strokeWidth=3.5f;strokeCap=Paint.Cap.ROUND
+            canvas.drawCircle(x,y,19f,halo)
+            val shadow=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color=Color.argb(210,22,25,24);style=Paint.Style.FILL
             }
-            canvas.drawLine(p.x.toFloat(),p.y.toFloat(),p.x+nx*23f,p.y+ny*23f,arrow)
+            canvas.drawCircle(x,y,12.5f,shadow)
+            val ring=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color=Color.WHITE;strokeWidth=2.0f;style=Paint.Style.STROKE
+            }
+            canvas.drawCircle(x,y,9.0f,ring)
+            val fill=Paint(Paint.ANTI_ALIAS_FLAG).apply {color=red;style=Paint.Style.FILL}
+            canvas.drawCircle(x,y,8f,fill)
+            // The north-facing directional chevron is rotated with sensor heading.
+            canvas.save()
+            canvas.rotate(northAzimuth,x,y)
+            val pointer=Path().apply {
+                moveTo(x,y-21f)
+                lineTo(x-5.6f,y-7f)
+                lineTo(x,y-10f)
+                lineTo(x+5.6f,y-7f)
+                close()
+            }
+            val outline=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color=Color.argb(230,248,235,212);style=Paint.Style.STROKE
+                strokeWidth=1.3f;strokeJoin=Paint.Join.ROUND
+            }
+            canvas.drawPath(pointer,fill)
+            canvas.drawPath(pointer,outline)
+            canvas.restore()
+            canvas.drawCircle(x,y,2.4f,Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color=Color.WHITE;style=Paint.Style.FILL
+            })
         }
     }
 }
