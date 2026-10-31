@@ -774,6 +774,7 @@ class MainActivity : Activity(), SensorEventListener {
             pending.clear();lasso.clear();lassoFinished=false
             confirmButton.visibility=View.GONE
             palette.selected=when(next){"PATH"->2;"PAINT"->3;"LASSO"->4;else->-1}
+            confirmButton.text=if(next=="LASSO")"CONFIRM LASSO" else "CONFIRM PATH"
             status.text=when(next){
                 "PATH"->"MARK / TAP VERTICES THEN CONFIRM"
                 "PAINT"->"MARK / PAINT TO REVEAL"
