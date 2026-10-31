@@ -57,6 +57,9 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var compassView: TextView
     private lateinit var weatherView: TextView
     private var weatherLastFetch=0L
+    private var expeditionHeader:ExpeditionHeaderView?=null
+    private var expeditionBottom:ExpeditionBottomView?=null
+    private var expeditionPalette:ExpeditionMarkPanelView?=null
     private lateinit var sensors: SensorManager
     private var compassEnabled = false
     private val rotation = FloatArray(9)
@@ -290,36 +293,21 @@ class MainActivity : Activity(), SensorEventListener {
         segments.addAll(pathStore.load())
         records.addAll(store.load())
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(olive); fitsSystemWindows = true }
-        val header = LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(9), 0, dp(9), 0)
-            setBackgroundColor(olive)
-        }
-        val mission=action("MISSIONS ›").apply {setOnClickListener{showObjectives()};textSize=10f;applyExpeditionStyle(this)}
-        header.addView(mission,LinearLayout.LayoutParams(dp(91),dp(32)))
-        val emblem=android.widget.ImageView(this).apply {
-            setImageResource(com.terraunlocked.R.drawable.terra_emblem)
-            scaleType=android.widget.ImageView.ScaleType.FIT_CENTER
-        }
-        header.addView(emblem,LinearLayout.LayoutParams(dp(34),dp(34)))
-        val brand=label("T E R R A",15,sand).apply {
-            gravity=Gravity.CENTER;setTypeface(Typeface.SERIF,Typeface.BOLD);setSingleLine(true)
-        }
-        header.addView(brand,LinearLayout.LayoutParams(0,dp(40),1f))
+        window.statusBarColor=Color.rgb(14,20,16)
+        window.navigationBarColor=Color.rgb(12,16,13)
         sensors=getSystemService(Context.SENSOR_SERVICE) as SensorManager
         compassEnabled=sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)!=null
-        val compass=label(if(compassEnabled)"N --°" else "N/A",10,sand).apply {gravity=Gravity.CENTER;setSingleLine(true)}
-        compassView=compass
-        header.addView(compass,LinearLayout.LayoutParams(dp(47),dp(38)))
-        weatherView=label("--°",10,sage).apply {gravity=Gravity.CENTER;setSingleLine(true)}
-        header.addView(weatherView,LinearLayout.LayoutParams(dp(30),dp(38)))
-        header.addView(action("▱\nMAP").apply {textSize=9f;applyExpeditionStyle(this);setOnClickListener{chooseMapSource()}},LinearLayout.LayoutParams(dp(43),dp(35)))
-        header.addView(action("↻").apply {applyExpeditionStyle(this);setOnClickListener{checkForUpdates()}},LinearLayout.LayoutParams(dp(28),dp(35)))
-        root.addView(header,LinearLayout.LayoutParams(-1,dp(43)))
-        status = label("GPS OFFLINE  |  FOG 82%  |  R 20m", 10, sage)
-        status.setPadding(dp(10), dp(4), 0, dp(4))
+        compassView=label("N ---°",10,sand)
+        weatherView=label("--°",10,sage)
+        expeditionHeader=ExpeditionHeaderView(this,
+            onMissions={showObjectives()},
+            onMap={chooseMapSource()},
+            onUpdate={checkForUpdates()},
+            onNorth={map.mapOrientation=0f}
+        ).also {root.addView(it,LinearLayout.LayoutParams(-1,dp(54)))}
+        // The status text remains available to services; no extra row obscures the map.
+        status=label("GPS OFFLINE",10,sage).apply{visibility=View.GONE}
         root.addView(status)
-
         map = MapView(this).apply {
             setTileSource(TileSourceFactory.MAPNIK)
             setMultiTouchControls(true)
@@ -1516,6 +1504,7 @@ class MainActivity : Activity(), SensorEventListener {
             }.getOrNull()
             if(temp!=null)runOnUiThread {
                 if(::weatherView.isInitialized)weatherView.text="${temp.toInt()}°"
+                expeditionHeader?.temperature=temp.toInt()
             }
         }.start()
     }
@@ -1911,6 +1900,7 @@ class MainActivity : Activity(), SensorEventListener {
         SensorManager.getOrientation(rotation,orientation)
         val degrees = ((Math.toDegrees(orientation[0].toDouble())+360.0)%360.0).toInt()
         compassView.text = "▲ N %03d°".format(degrees)
+        expeditionHeader?.bearing=degrees
         fogOverlay.northAzimuth = degrees.toFloat()
         map.invalidate()
     }
