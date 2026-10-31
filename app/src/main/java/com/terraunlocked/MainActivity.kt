@@ -427,61 +427,53 @@ class MainActivity : Activity(), SensorEventListener {
                     if(i==0 || i==lasso.lastIndex)canvas.drawCircle(pixel.x.toFloat(),pixel.y.toFloat(),dp(2).toFloat(),ink)
                 }
                 if(lassoFinished && lasso.size>=3)line.close()
+                if(lasso.size>=3)line.close()
                 canvas.drawPath(line,ink)
             }
         })
         map.overlays.add(object : Overlay() {
             private var strokeLast: GeoPoint? = null
             override fun onTouchEvent(event: MotionEvent, mapView: MapView): Boolean {
-                if (mode == "VIEW") return false
-                if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
-                    strokeLast = null
-                    return true
-                }
-                if (event.actionMasked != MotionEvent.ACTION_DOWN && event.actionMasked != MotionEvent.ACTION_MOVE) return false
-                val projected = mapView.projection.fromPixels(event.x.toInt(), event.y.toInt())
-                val geo = GeoPoint(projected.latitude, projected.longitude)
+                if(mode=="VIEW")return false
                 if(mode=="LASSO") {
+                    if(event.pointerCount>1)return true
+                    val location=mapView.projection.fromPixels(event.x.toInt(),event.y.toInt())
+                    val geo=GeoPoint(location.latitude,location.longitude)
                     when(event.actionMasked) {
                         MotionEvent.ACTION_DOWN -> {
                             lasso.clear()
-                            lassoFinished=false
-                            lasso.add(geo)
                             confirmButton.visibility=View.GONE
-                            status.text="LASSO / DRAW FREEHAND"
+                            lasso.add(geo)
+                            status.text="LASSO / TRACE A FREEHAND AREA"
                             refresh()
                         }
                         MotionEvent.ACTION_MOVE -> {
                             val last=lasso.lastOrNull()
-                            // Approximately 4 screen pixels between samples; prevent giant point lists.
-                            val previousPixel=last?.let{mapView.projection.toPixels(it,Point())}
-                            if(previousPixel==null ||
-                                kotlin.math.hypot((previousPixel.x-event.x).toDouble(),
-                                    (previousPixel.y-event.y).toDouble())>=dp(4)) {
-                                if(lasso.size<3000)lasso.add(geo)
+                            if(last==null || gap(last,geo)>2.5f) {
+                                if(lasso.size<1200)lasso.add(geo)
                                 refresh()
                             }
                         }
                         MotionEvent.ACTION_UP -> {
                             if(lasso.size>=3) {
                                 lasso.add(geo)
-                                lassoFinished=true
                                 confirmButton.text="CONFIRM LASSO"
                                 confirmButton.visibility=View.VISIBLE
-                                status.text="LASSO / CONFIRM TO REVEAL SELECTED AREA"
-                            } else {
-                                lasso.clear()
-                                status.text="LASSO / DRAW A CLOSED AREA"
-                            }
+                                status.text="LASSO / REVIEW OUTLINE THEN CONFIRM"
+                            } else status.text="LASSO / DRAW A LARGER AREA"
                             refresh()
                         }
-                        MotionEvent.ACTION_CANCEL -> {
-                            lasso.clear();lassoFinished=false
-                            confirmButton.visibility=View.GONE;refresh()
-                        }
+                        MotionEvent.ACTION_CANCEL -> {lasso.clear();confirmButton.visibility=View.GONE;refresh()}
                     }
                     return true
                 }
+                if(event.actionMasked==MotionEvent.ACTION_UP || event.actionMasked==MotionEvent.ACTION_CANCEL) {
+                    strokeLast=null
+                    return true
+                }
+                if(event.actionMasked!=MotionEvent.ACTION_DOWN && event.actionMasked!=MotionEvent.ACTION_MOVE)return false
+                val projected=mapView.projection.fromPixels(event.x.toInt(),event.y.toInt())
+                val geo=GeoPoint(projected.latitude,projected.longitude)
                 if(mode=="PATH") {
                     if(event.actionMasked==MotionEvent.ACTION_DOWN) {
                         pending.add(geo)
