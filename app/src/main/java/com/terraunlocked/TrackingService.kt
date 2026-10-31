@@ -30,6 +30,28 @@ class TrackingService:Service() {
     private var lastSwitch=0L
     private var ecoMode=false
     private var lastBroadcast=0L
+    private var lastVisual:Location?=null
+    private fun broadcastFix(loc:Location,revealed:Boolean,eco:Boolean,weak:Boolean=false,
+        sampleTime:Long=System.currentTimeMillis()) {
+        val previous=lastVisual
+        // Filter mild stationary wander for the on-screen marker only, never recorded GPS.
+        val stationary=!loc.hasSpeed() || loc.speed<1.5f
+        val close=previous!=null && previous.distanceTo(loc)<maxOf(12f,loc.accuracy*1.5f)
+        val shown=Location(loc)
+        if(stationary && close && previous!=null && loc.accuracy<=35f) {
+            shown.latitude=previous.latitude*.65+loc.latitude*.35
+            shown.longitude=previous.longitude*.65+loc.longitude*.35
+        }
+        if(!weak)lastVisual=shown
+        sendBroadcast(Intent(ACTION_FIX).setPackage(packageName).apply {
+            putExtra("lat",shown.latitude);putExtra("lon",shown.longitude)
+            putExtra("accuracy",loc.accuracy);putExtra("revealed",revealed)
+            putExtra("eco",eco);putExtra("weak",weak)
+            putExtra("timestamp",sampleTime)
+            putExtra("speed",if(loc.hasSpeed())loc.speed else -1f)
+        })
+    }
+
 
     private fun switchMode(eco:Boolean) {
         val now=android.os.SystemClock.elapsedRealtime()
@@ -88,6 +110,12 @@ class TrackingService:Service() {
                 }
                 if(loc.accuracy>65f || jump) {
                     if(prev!=null && seconds>45.0)previous=null
+                    // Report the uncertainty without recording inaccurate exploration.
+                    val now=System.currentTimeMillis()
+                    if(now-lastBroadcast>12000L && loc.accuracy<=120f) {
+                        lastBroadcast=now
+                        broadcastFix(loc,false,ecoMode,weak=true,sampleTime=now)
+                    }
                     return@forEach
                 }
                 val nowElapsed=android.os.SystemClock.elapsedRealtime()
@@ -108,6 +136,14 @@ class TrackingService:Service() {
                 }
                 previous=loc
                 val now=System.currentTimeMillis()
+                // Do not make permanent discoveries from poor urban GPS readings.
+                if(loc.accuracy>35f) {
+                    if(now-lastBroadcast>=12000L) {
+                        lastBroadcast=now
+                        broadcastFix(loc,false,ecoMode,weak=true,sampleTime=now)
+                    }
+                    return@forEach
+                }
                 if(now-lastVisitCheck>60000L && loc.accuracy<=30f) {
                     lastVisitCheck=now
                     val entries=fieldNotes.load()
@@ -126,18 +162,12 @@ class TrackingService:Service() {
                 val moved=saved==null || saved.distanceTo(loc)>=
                     maxOf(12f,1.1f*maxOf(saved.accuracy,loc.accuracy))
                 if(moved) {
-                    store.add(DiscoveryPoint(loc.latitude,loc.longitude,false,System.currentTimeMillis()))
+                    store.add(DiscoveryPoint(loc.latitude,loc.longitude,false,now))
                     lastSaved=loc
                 }
                 if(moved || now-lastBroadcast>=15000L) {
-                lastBroadcast=now
-                sendBroadcast(Intent(ACTION_FIX).setPackage(packageName).apply {
-                    putExtra("lat",loc.latitude);putExtra("lon",loc.longitude)
-                    putExtra("accuracy",loc.accuracy)
-                    putExtra("revealed",moved)
-                    putExtra("eco",ecoMode)
-                    putExtra("speed",if(loc.hasSpeed())loc.speed else -1f)
-                })
+                    lastBroadcast=now
+                    broadcastFix(loc,moved,ecoMode,sampleTime=now)
                 }
             }
         }
@@ -157,6 +187,11 @@ class TrackingService:Service() {
         running=true
         sendBroadcast(Intent(ACTION_STATE).setPackage(packageName).putExtra("running",true))
         ecoMode=false
+        lastVisual=null
+        previous=null
+        lastSaved=null
+        motionAnchor=null
+        stationarySince=0L
         lastSwitch=0L
         val request=LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,5000L)
             .setMinUpdateIntervalMillis(2500L)
