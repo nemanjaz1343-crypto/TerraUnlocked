@@ -91,6 +91,7 @@ class MainActivity : Activity(), SensorEventListener {
         markUndo.addLast(snapshotMark())
         if(markUndo.size>20)markUndo.removeFirst()
         markRedo.clear()
+        expeditionPalette?.let{it.canUndo=true;it.canRedo=false}
     }
     private fun applyMark(state:MarkState) {
         records.removeAll{it.manual};records.addAll(state.manual)
@@ -100,10 +101,12 @@ class MainActivity : Activity(), SensorEventListener {
     private fun markUndoAction() {
         if(markUndo.isEmpty())return
         markRedo.addLast(snapshotMark());applyMark(markUndo.removeLast())
+        expeditionPalette?.let{it.canUndo=markUndo.isNotEmpty();it.canRedo=true}
     }
     private fun markRedoAction() {
         if(markRedo.isEmpty())return
         markUndo.addLast(snapshotMark());applyMark(markRedo.removeLast())
+        expeditionPalette?.let{it.canUndo=true;it.canRedo=markRedo.isNotEmpty()}
     }
     private fun lassoContains(lat:Double,lon:Double):Boolean {
         var inside=false;var j=lasso.lastIndex
@@ -434,7 +437,7 @@ class MainActivity : Activity(), SensorEventListener {
                 val projected = mapView.projection.fromPixels(event.x.toInt(), event.y.toInt())
                 val geo = GeoPoint(projected.latitude, projected.longitude)
                 if(mode=="LASSO") {
-                    if(event.actionMasked==MotionEvent.ACTION_DOWN){lasso.add(geo);status.text="LASSO / ${lasso.size} POINTS";refresh()}
+                    if(event.actionMasked==MotionEvent.ACTION_DOWN){lasso.add(geo);status.text="LASSO / ${lasso.size} POINTS";confirmButton.text="APPLY LASSO";confirmButton.visibility=if(lasso.size>=3)View.VISIBLE else View.GONE;refresh()}
                     return true
                 }
                 if(mode=="PATH") {
@@ -652,6 +655,7 @@ class MainActivity : Activity(), SensorEventListener {
         moveReticle.isClickable=false
         mapArea.addView(movingBar,FrameLayout.LayoutParams(-1,dp(54),Gravity.BOTTOM))
         confirmButton.setOnClickListener {
+            if(mode=="LASSO"){commitLasso();confirmButton.visibility=View.GONE;return@setOnClickListener}
             pushMark()
             pending.zipWithNext().forEach { (a,b) ->
                 segments.add(ManualSegment(a.latitude,a.longitude,b.latitude,b.longitude))
@@ -694,23 +698,28 @@ class MainActivity : Activity(), SensorEventListener {
         }
         mapArea.addView(journalTab,FrameLayout.LayoutParams(dp(29),dp(90),Gravity.END or Gravity.CENTER_VERTICAL))
         root.addView(mapArea,LinearLayout.LayoutParams(-1,0,1f))
-        val markTools=LinearLayout(this).apply {
-            gravity=Gravity.CENTER; background=tacticalPanel()
-            visibility=View.GONE
+        // Hidden adapter buttons preserve existing activity actions; visual chrome is Canvas based.
+        trackButton=action("TRACK")
+        followButton=action("FOLLOW")
+        val markButton=action("MARK")
+        val eraseButton=action("ERASE")
+        val viewButton=action("VIEW")
+        lateinit var palette:ExpeditionMarkPanelView
+        val controls=ExpeditionBottomView(this){index->
+            when(index) {
+                0->trackButton.performClick()
+                1->followButton.performClick()
+                2->markButton.performClick()
+                3->eraseButton.performClick()
+                4->viewButton.performClick()
+            }
         }
-        fun tool(label:String,click:()->Unit) {
-            markTools.addView(action(label).apply{applyExpeditionStyle(this);textSize=10f;setOnClickListener{click()}},LinearLayout.LayoutParams(0,dp(59),1f))
-        }
-        val controls=LinearLayout(this).apply {setBackgroundColor(olive);gravity=Gravity.CENTER}
-        trackButton=action("◎\nTRACK")
-        followButton=action("➤\nFOLLOW")
-        val markButton=action("✎\nMARK")
-        val eraseButton=action("◇\nERASE")
-        val viewButton=action("▱\nMAP")
+        expeditionBottom=controls
         fun chooseMark(next:String) {
             mode=next
             pending.clear();lasso.clear()
             confirmButton.visibility=View.GONE
+            palette.selected=when(next){"PATH"->2;"PAINT"->3;"LASSO"->4;else->-1}
             status.text=when(next){
                 "PATH"->"MARK / TAP VERTICES THEN CONFIRM"
                 "PAINT"->"MARK / PAINT TO REVEAL"
@@ -719,51 +728,63 @@ class MainActivity : Activity(), SensorEventListener {
             }
             refresh()
         }
-        tool("↶"){markUndoAction()}
-        tool("↷"){markRedoAction()}
-        tool("⌁\nPATH"){chooseMark("PATH")}
-        tool("✎\nPAINT"){chooseMark("PAINT")}
-        tool("◌\nLASSO"){chooseMark("LASSO")}
-        tool("✓"){if(mode=="LASSO")commitLasso() else if(mode=="PATH" && pending.size>=2)confirmButton.performClick()}
-        listOf(trackButton,followButton,markButton,eraseButton,viewButton).forEach {
-            applyExpeditionStyle(it)
-            it.textSize=11f
-            controls.addView(it,LinearLayout.LayoutParams(0,dp(55),1f))
+        palette=ExpeditionMarkPanelView(this){index->
+            when(index){
+                0->markUndoAction()
+                1->markRedoAction()
+                2->chooseMark("PATH")
+                3->chooseMark("PAINT")
+                4->chooseMark("LASSO")
+            }
+            palette.canUndo=markUndo.isNotEmpty()
+            palette.canRedo=markRedo.isNotEmpty()
         }
-        val markFloatParams=FrameLayout.LayoutParams(-1,dp(69),Gravity.BOTTOM)
-        markFloatParams.leftMargin=dp(67);markFloatParams.rightMargin=dp(67);markFloatParams.bottomMargin=dp(10)
-        mapArea.addView(markTools,markFloatParams)
-        root.addView(controls)
+        expeditionPalette=palette
+        palette.visibility=View.GONE
+        val paletteParams=FrameLayout.LayoutParams(dp(258),dp(83),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
+        paletteParams.bottomMargin=dp(12)
+        mapArea.addView(palette,paletteParams)
+        root.addView(controls,LinearLayout.LayoutParams(-1,dp(56)))
         setContentView(root)
-        if(metroStations.isEmpty())handler.post {refreshMetro()}
+        if(metroStations.isEmpty())handler.post{refreshMetro()}
         handler.postDelayed({maybeRecoverPaths()},12000L)
         trackButton.setOnClickListener {
-            if (tracking) stopTracking() else {
+            if(tracking)stopTracking() else {
                 if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED)
                     startTracking()
                 else requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,Manifest.permission.ACCESS_COARSE_LOCATION),10)
             }
+            controls.invalidate()
         }
         followButton.setOnClickListener {
             followUser=true
-            followButton.text="➤\nFOLLOW"
             fogOverlay.currentPosition?.let{map.controller.setZoom(18.0);map.controller.animateTo(it)}
                 ?:run{status.text="FOLLOW / WAITING FOR GPS"}
         }
         markButton.setOnClickListener {
-            if(markTools.visibility==View.VISIBLE){
-                markTools.visibility=View.GONE;mode="VIEW";pending.clear();lasso.clear();confirmButton.visibility=View.GONE
+            val opening=palette.visibility!=View.VISIBLE
+            palette.visibility=if(opening)View.VISIBLE else View.GONE
+            if(opening){
+                mode="VIEW"
+                palette.selected=-1
+                palette.canUndo=markUndo.isNotEmpty()
+                palette.canRedo=markRedo.isNotEmpty()
+                status.text="MARK / SELECT TOOL"
             }else{
-                markTools.visibility=View.VISIBLE;mode="VIEW";status.text="MARK / SELECT TOOL"
+                mode="VIEW";pending.clear();lasso.clear();confirmButton.visibility=View.GONE
             }
+            controls.selected=if(opening)2 else -1
             refresh()
         }
         eraseButton.setOnClickListener {
-            if(mode!="ERASE"){mode="ERASE";markTools.visibility=View.GONE;status.text="ERASE / REMOVE MANUAL PAINT"}
-            else{mode="VIEW";status.text="MAP READY"}
+            if(mode!="ERASE"){
+                mode="ERASE";palette.visibility=View.GONE
+                controls.selected=3;status.text="ERASE / REMOVE MANUAL PAINT"
+            }else{
+                mode="VIEW";controls.selected=-1;status.text="MAP READY"
+            }
         }
         viewButton.setOnClickListener {showLayers(viewButton)}
-        compass.setOnClickListener { map.mapOrientation = 0f }
         map.setUseDataConnection(true)
         loadDubaiTemperature()
         applyMapSource(getSharedPreferences("terra_map_source",Context.MODE_PRIVATE).getInt("selected",0))
