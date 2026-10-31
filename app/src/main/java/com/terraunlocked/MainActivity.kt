@@ -1998,7 +1998,7 @@ class MainActivity : Activity(), SensorEventListener {
             selectedTab=tab
             tabButtons.forEachIndexed {i,button->applyExpeditionStyle(button,tabs[i]==tab)}
             optionGrid.removeAllViews()
-            val operations:List<Pair<String,()->Unit>>=when(tab) {
+            val operations:List<Pair<String,()->Unit>> = when(tab) {
                 "FIELD"->listOf(
                     "⌁  RECOVER GPS" to {scanSmartPaths()},
                     "×  CLEAR PREVIEW" to {inferredPaths=emptyList();refresh()},
