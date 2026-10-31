@@ -155,7 +155,8 @@ class MainActivity : Activity(), SensorEventListener {
                 // Service has already saved the fix; avoid loading all historical JSON.
                 val t=intent.getLongExtra("timestamp",System.currentTimeMillis())
                 if(records.lastOrNull()?.timestamp!=t)
-                    records.add(DiscoveryPoint(lat,lon,false,t))
+                    records.add(DiscoveryPoint(intent.getDoubleExtra("rawLat",lat),
+                        intent.getDoubleExtra("rawLon",lon),false,t))
             }
             val weak=intent.getBooleanExtra("weak",false)
             if(!weak)expeditionBottom?.gpsSearching=false
