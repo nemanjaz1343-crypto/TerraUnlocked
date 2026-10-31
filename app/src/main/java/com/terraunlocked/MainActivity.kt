@@ -799,7 +799,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
     private fun tacticalPanel():GradientDrawable = GradientDrawable().apply {
         cornerRadius=dp(16).toFloat()
-        setColor(Color.argb(126,29,43,34))
+        setColor(Color.argb(238,38,47,38))
         setStroke(dp(1),Color.argb(190,155,181,134))
     }
     private fun showMapLookup() {
@@ -1083,7 +1083,8 @@ class MainActivity : Activity(), SensorEventListener {
             if(index>=0){notes[index]=edited;fieldNotes.save(notes);refresh()}
             return edited
         }
-        val dialog=android.app.AlertDialog.Builder(this).setView(panel)
+        val journalScroll=android.widget.ScrollView(this).apply {fillViewport=false;addView(panel)}
+        val dialog=android.app.AlertDialog.Builder(this).setView(journalScroll)
             .setNegativeButton("CLOSE",null)
             .setPositiveButton("SAVE") {_,_->updateNote()}
             .setNeutralButton("DELETE") {_,_->notes.removeAll {it.time==current.time};fieldNotes.save(notes);refresh()}
