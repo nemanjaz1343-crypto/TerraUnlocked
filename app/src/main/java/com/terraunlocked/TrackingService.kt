@@ -45,6 +45,7 @@ class TrackingService:Service() {
         if(!weak)lastVisual=shown
         sendBroadcast(Intent(ACTION_FIX).setPackage(packageName).apply {
             putExtra("lat",shown.latitude);putExtra("lon",shown.longitude)
+            putExtra("rawLat",loc.latitude);putExtra("rawLon",loc.longitude)
             putExtra("accuracy",loc.accuracy);putExtra("revealed",revealed)
             putExtra("eco",eco);putExtra("weak",weak)
             putExtra("timestamp",sampleTime)
