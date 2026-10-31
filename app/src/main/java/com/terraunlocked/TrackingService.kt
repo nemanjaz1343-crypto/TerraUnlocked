@@ -25,6 +25,46 @@ class TrackingService:Service() {
     private var lastVisitCheck=0L
     private var previous:Location?=null
     private var lastSaved:Location?=null
+    private var motionAnchor:Location?=null
+    private var stationarySince=0L
+    private var lastSwitch=0L
+    private var ecoMode=false
+    private var lastBroadcast=0L
+
+    private fun switchMode(eco:Boolean) {
+        val now=android.os.SystemClock.elapsedRealtime()
+        if(!running || ecoMode==eco || now-lastSwitch<20000L)return
+        ecoMode=eco
+        lastSwitch=now
+        val request=if(eco) {
+            LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY,20000L)
+                .setMinUpdateIntervalMillis(10000L).setMaxUpdateDelayMillis(30000L)
+                .setMinUpdateDistanceMeters(10f).build()
+        } else {
+            LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,5000L)
+                .setMinUpdateIntervalMillis(2500L).setMaxUpdateDelayMillis(10000L)
+                .setMinUpdateDistanceMeters(5f).build()
+        }
+        if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED) {
+            client.requestLocationUpdates(request,callback,mainLooper)
+        }
+        val text=if(eco)"Stationary / battery saver" else "Moving / high accuracy"
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(1801,makeNotification(text))
+    }
+
+    private fun makeNotification(message:String):Notification {
+        val open=PendingIntent.getActivity(this,0,Intent(this,MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val stop=PendingIntent.getService(this,1,Intent(this,TrackingService::class.java).apply {
+            action=ACTION_STOP
+        },PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        return Notification.Builder(this,"terra_recon")
+            .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+            .setContentTitle("TerraUnlocked / RECON ACTIVE")
+            .setContentText(message).setContentIntent(open)
+            .addAction(android.R.drawable.ic_media_pause,"STOP",stop)
+            .setOngoing(true).build()
+    }
     private val callback=object:LocationCallback() {
         override fun onLocationResult(result:LocationResult) {
             result.locations.forEach {loc->
@@ -34,7 +74,26 @@ class TrackingService:Service() {
                 val jump=prev!=null && seconds>0.5 &&
                     prev.distanceTo(loc)>maxOf(45f,2f*maxOf(prev.accuracy,loc.accuracy)) &&
                     prev.distanceTo(loc)/seconds>55.0
-                if(loc.accuracy>65f || jump)return@forEach
+                if(loc.accuracy>65f || jump) {
+                    if(prev!=null && seconds>45.0)previous=null
+                    return@forEach
+                }
+                val nowElapsed=android.os.SystemClock.elapsedRealtime()
+                val anchor=motionAnchor
+                if(anchor==null) {
+                    motionAnchor=loc
+                    stationarySince=nowElapsed
+                } else {
+                    val threshold=maxOf(22f,2f*maxOf(anchor.accuracy,loc.accuracy))
+                    val moving=anchor.distanceTo(loc)>threshold || (loc.hasSpeed() && loc.speed>2.5f)
+                    if(moving) {
+                        motionAnchor=loc
+                        stationarySince=nowElapsed
+                        if(ecoMode)switchMode(false)
+                    } else if(!ecoMode && nowElapsed-stationarySince>=120000L) {
+                        switchMode(true)
+                    }
+                }
                 previous=loc
                 val now=System.currentTimeMillis()
                 if(now-lastVisitCheck>60000L && loc.accuracy<=30f) {
@@ -58,11 +117,15 @@ class TrackingService:Service() {
                     store.add(DiscoveryPoint(loc.latitude,loc.longitude,false,System.currentTimeMillis()))
                     lastSaved=loc
                 }
+                if(moved || now-lastBroadcast>=15000L) {
+                lastBroadcast=now
                 sendBroadcast(Intent(ACTION_FIX).setPackage(packageName).apply {
                     putExtra("lat",loc.latitude);putExtra("lon",loc.longitude)
                     putExtra("accuracy",loc.accuracy)
                     putExtra("revealed",moved)
+                    putExtra("eco",ecoMode)
                 })
+                }
             }
         }
     }
@@ -75,27 +138,17 @@ class TrackingService:Service() {
         }
         val manager=getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         manager.createNotificationChannel(NotificationChannel("terra_recon","TerraUnlocked tracking",NotificationManager.IMPORTANCE_LOW))
-        val open=PendingIntent.getActivity(this,0,Intent(this,MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val stop=PendingIntent.getService(this,1,Intent(this,TrackingService::class.java).apply {
-            action=ACTION_STOP
-        },PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val notification=Notification.Builder(this,"terra_recon")
-            .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-            .setContentTitle("TerraUnlocked • RECON ACTIVE")
-            .setContentText("Exploration continues while the screen is off")
-            .setContentIntent(open)
-            .addAction(android.R.drawable.ic_media_pause,"STOP",stop)
-            .setOngoing(true).build()
         if(Build.VERSION.SDK_INT>=29)
-            startForeground(1801,notification,ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
-        else startForeground(1801,notification)
+            startForeground(1801,makeNotification("Moving / high accuracy"),ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+        else startForeground(1801,makeNotification("Moving / high accuracy"))
         running=true
         sendBroadcast(Intent(ACTION_STATE).setPackage(packageName).putExtra("running",true))
-        val request=LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,8000L)
-            .setMinUpdateIntervalMillis(4000L)
-            .setMaxUpdateDelayMillis(12000L)
-            .setMinUpdateDistanceMeters(8f).build()
+        ecoMode=false
+        lastSwitch=0L
+        val request=LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,5000L)
+            .setMinUpdateIntervalMillis(2500L)
+            .setMaxUpdateDelayMillis(10000L)
+            .setMinUpdateDistanceMeters(5f).build()
         client.requestLocationUpdates(request,callback,mainLooper)
         return START_STICKY
     }
