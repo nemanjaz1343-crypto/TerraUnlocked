@@ -669,6 +669,44 @@ class MainActivity : Activity(), SensorEventListener {
             status.text="PATH CONFIRMED"
             refresh()
         }
+        // A small right-hand journal tab; the map underneath is unchanged.
+        val journalTab=action("‹\n▤").apply {
+            textSize=16f
+            applyExpeditionStyle(this)
+            contentDescription="Open Expedition Journal drawer"
+        }
+        val drawerPanel=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(12),dp(12),dp(12),dp(12))
+            background=GradientDrawable().apply {
+                cornerRadius=dp(12).toFloat()
+                setColor(Color.rgb(39,42,31))
+                setStroke(dp(1),Color.rgb(164,135,80))
+            }
+            visibility=View.GONE
+        }
+        drawerPanel.addView(label("EXPEDITION / FIELD NOTES",14,sand))
+        drawerPanel.addView(action("▤  OPEN JOURNAL").apply {
+            applyExpeditionStyle(this)
+            setOnClickListener{drawerPanel.visibility=View.GONE;showExpeditionJournal()}
+        },LinearLayout.LayoutParams(-1,dp(48)))
+        drawerPanel.addView(action("◈  EXPLORATION STATS").apply {
+            applyExpeditionStyle(this)
+            setOnClickListener{drawerPanel.visibility=View.GONE;showExplorationStats()}
+        },LinearLayout.LayoutParams(-1,dp(48)))
+        drawerPanel.addView(action("×  CLOSE").apply{
+            applyExpeditionStyle(this)
+            setOnClickListener{drawerPanel.visibility=View.GONE}
+        },LinearLayout.LayoutParams(-1,dp(42)))
+        val drawerParams=FrameLayout.LayoutParams(dp(240),-2,Gravity.END or Gravity.CENTER_VERTICAL)
+        drawerParams.rightMargin=dp(4)
+        mapArea.addView(drawerPanel,drawerParams)
+        val tabParams=FrameLayout.LayoutParams(dp(34),dp(76),Gravity.END or Gravity.CENTER_VERTICAL)
+        mapArea.addView(journalTab,tabParams)
+        journalTab.setOnClickListener {
+            drawerPanel.visibility=if(drawerPanel.visibility==View.VISIBLE)View.GONE else View.VISIBLE
+            journalTab.text=if(drawerPanel.visibility==View.VISIBLE)"›\n▤" else "‹\n▤"
+        }
         root.addView(mapArea,LinearLayout.LayoutParams(-1,0,1f))
         val markTools=LinearLayout(this).apply {
             setBackgroundColor(Color.rgb(25,32,25));gravity=Gravity.CENTER
@@ -1731,7 +1769,6 @@ class MainActivity : Activity(), SensorEventListener {
             panel.addView(action(name).apply { setOnClickListener { callback(); layersPopup?.dismiss() } },
                 LinearLayout.LayoutParams(-1, dp(43)))
         }
-        option("EXPEDITION JOURNAL") {showExpeditionJournal()}
         option("RECOVER GPS GAPS / PREVIEW") {scanSmartPaths()}
         option("HIDE INFERRED PATHS") {inferredPaths=emptyList();refresh()}
         option("EXPLORATION STATISTICS") {showExplorationStats()}
