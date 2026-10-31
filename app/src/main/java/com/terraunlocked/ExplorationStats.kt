@@ -18,6 +18,23 @@ object ExplorationStats {
             meters[0] in 5f..120f && meters[0]/seconds<=12.0
         }
     }
+
+    fun gpsGaps(points:List<DiscoveryPoint>):Int {
+        return points.filter{!it.manual}.sortedBy{it.timestamp}.zipWithNext()
+            .count{(a,b)->b.timestamp-a.timestamp>90000L && b.timestamp-a.timestamp<3600000L}
+    }
+    fun distanceToday(points:List<DiscoveryPoint>):Double {
+        val start=Calendar.getInstance().apply {set(Calendar.HOUR_OF_DAY,0);set(Calendar.MINUTE,0);set(Calendar.SECOND,0);set(Calendar.MILLISECOND,0)}.timeInMillis
+        return eligibleSteps(points.filter{it.timestamp>=start}).sumOf{(a,b)->
+            FloatArray(1).also{Location.distanceBetween(a.latitude,a.longitude,b.latitude,b.longitude,it)}[0].toDouble()
+        }
+    }
+    fun distanceThisMonth(points:List<DiscoveryPoint>):Double {
+        val start=Calendar.getInstance().apply {set(Calendar.DAY_OF_MONTH,1);set(Calendar.HOUR_OF_DAY,0);set(Calendar.MINUTE,0);set(Calendar.SECOND,0);set(Calendar.MILLISECOND,0)}.timeInMillis
+        return eligibleSteps(points.filter{it.timestamp>=start}).sumOf{(a,b)->
+            FloatArray(1).also{Location.distanceBetween(a.latitude,a.longitude,b.latitude,b.longitude,it)}[0].toDouble()
+        }
+    }
     fun calculate(points:List<DiscoveryPoint>,notes:List<FieldNote>,until:Long=Long.MAX_VALUE):ReconStats {
         val filtered=points.filter {it.timestamp<=until}
         val steps=eligibleSteps(filtered)
