@@ -154,7 +154,8 @@ class MainActivity : Activity(), SensorEventListener {
             if(revealed) {
                 records.clear();records.addAll(store.load())
             }
-            status.text=(if(intent.getBooleanExtra("eco",false))"GPS ECO" else "GPS ACTIVE")+" / ±"+fogOverlay.positionAccuracy.toInt()+"m"
+            expeditionBottom?.gpsSearching=false
+        status.text=(if(intent.getBooleanExtra("eco",false))"GPS ECO" else "GPS ACTIVE")+" / ±"+fogOverlay.positionAccuracy.toInt()+"m"
             val now=System.currentTimeMillis()
             if(now-lastGpsUiRefresh>=3500L) {
                 lastGpsUiRefresh=now
@@ -558,7 +559,7 @@ class MainActivity : Activity(), SensorEventListener {
                     val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
                     kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(22)
                 } ?: return false
-                focusObjective(hit);return true
+                showObjective(hit);return true
             }
             override fun onLongPress(event:MotionEvent,mapView:MapView):Boolean {
                 if(mode!="VIEW")return false
@@ -566,7 +567,7 @@ class MainActivity : Activity(), SensorEventListener {
                     val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
                     kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(24)
                 } ?: return false
-                focusObjective(hit,true);return true
+                showObjective(hit);return true
             }
         })
         map.overlays.add(object:Overlay() {
@@ -769,6 +770,7 @@ class MainActivity : Activity(), SensorEventListener {
         expeditionBottom=controls
         controls.selected=-1
         controls.trackingActive=tracking
+        controls.gpsSearching=tracking && fogOverlay.currentPosition==null
         fun chooseMark(next:String) {
             mode=next
             pending.clear();lasso.clear();lassoFinished=false
@@ -785,8 +787,8 @@ class MainActivity : Activity(), SensorEventListener {
         }
         palette=ExpeditionMarkPanelView(this){index->
             when(index){
-                0->markRedoAction()
-                1->markUndoAction()
+                0->markUndoAction()
+                1->markRedoAction()
                 2->chooseMark("PATH")
                 3->chooseMark("PAINT")
                 4->chooseMark("LASSO")
@@ -810,10 +812,16 @@ class MainActivity : Activity(), SensorEventListener {
                 else requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,Manifest.permission.ACCESS_COARSE_LOCATION),10)
             }
             controls.trackingActive=tracking
+            controls.gpsSearching=tracking && fogOverlay.currentPosition==null
         }
         followButton.setOnClickListener {
             followUser=true
-            fogOverlay.currentPosition?.let{map.controller.setZoom(18.0);map.controller.animateTo(it)}
+            fogOverlay.currentPosition?.let{
+                val next=(map.zoomLevelDouble+0.5849625).coerceAtMost(map.maxZoomLevel.toDouble())
+                map.controller.setZoom(next)
+                map.controller.animateTo(it)
+                status.text="FOLLOW / ZOOM 150%"
+            }
                 ?:run{status.text="FOLLOW / WAITING FOR GPS"}
         }
         markButton.setOnClickListener {
@@ -981,9 +989,13 @@ class MainActivity : Activity(), SensorEventListener {
         status.text="NAV / "+target.title.take(12)+" / "+distance+" / "+readings[1].toInt()+"°"
     }
     private fun focusObjective(o:ReconObjective,extent:Boolean=false) {
-        // A tap opens information only; it must not activate a map reticle.
+        // The MISSIONS list only flies to the target. Its icon opens the detail actions.
         clearMapPreview()
-        showObjective(o)
+        followUser=false
+        if(extent && map.zoomLevelDouble<17.0)map.controller.setZoom(17.0)
+        map.controller.animateTo(GeoPoint(o.latitude,o.longitude))
+        status.text="MISSION / "+o.name.take(36)+" / TAP MAP ICON FOR DETAILS"
+        refresh()
     }
     private fun showObjectiveHint(o:ReconObjective) { showObjective(o) }
     private fun clearMapPreview() {
@@ -1972,6 +1984,7 @@ class MainActivity : Activity(), SensorEventListener {
         startForegroundService(Intent(this,TrackingService::class.java).apply {action=TrackingService.ACTION_START})
         tracking=true
         expeditionBottom?.trackingActive=true
+        expeditionBottom?.gpsSearching=fogOverlay.currentPosition==null
         trackButton.text="STOP GPS"
         status.text="RECON ACTIVE / BACKGROUND ENABLED"
     }
@@ -1979,6 +1992,7 @@ class MainActivity : Activity(), SensorEventListener {
         startService(Intent(this,TrackingService::class.java).apply {action=TrackingService.ACTION_STOP})
         tracking=false
         expeditionBottom?.trackingActive=false
+        expeditionBottom?.gpsSearching=false
         trackButton.text="TRACK"
         status.text="TRACK STOPPED"
     }
@@ -2014,6 +2028,7 @@ class MainActivity : Activity(), SensorEventListener {
         super.onResume(); map.onResume()
         tracking=TrackingService.running
         expeditionBottom?.trackingActive=tracking
+        expeditionBottom?.gpsSearching=tracking && fogOverlay.currentPosition==null
         if(::trackButton.isInitialized)trackButton.text=if(tracking)"STOP GPS" else "TRACK"
         if(::store.isInitialized) {records.clear();records.addAll(store.load());notes.clear();notes.addAll(fieldNotes.load());refresh()}
         val filter=IntentFilter(TrackingService.ACTION_FIX)
