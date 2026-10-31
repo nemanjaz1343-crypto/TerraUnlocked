@@ -197,6 +197,58 @@ class MainActivity : Activity(), SensorEventListener {
     private var movingPinTime:Long?=null
     private var movingObjectiveId:String?=null
     private var movePinBar:LinearLayout?=null
+    private var movingPreview:GeoPoint?=null
+    private var movingOriginalNote:FieldNote?=null
+
+    private fun chooseMoveDestination(point:GeoPoint) {
+        if(movingPinTime==null && movingObjectiveId==null)return
+        val target=GeoPoint(point.latitude,point.longitude)
+        movingPreview=target
+        movingPinTime?.let {id->
+            val index=notes.indexOfFirst {it.time==id}
+            if(index>=0)notes[index]=notes[index].copy(
+                latitude=target.latitude,longitude=target.longitude)
+        }
+        status.text="MOVE PIN / DRAG OR TAP MAP / CONFIRM TO SAVE"
+        refresh()
+    }
+    private fun cancelPinMove() {
+        movingOriginalNote?.let {original->
+            val index=notes.indexOfFirst {it.time==original.time}
+            if(index>=0)notes[index]=original
+        }
+        movingOriginalNote=null
+        movingPreview=null
+        movingPinTime=null
+        movingObjectiveId=null
+        movePinBar?.visibility=View.GONE
+        status.text="MOVE PIN / CANCELLED"
+        refresh()
+    }
+    private fun savePinMove() {
+        val target=movingPreview
+        if(target==null){status.text="MOVE PIN / CHOOSE A LOCATION FIRST";return}
+        val noteId=movingPinTime
+        if(noteId!=null) {
+            val index=notes.indexOfFirst{it.time==noteId}
+            if(index>=0) {
+                notes[index]=notes[index].copy(
+                    latitude=target.latitude,longitude=target.longitude)
+                fieldNotes.save(notes)
+            }
+        }
+        movingObjectiveId?.let {id->
+            objectiveStore.moveCustom(id,target.latitude,target.longitude)
+        }
+        movingOriginalNote=null
+        movingPreview=null
+        movingPinTime=null
+        movingObjectiveId=null
+        movePinBar?.visibility=View.GONE
+        status.text="MOVE PIN / LOCATION SAVED"
+        refresh()
+    }
+
     private var historyCutoff:Long?=null
     private var timeMachinePopup:PopupWindow?=null
     private lateinit var objectiveStore:ObjectiveStore
