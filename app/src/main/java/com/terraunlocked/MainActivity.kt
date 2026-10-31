@@ -1063,7 +1063,7 @@ class MainActivity : Activity(), SensorEventListener {
         map.controller.animateTo(GeoPoint(o.latitude,o.longitude))
         status.text="MISSION / "+o.name.take(36)
         refresh()
-        handler.postDelayed({if(!isFinishing)showObjective(o)},420L)
+        // Details stay attached to the marker and open only when it is tapped.
     }
     private fun showObjectiveHint(o:ReconObjective) { showObjective(o) }
     private fun clearMapPreview() {
