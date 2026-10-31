@@ -92,6 +92,10 @@ class TrackingService:Service() {
         override fun onLocationResult(result:LocationResult) {
             result.locations.forEach {loc->
                 if(!loc.hasAccuracy() || !loc.latitude.isFinite() || !loc.longitude.isFinite())return@forEach
+                // Ignore stale batched/cached positions; a delayed old fix can appear
+                // as a wild GPS jump beside skyscrapers.
+                val fixAgeMs=(android.os.SystemClock.elapsedRealtimeNanos()-loc.elapsedRealtimeNanos)/1000000L
+                if(fixAgeMs>25000L || fixAgeMs< -5000L)return@forEach
                 val prev=previous
                 val seconds=if(prev!=null)(loc.elapsedRealtimeNanos-prev.elapsedRealtimeNanos)/1e9 else 0.0
                 val jump=prev!=null && seconds>0.5 &&
@@ -160,8 +164,13 @@ class TrackingService:Service() {
                     if(changed)fieldNotes.save(updated)
                 }
                 val saved=lastSaved
-                val moved=saved==null || saved.distanceTo(loc)>=
-                    maxOf(12f,1.1f*maxOf(saved.accuracy,loc.accuracy))
+                // Don't permanently reveal random stationary GPS wandering.
+                // Moving users still get regular samples, including fast scooter/car trips.
+                val step=saved?.distanceTo(loc) ?: Float.MAX_VALUE
+                val movingSpeed=loc.hasSpeed() && loc.speed>=0.9f
+                val threshold=if(movingSpeed)maxOf(12f,1.25f*loc.accuracy)
+                    else maxOf(24f,1.9f*loc.accuracy)
+                val moved=saved==null || step>=threshold
                 if(moved) {
                     store.add(DiscoveryPoint(loc.latitude,loc.longitude,false,now))
                     lastSaved=loc
