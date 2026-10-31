@@ -302,24 +302,6 @@ class MainActivity : Activity(), SensorEventListener {
                 setMyLocation();return true
             }
         })
-        map.overlays.add(object:Overlay() {
-            override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
-                if(shadow)return
-                val marker=notes.firstOrNull {it.time==navigationTarget} ?: return
-                val user=fogOverlay.currentPosition ?: return
-                val results=FloatArray(2)
-                android.location.Location.distanceBetween(user.latitude,user.longitude,marker.latitude,marker.longitude,results)
-                val bearing=Math.toRadians((results[1]-mapView.mapOrientation).toDouble())
-                val cx=canvas.width/2f;val cy=dp(54).toFloat()
-                val ink=Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.rgb(241,214,143);strokeWidth=dp(3).toFloat();style=Paint.Style.STROKE}
-                val dx=kotlin.math.sin(bearing).toFloat();val dy=-kotlin.math.cos(bearing).toFloat()
-                canvas.drawCircle(cx,cy,dp(22).toFloat(),Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.argb(210,28,41,33)})
-                canvas.drawLine(cx-dx*dp(9),cy-dy*dp(9),cx+dx*dp(13),cy+dy*dp(13),ink)
-                val text=Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.WHITE;textSize=dp(10).toFloat();textAlign=Paint.Align.CENTER}
-                val distance=if(results[0]>=1000f) "%.1f km".format(results[0]/1000f) else "%.0f m".format(results[0])
-                canvas.drawText(distance,cx,cy+dp(37),text)
-            }
-        })
         map.overlays.add(object : Overlay() {
             override fun onSingleTapConfirmed(event:MotionEvent,mapView:MapView):Boolean {
                 if(mode!="VIEW") return false
@@ -985,7 +967,11 @@ class MainActivity : Activity(), SensorEventListener {
         panel.addView(label("OBJECTIVE / "+o.category,12,sage))
         panel.addView(label(o.name,17,sand))
         panel.addView(label(o.brief,13,sand))
-        panel.addView(label("SOURCE / "+o.source,10,sage))
+        fogOverlay.currentPosition?.let {position->
+            val out=FloatArray(1)
+            android.location.Location.distanceBetween(position.latitude,position.longitude,o.latitude,o.longitude,out)
+            panel.addView(label("DISTANCE / "+(if(out[0]>=1000f)"%.1f km".format(java.util.Locale.US,out[0]/1000f) else "${out[0].toInt()} m"),12,sage))
+        }
         val dialog=android.app.AlertDialog.Builder(this).setView(panel).setNegativeButton("CLOSE",null).create()
         panel.addView(action("⌖ SET ACTIVE").apply {setOnClickListener {
             objectiveStore.active=o.id;clearMapPreview();refresh();dialog.dismiss()
@@ -1018,9 +1004,13 @@ class MainActivity : Activity(), SensorEventListener {
                 setStroke(dp(1),Color.rgb(115,137,103))
             }
         }
-        panel.addView(label("FIELD INVENTORY / EDIT",12,sand))
-        panel.addView(label("VISITS / "+current.visits.size,11,sage))
-        panel.addView(action("⌖ NAVIGATE").apply {setOnClickListener {navigationTarget=current.time;updateNavigation()}})
+        panel.addView(label("FIELD JOURNAL / PIN DETAILS",12,sand))
+
+        fogOverlay.currentPosition?.let {position->
+            val out=FloatArray(1)
+            android.location.Location.distanceBetween(position.latitude,position.longitude,current.latitude,current.longitude,out)
+            panel.addView(label("DISTANCE / "+(if(out[0]>=1000f)"%.1f km".format(java.util.Locale.US,out[0]/1000f) else "${out[0].toInt()} m"),12,sage))
+        }
         val moveButton=action("↔ MOVE PIN")
         panel.addView(moveButton)
         val name=EditText(this).apply {
@@ -1030,8 +1020,8 @@ class MainActivity : Activity(), SensorEventListener {
         panel.addView(name)
         val memo=EditText(this).apply {
             setText(if(current.kind=="PHOTO"||current.kind=="VOICE") "" else current.body)
-            minLines=2;maxLines=4;setTextColor(sand);setHintTextColor(sage)
-            hint="Visit notes..."
+            minLines=3;maxLines=7;setTextColor(sand);setHintTextColor(sage)
+            hint="Field notes / observations..."
         }
         if(current.kind!="PHOTO"&&current.kind!="VOICE")panel.addView(memo)
         var selected=current.icon
@@ -1129,25 +1119,6 @@ class MainActivity : Activity(), SensorEventListener {
             setOnClickListener {
                 updateNote();voiceNoteTime=current.time
                 startVoice(GeoPoint(current.latitude,current.longitude))
-                dialog.dismiss()
-            }
-        })
-        panel.addView(action("＋ QUICK BRIEF").apply {
-            setOnClickListener {
-                updateNote()
-                val entry=EditText(this@MainActivity).apply {hint="Visit observations";minLines=2}
-                android.app.AlertDialog.Builder(this@MainActivity).setTitle("QUICK BRIEF")
-                    .setView(entry).setNegativeButton("CANCEL",null)
-                    .setPositiveButton("ADD") {_,_->
-                        val idx=notes.indexOfFirst {it.time==current.time}
-                        if(idx>=0 && entry.text.isNotBlank()) {
-                            val old=notes[idx]
-                            val date=java.text.DateFormat.getDateTimeInstance().format(java.util.Date())
-                            notes[idx]=old.copy(body=old.body+"\n["+date+"] "+entry.text.toString(),
-                                visits=old.visits+System.currentTimeMillis())
-                            fieldNotes.save(notes);refresh()
-                        }
-                    }.show()
                 dialog.dismiss()
             }
         })
