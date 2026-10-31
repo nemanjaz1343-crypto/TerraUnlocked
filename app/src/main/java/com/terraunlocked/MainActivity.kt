@@ -712,6 +712,7 @@ class MainActivity : Activity(), SensorEventListener {
         val journalWidth=dp(230)
         val journalTabWidth=dp(31)
         val journalDrawer=FrameLayout(this)
+        var journalTabRef:ExpeditionJournalTab?=null
         val drawerPanel=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
             setPadding(dp(13),dp(12),dp(13),dp(12))
@@ -725,6 +726,7 @@ class MainActivity : Activity(), SensorEventListener {
             setTypeface(Typeface.SERIF,Typeface.BOLD)
         })
         fun slideJournal(open:Boolean) {
+            journalTabRef?.open=open
             journalDrawer.animate().cancel()
             journalDrawer.animate()
                 .translationX(if(open)0f else journalWidth.toFloat())
@@ -749,6 +751,7 @@ class MainActivity : Activity(), SensorEventListener {
             val opening=journalDrawer.translationX>journalWidth/2f
             slideJournal(opening)
         }
+        journalTabRef=journalTab
         journalDrawer.addView(journalTab,FrameLayout.LayoutParams(journalTabWidth,dp(90),Gravity.START or Gravity.CENTER_VERTICAL))
         journalDrawer.translationX=journalWidth.toFloat()
         mapArea.addView(journalDrawer,FrameLayout.LayoutParams(
@@ -789,8 +792,8 @@ class MainActivity : Activity(), SensorEventListener {
         }
         palette=ExpeditionMarkPanelView(this){index->
             when(index){
-                0->markUndoAction()
-                1->markRedoAction()
+                0->markRedoAction()
+                1->markUndoAction()
                 2->chooseMark("PATH")
                 3->chooseMark("PAINT")
                 4->chooseMark("LASSO")
