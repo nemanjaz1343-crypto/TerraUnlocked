@@ -203,6 +203,8 @@ internal class ExpeditionHeaderView(context:Context,
 }
 internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):View(context) {
     var selected:Int=2;set(value){field=value;invalidate()}
+    var trackingActive:Boolean=false;set(value){field=value;invalidate()}
+    private var pressedIndex=-1
     private val d=resources.displayMetrics.density
     private val labels=arrayOf("TRACK","FOLLOW","MARK","ERASE","MAP")
     private val icons=arrayOf("track","follow","mark","erase","map")
@@ -213,23 +215,40 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
         val step=(w-6*d)/5
         for(i in 0..4){
             val x=3*d+(i+.5f)*step
-            if(i==selected){
+            if(i==selected || i==pressedIndex || (i==0 && trackingActive)){
                 ExpeditionArt.panel(c,RectF(3*d+i*step,3*d,3*d+(i+1)*step,h-3*d),true,7*d)
                 ExpeditionArt.rule(c,x-step*.27f,h-8*d,x+step*.27f,h-8*d,ExpeditionArt.light,2*d)
             }
             if(i>0 && i!=selected && i-1!=selected)
                 ExpeditionArt.rule(c,3*d+i*step,11*d,3*d+i*step,h-10*d,ExpeditionArt.muted,.75f*d)
             ExpeditionArt.icon(c,icons[i],x,17*d,21*d,ExpeditionArt.light)
-            ExpeditionArt.label(c,labels[i],x,h-8*d,10.5f*d,ExpeditionArt.light,false,.4f*d)
+            ExpeditionArt.label(c,if(i==0 && trackingActive)"STOP" else labels[i],x,h-8*d,10.5f*d,ExpeditionArt.light,false,.4f*d)
+            if(i==0 && trackingActive){
+                ExpeditionArt.p.style=Paint.Style.FILL
+                ExpeditionArt.p.color=Color.rgb(181,216,132)
+                c.drawCircle(x+17*d,13*d,3*d,ExpeditionArt.p)
+            }
         }
     }
     override fun onTouchEvent(e:MotionEvent):Boolean {
-        if(e.actionMasked==MotionEvent.ACTION_UP){
-            val idx=(5*e.x/width).toInt().coerceIn(0,4)
-            onSelect(idx);return true
+        when(e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                pressedIndex=(5*e.x/width).toInt().coerceIn(0,4)
+                invalidate();return true
+            }
+            MotionEvent.ACTION_UP -> {
+                val idx=(5*e.x/width).toInt().coerceIn(0,4)
+                val shouldClick=idx==pressedIndex
+                pressedIndex=-1;invalidate()
+                if(shouldClick)onSelect(idx)
+                performClick()
+                return true
+            }
+            MotionEvent.ACTION_CANCEL -> {pressedIndex=-1;invalidate();return true}
         }
         return true
     }
+    override fun performClick():Boolean {super.performClick();return true}
 }
 internal class ExpeditionMarkPanelView(context:Context,val onSelect:(Int)->Unit):View(context) {
     var selected:Int=-1;set(value){field=value;invalidate()}
@@ -241,13 +260,13 @@ internal class ExpeditionMarkPanelView(context:Context,val onSelect:(Int)->Unit)
         val bottom=h-15*d
         ExpeditionArt.panel(c,RectF(1.5f*d,1.5f*d,w-1.5f*d,bottom),false,9*d)
         val step=(w-4*d)/5
-        val names=arrayOf("undo","redo","path","paint","lasso")
+        val names=arrayOf("redo","undo","path","paint","lasso")
         for(i in 0..4){
             val x=2*d+(i+.5f)*step
             if(i==selected && i>=2)
                 ExpeditionArt.panel(c,RectF(x-step*.36f,5*d,x+step*.36f,bottom-5*d),true,6*d)
             if(i==2)ExpeditionArt.rule(c,x-step/2,10*d,x-step/2,bottom-8*d,ExpeditionArt.muted,.8f*d)
-            ExpeditionArt.icon(c,names[i],x,21*d,21*d,if((i==0&&!canUndo)||(i==1&&!canRedo))ExpeditionArt.muted else ExpeditionArt.light)
+            ExpeditionArt.icon(c,names[i],x,21*d,21*d,if((i==0&&!canRedo)||(i==1&&!canUndo))ExpeditionArt.muted else ExpeditionArt.light)
             if(i>=2)ExpeditionArt.label(c,names[i].uppercase(),x,bottom-7*d,9.5f*d)
         }
         val tri=Path().apply {moveTo(w/2-12*d,bottom);lineTo(w/2,bottom+13*d);lineTo(w/2+12*d,bottom)}
@@ -267,7 +286,10 @@ internal class ExpeditionJournalTab(context:Context,val onToggle:()->Unit):View(
     override fun onDraw(c:Canvas) {
         val w=width.toFloat();val h=height.toFloat()
         ExpeditionArt.panel(c,RectF(0f,2*d,w+5*d,h-2*d),false,7*d)
+        c.save()
+        if(open) {c.rotate(180f,w*.46f,h*.35f)}
         ExpeditionArt.icon(c,"chevron",w*.46f,h*.35f,16*d,ExpeditionArt.light)
+        c.restore()
         ExpeditionArt.icon(c,"book",w*.46f,h*.70f,18*d,ExpeditionArt.light)
     }
     override fun onTouchEvent(e:MotionEvent):Boolean {
