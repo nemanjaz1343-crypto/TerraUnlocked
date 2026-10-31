@@ -101,7 +101,9 @@ internal object ExpeditionArt {
                 path(-9f,8f,0f,13f,9f,8f)
             }
             "undo","redo" -> {
-                val d=if(name=="undo")-1f else 1f
+                // First button remains UNDO and second remains REDO.
+                // Point away from each other: left for undo, right for redo.
+                val d=if(name=="undo")1f else -1f
                 val v=Path().apply {
                     moveTo(-d*9f,-5f);lineTo(-d*3f,-11f);moveTo(-d*9f,-5f);lineTo(-d*2f,1f)
                     moveTo(-d*9f,-5f);lineTo(d*2f,-5f)
