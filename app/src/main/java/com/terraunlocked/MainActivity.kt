@@ -147,9 +147,19 @@ class MainActivity : Activity(), SensorEventListener {
             val lon=intent.getDoubleExtra("lon",Double.NaN)
             if(!lat.isFinite() || !lon.isFinite())return
             val point=GeoPoint(lat,lon)
-            fogOverlay.currentPosition=point
+            val weak=intent.getBooleanExtra("weak",false)
+            // A weak fix updates the uncertainty label, not a trusted map position.
+            // Suppress tiny recentering jumps to avoid repeated expensive tile/fog redraws.
+            if(!weak || fogOverlay.currentPosition==null)fogOverlay.currentPosition=point
             fogOverlay.positionAccuracy=intent.getFloatExtra("accuracy",0f)
-            if(followUser)map.controller.animateTo(point)
+            if(followUser && !weak) {
+                val viewCenter=map.mapCenter
+                val distance=FloatArray(1)
+                android.location.Location.distanceBetween(viewCenter.latitude,viewCenter.longitude,
+                    lat,lon,distance)
+                if(distance[0]>maxOf(11f,fogOverlay.positionAccuracy*.85f))
+                    map.controller.animateTo(point)
+            }
             val revealed=intent.getBooleanExtra("revealed",false)
             if(revealed) {
                 // Service has already saved the fix; avoid loading all historical JSON.
@@ -158,7 +168,6 @@ class MainActivity : Activity(), SensorEventListener {
                     records.add(DiscoveryPoint(intent.getDoubleExtra("rawLat",lat),
                         intent.getDoubleExtra("rawLon",lon),false,t))
             }
-            val weak=intent.getBooleanExtra("weak",false)
             if(!weak)expeditionBottom?.gpsSearching=false
             status.text=(if(weak)"GPS LOW ACCURACY" else
                 if(intent.getBooleanExtra("eco",false))"GPS ECO" else "GPS ACTIVE")+
