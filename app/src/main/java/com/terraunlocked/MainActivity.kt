@@ -86,6 +86,7 @@ class MainActivity : Activity(), SensorEventListener {
     private val markUndo=java.util.ArrayDeque<MarkState>()
     private val markRedo=java.util.ArrayDeque<MarkState>()
     private val lasso=mutableListOf<GeoPoint>()
+    private var lassoFinished=false
     private fun snapshotMark():MarkState=MarkState(records.filter{it.manual},segments.toList())
     private fun pushMark() {
         markUndo.addLast(snapshotMark())
@@ -132,7 +133,7 @@ class MainActivity : Activity(), SensorEventListener {
             }
             lat+=0.00018
         }
-        store.replaceAll(records);lasso.clear();refresh()
+        store.replaceAll(records);lasso.clear();lassoFinished=false;refresh()
         status.text="LASSO / $added POINTS"
     }
 
@@ -309,8 +310,11 @@ class MainActivity : Activity(), SensorEventListener {
             onNorth={map.mapOrientation=0f}
         ).also {root.addView(it,LinearLayout.LayoutParams(-1,dp(45)))}
         // The status text remains available to services; no extra row obscures the map.
-        status=label("GPS OFFLINE",10,sage).apply{visibility=View.GONE}
-        root.addView(status)
+        status=label("GPS OFFLINE  |  FOG 82%  |  R 20m",10,sage).apply{
+            setPadding(dp(12),dp(1),dp(8),dp(3))
+            setBackgroundColor(Color.rgb(14,20,16))
+        }
+        root.addView(status,LinearLayout.LayoutParams(-1,dp(22)))
         map = MapView(this).apply {
             setTileSource(TileSourceFactory.MAPNIK)
             setMultiTouchControls(true)
@@ -420,8 +424,9 @@ class MainActivity : Activity(), SensorEventListener {
                     val pixel=mapView.projection.toPixels(p,Point())
                     if(i==0)line.moveTo(pixel.x.toFloat(),pixel.y.toFloat())
                     else line.lineTo(pixel.x.toFloat(),pixel.y.toFloat())
-                    canvas.drawCircle(pixel.x.toFloat(),pixel.y.toFloat(),dp(3).toFloat(),ink)
+                    if(i==0 || i==lasso.lastIndex)canvas.drawCircle(pixel.x.toFloat(),pixel.y.toFloat(),dp(2).toFloat(),ink)
                 }
+                if(lassoFinished && lasso.size>=3)line.close()
                 canvas.drawPath(line,ink)
             }
         })
@@ -437,7 +442,44 @@ class MainActivity : Activity(), SensorEventListener {
                 val projected = mapView.projection.fromPixels(event.x.toInt(), event.y.toInt())
                 val geo = GeoPoint(projected.latitude, projected.longitude)
                 if(mode=="LASSO") {
-                    if(event.actionMasked==MotionEvent.ACTION_DOWN){lasso.add(geo);status.text="LASSO / ${lasso.size} POINTS";confirmButton.text="APPLY LASSO";confirmButton.visibility=if(lasso.size>=3)View.VISIBLE else View.GONE;refresh()}
+                    when(event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> {
+                            lasso.clear()
+                            lassoFinished=false
+                            lasso.add(geo)
+                            confirmButton.visibility=View.GONE
+                            status.text="LASSO / DRAW FREEHAND"
+                            refresh()
+                        }
+                        MotionEvent.ACTION_MOVE -> {
+                            val last=lasso.lastOrNull()
+                            // Approximately 4 screen pixels between samples; prevent giant point lists.
+                            val previousPixel=last?.let{mapView.projection.toPixels(it,Point())}
+                            if(previousPixel==null ||
+                                kotlin.math.hypot((previousPixel.x-event.x).toDouble(),
+                                    (previousPixel.y-event.y).toDouble())>=dp(4)) {
+                                if(lasso.size<3000)lasso.add(geo)
+                                refresh()
+                            }
+                        }
+                        MotionEvent.ACTION_UP -> {
+                            if(lasso.size>=3) {
+                                lasso.add(geo)
+                                lassoFinished=true
+                                confirmButton.text="CONFIRM LASSO"
+                                confirmButton.visibility=View.VISIBLE
+                                status.text="LASSO / CONFIRM TO REVEAL SELECTED AREA"
+                            } else {
+                                lasso.clear()
+                                status.text="LASSO / DRAW A CLOSED AREA"
+                            }
+                            refresh()
+                        }
+                        MotionEvent.ACTION_CANCEL -> {
+                            lasso.clear();lassoFinished=false
+                            confirmButton.visibility=View.GONE;refresh()
+                        }
+                    }
                     return true
                 }
                 if(mode=="PATH") {
@@ -666,7 +708,10 @@ class MainActivity : Activity(), SensorEventListener {
             status.text="PATH CONFIRMED"
             refresh()
         }
-        // A small right-hand journal tab; the map underneath is unchanged.
+        // The journal tab and its panel form ONE sliding, book-like drawer.
+        val journalWidth=dp(230)
+        val journalTabWidth=dp(31)
+        val journalDrawer=FrameLayout(this)
         val drawerPanel=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
             setPadding(dp(13),dp(12),dp(13),dp(12))
@@ -675,28 +720,39 @@ class MainActivity : Activity(), SensorEventListener {
                 setColor(Color.rgb(22,27,20))
                 setStroke(dp(1),Color.rgb(205,170,101))
             }
-            visibility=View.GONE
         }
         drawerPanel.addView(label("EXPEDITION JOURNAL",16,sand).apply {
             setTypeface(Typeface.SERIF,Typeface.BOLD)
         })
+        fun slideJournal(open:Boolean) {
+            journalDrawer.animate().cancel()
+            journalDrawer.animate()
+                .translationX(if(open)0f else journalWidth.toFloat())
+                .setDuration(360L)
+                .setInterpolator(android.view.animation.DecelerateInterpolator(1.4f))
+                .start()
+        }
         drawerPanel.addView(action("▤  FIELD JOURNAL").apply {
             applyExpeditionStyle(this)
-            setOnClickListener{drawerPanel.visibility=View.GONE;showExpeditionJournal()}
+            setOnClickListener{slideJournal(false);showExpeditionJournal()}
         },LinearLayout.LayoutParams(-1,dp(46)))
         drawerPanel.addView(action("◈  FIELD STATISTICS").apply {
             applyExpeditionStyle(this)
-            setOnClickListener{drawerPanel.visibility=View.GONE;showExplorationStats()}
+            setOnClickListener{slideJournal(false);showExplorationStats()}
         },LinearLayout.LayoutParams(-1,dp(46)))
         drawerPanel.addView(action("× CLOSE").apply {
             applyExpeditionStyle(this)
-            setOnClickListener{drawerPanel.visibility=View.GONE}
+            setOnClickListener{slideJournal(false)}
         },LinearLayout.LayoutParams(-1,dp(42)))
-        mapArea.addView(drawerPanel,FrameLayout.LayoutParams(dp(230),-2,Gravity.END or Gravity.CENTER_VERTICAL))
+        journalDrawer.addView(drawerPanel,FrameLayout.LayoutParams(journalWidth,-2,Gravity.END or Gravity.CENTER_VERTICAL))
         val journalTab=ExpeditionJournalTab(this) {
-            drawerPanel.visibility=if(drawerPanel.visibility==View.VISIBLE)View.GONE else View.VISIBLE
+            val opening=journalDrawer.translationX>journalWidth/2f
+            slideJournal(opening)
         }
-        mapArea.addView(journalTab,FrameLayout.LayoutParams(dp(29),dp(90),Gravity.END or Gravity.CENTER_VERTICAL))
+        journalDrawer.addView(journalTab,FrameLayout.LayoutParams(journalTabWidth,dp(90),Gravity.START or Gravity.CENTER_VERTICAL))
+        journalDrawer.translationX=journalWidth.toFloat()
+        mapArea.addView(journalDrawer,FrameLayout.LayoutParams(
+            journalWidth+journalTabWidth,dp(213),Gravity.END or Gravity.CENTER_VERTICAL))
         root.addView(mapArea,LinearLayout.LayoutParams(-1,0,1f))
         // Hidden adapter buttons preserve existing activity actions; visual chrome is Canvas based.
         trackButton=action("TRACK")
@@ -716,15 +772,16 @@ class MainActivity : Activity(), SensorEventListener {
         }
         expeditionBottom=controls
         controls.selected=-1
+        controls.trackingActive=tracking
         fun chooseMark(next:String) {
             mode=next
-            pending.clear();lasso.clear()
+            pending.clear();lasso.clear();lassoFinished=false
             confirmButton.visibility=View.GONE
             palette.selected=when(next){"PATH"->2;"PAINT"->3;"LASSO"->4;else->-1}
             status.text=when(next){
                 "PATH"->"MARK / TAP VERTICES THEN CONFIRM"
                 "PAINT"->"MARK / PAINT TO REVEAL"
-                "LASSO"->"MARK / TAP POLYGON POINTS THEN APPLY"
+                "LASSO"->"MARK / DRAW FREEHAND THEN CONFIRM"
                 else->"MARK / SELECT A TOOL"
             }
             refresh()
@@ -755,7 +812,7 @@ class MainActivity : Activity(), SensorEventListener {
                     startTracking()
                 else requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,Manifest.permission.ACCESS_COARSE_LOCATION),10)
             }
-            controls.invalidate()
+            controls.trackingActive=tracking
         }
         followButton.setOnClickListener {
             followUser=true
@@ -1917,14 +1974,14 @@ class MainActivity : Activity(), SensorEventListener {
         if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED)return
         startForegroundService(Intent(this,TrackingService::class.java).apply {action=TrackingService.ACTION_START})
         tracking=true
-        expeditionBottom?.invalidate()
+        expeditionBottom?.trackingActive=true
         trackButton.text="STOP GPS"
         status.text="RECON ACTIVE / BACKGROUND ENABLED"
     }
     private fun stopTracking() {
         startService(Intent(this,TrackingService::class.java).apply {action=TrackingService.ACTION_STOP})
         tracking=false
-        expeditionBottom?.invalidate()
+        expeditionBottom?.trackingActive=false
         trackButton.text="TRACK"
         status.text="TRACK STOPPED"
     }
@@ -1959,6 +2016,7 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onResume() {
         super.onResume(); map.onResume()
         tracking=TrackingService.running
+        expeditionBottom?.trackingActive=tracking
         if(::trackButton.isInitialized)trackButton.text=if(tracking)"STOP GPS" else "TRACK"
         if(::store.isInitialized) {records.clear();records.addAll(store.load());notes.clear();notes.addAll(fieldNotes.load());refresh()}
         val filter=IntentFilter(TrackingService.ACTION_FIX)
