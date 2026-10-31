@@ -1967,50 +1967,124 @@ class MainActivity : Activity(), SensorEventListener {
             setStroke(dp(1),Color.rgb(151,125,76))
         }
     }
+
     private fun showLayers(anchor: View) {
-        if (layersPopup?.isShowing == true) { layersPopup?.dismiss(); return }
-        val panel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background=tacticalPanel()
-            setPadding(dp(12), dp(8), dp(12), dp(8))
+        if(layersPopup?.isShowing==true){layersPopup?.dismiss();return}
+        val panel=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            background=GradientDrawable().apply {
+                cornerRadius=dp(12).toFloat()
+                setColor(Color.rgb(23,31,25))
+                setStroke(dp(1),Color.rgb(190,154,89))
+            }
+            setPadding(dp(11),dp(10),dp(11),dp(10))
         }
-        fun option(name: String, callback: () -> Unit) {
-            panel.addView(action(name).apply { setOnClickListener { callback(); layersPopup?.dismiss() } },
-                LinearLayout.LayoutParams(-1, dp(43)))
+        panel.addView(label("FIELD KIT",19,sand).apply {
+            gravity=Gravity.CENTER
+            setTypeface(Typeface.SERIF,Typeface.BOLD)
+            letterSpacing=.11f
+        },LinearLayout.LayoutParams(-1,dp(30)))
+        panel.addView(label("EXPEDITION / TOOLS & SETTINGS",10,sage).apply {
+            gravity=Gravity.CENTER
+        },LinearLayout.LayoutParams(-1,dp(20)))
+        val tabBar=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
+        panel.addView(tabBar,LinearLayout.LayoutParams(-1,dp(40)))
+        val optionGrid=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
+        panel.addView(optionGrid,LinearLayout.LayoutParams(-1,-2))
+        val tabs=listOf("FIELD","DISPLAY","DATA")
+        val tabButtons=mutableListOf<Button>()
+        var selectedTab="FIELD"
+        fun render(tab:String) {
+            selectedTab=tab
+            tabButtons.forEachIndexed {i,button->applyExpeditionStyle(button,tabs[i]==tab)}
+            optionGrid.removeAllViews()
+            val operations:List<Pair<String,()->Unit>>=when(tab) {
+                "FIELD"->listOf(
+                    "⌁  RECOVER GPS" to {scanSmartPaths()},
+                    "×  CLEAR PREVIEW" to {inferredPaths=emptyList();refresh()},
+                    "◈  STATISTICS" to {showExplorationStats()},
+                    "◷  TIME MACHINE" to {showTimeMachine()}
+                )
+                "DISPLAY"->listOf(
+                    "FOG  ${if(fogEnabled) "ON" else "OFF"}" to {
+                        fogEnabled=!fogEnabled;fogOverlay.fogVisible=fogEnabled;refresh()
+                    },
+                    "MIST  ${fogOverlay.opacity}" to {
+                        fogOverlay.opacity=if(fogOverlay.opacity>=235)125 else fogOverlay.opacity+35;refresh()
+                    },
+                    "MARKERS  ${if(fogOverlay.showCheckpoints) "ON" else "OFF"}" to {
+                        fogOverlay.showCheckpoints=!fogOverlay.showCheckpoints;refresh()
+                    },
+                    "BACKTRACK  ${if(fogOverlay.backtrack) "ON" else "OFF"}" to {
+                        fogOverlay.backtrack=!fogOverlay.backtrack;refresh()
+                    },
+                    "ROUTE  ${if(fogOverlay.showRoute) "ON" else "OFF"}" to {
+                        fogOverlay.showRoute=!fogOverlay.showRoute;refresh()
+                    }
+                )
+                else->listOf(
+                    "OFFLINE  ${if(offline) "ON" else "OFF"}" to {
+                        offline=!offline
+                        map.setUseDataConnection(!offline)
+                        status.text=if(offline)"OFFLINE / LOCAL TILES ONLY"
+                            else "ONLINE / MAP TILES ENABLED"
+                    },
+                    "CACHE AREA" to {preloadOfflineArea()},
+                    "BACKUP / DATA" to {showDataMenu()}
+                )
+            }
+            operations.chunked(2).forEach {items->
+                val row=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
+                items.forEach {(name,callback)->
+                    val button=action(name).apply {
+                        applyExpeditionStyle(this)
+                        textSize=10f
+                        setOnClickListener {
+                            callback()
+                            if(tab=="DISPLAY" || (tab=="DATA" && name.startsWith("OFFLINE"))) {
+                                render(tab)
+                            } else {
+                                layersPopup?.dismiss()
+                            }
+                        }
+                    }
+                    val params=LinearLayout.LayoutParams(0,dp(49),1f).apply {
+                        setMargins(dp(2),dp(3),dp(2),dp(3))
+                    }
+                    row.addView(button,params)
+                }
+                if(items.size==1)row.addView(View(this),LinearLayout.LayoutParams(0,dp(49),1f))
+                optionGrid.addView(row)
+            }
         }
-        option("RECOVER GPS GAPS / PREVIEW") {scanSmartPaths()}
-        option("HIDE INFERRED PATHS") {inferredPaths=emptyList();refresh()}
-        option("EXPLORATION STATISTICS") {showExplorationStats()}
-        option("TIME MACHINE") {showTimeMachine()}
-        option("TRANSIT / LOAD STATIONS") {refreshMetro()}
-        option("FOG ${if (fogEnabled) "ON" else "OFF"}") {
-            fogEnabled = !fogEnabled; fogOverlay.fogVisible = fogEnabled; refresh()
+        tabs.forEach {tab->
+            val button=action(tab).apply{
+                textSize=10f
+                setOnClickListener {render(tab)}
+            }
+            tabButtons.add(button)
+            tabBar.addView(button,LinearLayout.LayoutParams(0,dp(35),1f).apply{
+                setMargins(dp(2),dp(1),dp(2),dp(1))
+            })
         }
-        option("FOG OPACITY ${fogOverlay.opacity}") {
-            fogOverlay.opacity = if (fogOverlay.opacity >= 235) 125 else fogOverlay.opacity + 35; refresh()
+        render("FIELD")
+        panel.addView(label("TAP OUTSIDE TO CLOSE",9,sage).apply{
+            gravity=Gravity.CENTER
+        },LinearLayout.LayoutParams(-1,dp(21)))
+        val viewport=android.widget.ScrollView(this).apply {
+            isFillViewport=false
+            addView(panel)
         }
-        option("CHECKPOINTS ${if(fogOverlay.showCheckpoints) "ON" else "OFF"}") {
-            fogOverlay.showCheckpoints=!fogOverlay.showCheckpoints;refresh()
-        }
-        option("BACKTRACK ${if(fogOverlay.backtrack) "ON" else "OFF"}") {
-            fogOverlay.backtrack=!fogOverlay.backtrack;refresh()
-        }
-        option("ROUTE ${if (fogOverlay.showRoute) "ON" else "OFF"}") {
-            fogOverlay.showRoute = !fogOverlay.showRoute; refresh()
-        }
-        option("OFFLINE ${if (offline) "ON" else "OFF"}") {
-            offline = !offline
-            map.setUseDataConnection(!offline)
-            status.text = if (offline) "OFFLINE / LOCAL TILES ONLY" else "ONLINE / MAP TILES ENABLED"
-        }
-        option("PRELOAD NEARBY MAP TILES") {preloadOfflineArea()}
-        option("DATA / BACKUP & OFFLINE") {showDataMenu()}
-        val viewScroll=android.widget.ScrollView(this).apply {addView(panel)}
-        layersPopup = PopupWindow(viewScroll, dp(240), dp(495), true).apply {
-            isOutsideTouchable = true
+        val width=dp(312).coerceAtMost(resources.displayMetrics.widthPixels-dp(22))
+        layersPopup=PopupWindow(viewport,width,-2,true).apply {
+            isOutsideTouchable=true
             setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
-            elevation = dp(8).toFloat()
-            showAtLocation(map, Gravity.BOTTOM or Gravity.END, dp(8), dp(60))
+            elevation=dp(8).toFloat()
+            setOnDismissListener {
+                if(expeditionBottom?.selected==4)expeditionBottom?.selected=-1
+            }
+            expeditionBottom?.selected=4
+            showAtLocation(map,Gravity.END or Gravity.BOTTOM,dp(9),dp(66))
         }
     }
     override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?) {
