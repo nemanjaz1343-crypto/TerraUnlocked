@@ -1808,13 +1808,6 @@ class MainActivity : Activity(), SensorEventListener {
         }
         option("PRELOAD NEARBY MAP TILES") {preloadOfflineArea()}
         option("DATA / BACKUP & OFFLINE") {showDataMenu()}
-        option("UNDO LAST PATH") {
-            if (segments.isNotEmpty()) { segments.removeAt(segments.lastIndex); pathStore.save(segments); refresh() }
-        }
-        option("UNDO LAST PAINT") {
-            val idx = records.indexOfLast { it.manual }
-            if (idx >= 0) { records.removeAt(idx); store.replaceAll(records); refresh() }
-        }
         val viewScroll=android.widget.ScrollView(this).apply {addView(panel)}
         layersPopup = PopupWindow(viewScroll, dp(240), dp(495), true).apply {
             isOutsideTouchable = true
