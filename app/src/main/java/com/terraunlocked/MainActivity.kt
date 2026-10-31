@@ -1083,7 +1083,7 @@ class MainActivity : Activity(), SensorEventListener {
             if(index>=0){notes[index]=edited;fieldNotes.save(notes);refresh()}
             return edited
         }
-        val journalScroll=android.widget.ScrollView(this).apply {fillViewport=false;addView(panel)}
+        val journalScroll=android.widget.ScrollView(this).apply {isFillViewport=false;addView(panel)}
         val dialog=android.app.AlertDialog.Builder(this).setView(journalScroll)
             .setNegativeButton("CLOSE",null)
             .setPositiveButton("SAVE") {_,_->updateNote()}
