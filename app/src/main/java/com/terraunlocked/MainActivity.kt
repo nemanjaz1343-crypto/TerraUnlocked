@@ -812,7 +812,7 @@ class MainActivity : Activity(), SensorEventListener {
                 else requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,Manifest.permission.ACCESS_COARSE_LOCATION),10)
             }
             controls.trackingActive=tracking
-            controls.gpsSearching=tracking && fogOverlay.currentPosition==null
+            controls.gpsSearching=tracking
         }
         followButton.setOnClickListener {
             followUser=true
@@ -1984,7 +1984,7 @@ class MainActivity : Activity(), SensorEventListener {
         startForegroundService(Intent(this,TrackingService::class.java).apply {action=TrackingService.ACTION_START})
         tracking=true
         expeditionBottom?.trackingActive=true
-        expeditionBottom?.gpsSearching=fogOverlay.currentPosition==null
+        expeditionBottom?.gpsSearching=true
         trackButton.text="STOP GPS"
         status.text="RECON ACTIVE / BACKGROUND ENABLED"
     }
@@ -2028,7 +2028,7 @@ class MainActivity : Activity(), SensorEventListener {
         super.onResume(); map.onResume()
         tracking=TrackingService.running
         expeditionBottom?.trackingActive=tracking
-        expeditionBottom?.gpsSearching=tracking && fogOverlay.currentPosition==null
+        expeditionBottom?.gpsSearching=tracking
         if(::trackButton.isInitialized)trackButton.text=if(tracking)"STOP GPS" else "TRACK"
         if(::store.isInitialized) {records.clear();records.addAll(store.load());notes.clear();notes.addAll(fieldNotes.load());refresh()}
         val filter=IntentFilter(TrackingService.ACTION_FIX)
