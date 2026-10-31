@@ -715,6 +715,7 @@ class MainActivity : Activity(), SensorEventListener {
             }
         }
         expeditionBottom=controls
+        controls.selected=-1
         fun chooseMark(next:String) {
             mode=next
             pending.clear();lasso.clear()
@@ -1923,12 +1924,14 @@ class MainActivity : Activity(), SensorEventListener {
         if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED)return
         startForegroundService(Intent(this,TrackingService::class.java).apply {action=TrackingService.ACTION_START})
         tracking=true
+        expeditionBottom?.invalidate()
         trackButton.text="STOP GPS"
         status.text="RECON ACTIVE / BACKGROUND ENABLED"
     }
     private fun stopTracking() {
         startService(Intent(this,TrackingService::class.java).apply {action=TrackingService.ACTION_STOP})
         tracking=false
+        expeditionBottom?.invalidate()
         trackButton.text="TRACK"
         status.text="TRACK STOPPED"
     }
@@ -1937,8 +1940,6 @@ class MainActivity : Activity(), SensorEventListener {
         handler.removeCallbacks(simulationStep)
         demo.clear()
         simulationOrigin = null
-        (findViewById<android.view.ViewGroup>(android.R.id.content).getChildAt(0) as LinearLayout)
-            .let { ((it.getChildAt(it.childCount - 1) as LinearLayout).getChildAt(4) as Button).text = "SIM" }
         status.text = "SIMULATION ENDED  |  NO TEST DATA SAVED"
         refresh()
     }
