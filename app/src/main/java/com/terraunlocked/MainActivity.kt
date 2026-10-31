@@ -142,6 +142,34 @@ class MainActivity : Activity(), SensorEventListener {
     private var lastGpsUiRefresh=0L
     private val trackingReceiver=object:BroadcastReceiver() {
         override fun onReceive(context:Context,intent:Intent) {
+            if(intent.action==TrackingService.ACTION_RESET_COMPLETE) {
+                tracking=false
+                expeditionBottom?.trackingActive=false
+                expeditionBottom?.gpsSearching=false
+                if(::trackButton.isInitialized)trackButton.text="TRACK"
+                records.clear()
+                segments.clear()
+                demo.clear()
+                simulating=false
+                handler.removeCallbacks(simulationStep)
+                inferredPaths=emptyList()
+                historyCutoff=null
+                lastRecoveryPointCount=0
+                lastGpsSample=null
+                pending.clear()
+                lasso.clear()
+                lassoFinished=false
+                markUndo.clear()
+                markRedo.clear()
+                expeditionPalette?.let{it.canUndo=false;it.canRedo=false;it.selected=-1;it.visibility=View.GONE}
+                confirmButton.visibility=View.GONE
+                mode="VIEW"
+                fogEnabled=true
+                fogOverlay.fogVisible=true
+                status.text="EXPLORATION RESET / FOG RESTORED"
+                refresh()
+                return
+            }
             if(intent.action!=TrackingService.ACTION_FIX)return
             val lat=intent.getDoubleExtra("lat",Double.NaN)
             val lon=intent.getDoubleExtra("lon",Double.NaN)
@@ -2013,6 +2041,30 @@ class MainActivity : Activity(), SensorEventListener {
         }
         handler.post(task)
     }
+
+    private fun confirmExplorationReset() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("RESET EXPLORATION?")
+            .setMessage("All GPS discoveries, manually revealed areas and drawn paths will be permanently erased.\n\nSaved objectives, pins, field notes, attachments and settings will remain untouched. GPS tracking will stop.")
+            .setNegativeButton("CANCEL",null)
+            .setPositiveButton("CONTINUE") {_,_->
+                val warning=android.app.AlertDialog.Builder(this)
+                    .setTitle("FINAL CONFIRMATION")
+                    .setMessage("Return the entire map to fog? This action CANNOT be undone. Only exploration history will be deleted.")
+                    .setNegativeButton("KEEP MAP",null)
+                    .setPositiveButton("ERASE MAP") {_,_->
+                        status.text="RESETTING EXPLORATION / STOPPING GPS..."
+                        // The service stops location callbacks and erases both persistent
+                        // discovery stores, then acknowledges completion to the UI.
+                        startService(Intent(this,TrackingService::class.java).apply {
+                            action=TrackingService.ACTION_RESET_EXPLORATION
+                        })
+                    }.show()
+                warning.getButton(android.app.AlertDialog.BUTTON_POSITIVE)
+                    .setTextColor(Color.rgb(215,112,93))
+            }.show()
+    }
+
     private fun showDataMenu() {
         val panel=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL;setPadding(dp(12),dp(12),dp(12),dp(12));background=tacticalPanel()
@@ -2147,7 +2199,8 @@ class MainActivity : Activity(), SensorEventListener {
                             else "ONLINE / MAP TILES ENABLED"
                     },
                     "CACHE AREA" to {preloadOfflineArea()},
-                    "BACKUP / DATA" to {showDataMenu()}
+                    "BACKUP / DATA" to {showDataMenu()},
+                    "RESET EXPLORATION" to {confirmExplorationReset()}
                 )
             }
             operations.chunked(2).forEach {items->
@@ -2156,6 +2209,7 @@ class MainActivity : Activity(), SensorEventListener {
                     val button=action(name).apply {
                         applyExpeditionStyle(this)
                         textSize=10f
+                        if(name=="RESET EXPLORATION")setTextColor(Color.rgb(234,146,120))
                         setOnClickListener {
                             callback()
                             if(tab=="DISPLAY" || (tab=="DATA" && name.startsWith("OFFLINE"))) {
@@ -2352,8 +2406,15 @@ class MainActivity : Activity(), SensorEventListener {
         expeditionBottom?.trackingActive=tracking
         expeditionBottom?.gpsSearching=tracking
         if(::trackButton.isInitialized)trackButton.text=if(tracking)"STOP GPS" else "TRACK"
-        if(::store.isInitialized) {records.clear();records.addAll(store.load());notes.clear();notes.addAll(fieldNotes.load());refresh()}
-        val filter=IntentFilter(TrackingService.ACTION_FIX)
+        if(::store.isInitialized) {
+            records.clear();records.addAll(store.load())
+            segments.clear();segments.addAll(pathStore.load())
+            notes.clear();notes.addAll(fieldNotes.load())
+            refresh()
+        }
+        val filter=IntentFilter(TrackingService.ACTION_FIX).apply {
+            addAction(TrackingService.ACTION_RESET_COMPLETE)
+        }
         if(android.os.Build.VERSION.SDK_INT>=33) registerReceiver(trackingReceiver,filter,Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(trackingReceiver,filter)
         receiverRegistered=true

@@ -17,6 +17,8 @@ class TrackingService:Service() {
         const val ACTION_STOP="com.terraunlocked.STOP_TRACK"
         const val ACTION_FIX="com.terraunlocked.LOCATION_FIX"
         const val ACTION_STATE="com.terraunlocked.TRACK_STATE"
+        const val ACTION_RESET_EXPLORATION="com.terraunlocked.RESET_EXPLORATION"
+        const val ACTION_RESET_COMPLETE="com.terraunlocked.RESET_EXPLORATION_COMPLETE"
         var running=false
     }
     private val client by lazy {LocationServices.getFusedLocationProviderClient(this)}
@@ -90,6 +92,7 @@ class TrackingService:Service() {
     }
     private val callback=object:LocationCallback() {
         override fun onLocationResult(result:LocationResult) {
+            if(!running)return
             result.locations.forEach {loc->
                 if(!loc.hasAccuracy() || !loc.latitude.isFinite() || !loc.longitude.isFinite())return@forEach
                 // Ignore stale batched/cached positions; a delayed old fix can appear
@@ -184,6 +187,18 @@ class TrackingService:Service() {
     }
     override fun onBind(intent:Intent?):IBinder?=null
     override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int {
+        if(intent?.action==ACTION_RESET_EXPLORATION) {
+            // Reset is handled on the service main thread, serialized with GPS fixes.
+            // Disable tracking before clearing so no late callback can reveal the map.
+            running=false
+            client.removeLocationUpdates(callback)
+            store.replaceAll(emptyList())
+            PathStore(this).save(emptyList())
+            sendBroadcast(Intent(ACTION_RESET_COMPLETE).setPackage(packageName))
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if(intent?.action==ACTION_STOP) {stopTracking();return START_NOT_STICKY}
         if(running)return START_STICKY
         if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED) {

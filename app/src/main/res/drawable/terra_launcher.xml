@@ -2,7 +2,7 @@
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:drawable="@color/terra_launcher_bg"/>
     <item android:drawable="@drawable/terra_mark"
-        android:width="92dp"
-        android:height="92dp"
+        android:width="64dp"
+        android:height="64dp"
         android:gravity="center"/>
 </layer-list>
