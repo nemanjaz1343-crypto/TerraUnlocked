@@ -88,6 +88,13 @@ internal object ExpeditionArt {
                 c.drawRoundRect(-6f,-10f,6f,10f,2f,2f,p)
                 line(-6f,2f,6f,2f);c.restore()
             }
+            "kit" -> {
+                // Expedition field bag, distinct from the map-source button above.
+                c.drawRoundRect(-10f,-5f,10f,10f,2.2f,2.2f,p)
+                path(-4f,-5f,-4f,-9f,4f,-9f,4f,-5f)
+                line(-10f,1f,10f,1f)
+                c.drawRoundRect(-2.2f,-1.8f,2.2f,4f,1f,1f,p)
+            }
             "map" -> {
                 path(-9f,-4f,0f,-9f,9f,-4f,0f,1f,-9f,-4f)
                 path(-9f,2f,0f,7f,9f,2f)
@@ -212,8 +219,8 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
     override fun onDetachedFromWindow(){radar.cancel();super.onDetachedFromWindow()}
     private var pressedIndex=-1
     private val d=resources.displayMetrics.density
-    private val labels=arrayOf("TRACK","FOLLOW","MARK","ERASE","MAP")
-    private val icons=arrayOf("track","follow","mark","erase","map")
+    private val labels=arrayOf("TRACK","FOLLOW","MARK","ERASE","KIT")
+    private val icons=arrayOf("track","follow","mark","erase","kit")
     override fun onDraw(c:Canvas) {
         val w=width.toFloat();val h=height.toFloat()
         ExpeditionArt.fill(c,0f,0f,w,h,ExpeditionArt.dark)
