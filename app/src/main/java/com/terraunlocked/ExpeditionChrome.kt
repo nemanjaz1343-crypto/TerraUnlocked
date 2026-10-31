@@ -146,6 +146,7 @@ internal class ExpeditionHeaderView(context:Context,
     var bearing:Int?=null;set(value){field=value;invalidate()}
     var temperature:Int?=null;set(value){field=value;invalidate()}
     private val d=resources.displayMetrics.density
+    private val crest by lazy { android.graphics.BitmapFactory.decodeResource(resources,R.drawable.terra_mark) }
     override fun onDraw(c:Canvas) {
         val w=width.toFloat();val h=height.toFloat();if(w==0f)return
         val scale=w/393f
@@ -155,20 +156,9 @@ internal class ExpeditionHeaderView(context:Context,
         ExpeditionArt.panel(c,RectF(10f,6f,94f,hh-8f),false,5f)
         ExpeditionArt.label(c,"MISSIONS ›",52f,hh/2f+5f,12f,ExpeditionArt.light,true,.3f)
         ExpeditionArt.rule(c,108f,hh/2f,130f,hh/2f)
-        // Mountain and topographic emblem with the cardinal compass points.
-        c.save();c.translate(148f,hh/2f)
-        ExpeditionArt.icon(c,"compass",0f,0f,37f,ExpeditionArt.gold)
-        ExpeditionArt.p.style=Paint.Style.STROKE;ExpeditionArt.p.color=ExpeditionArt.light
-        ExpeditionArt.p.strokeWidth=1f
-        c.drawLine(-10f,-1f,-3f,-9f,ExpeditionArt.p)
-        c.drawLine(-3f,-9f,2f,-4f,ExpeditionArt.p)
-        c.drawLine(2f,-4f,8f,-12f,ExpeditionArt.p)
-        c.drawLine(8f,-12f,13f,-2f,ExpeditionArt.p)
-        for(i in 0..2){
-            val dy=3f+i*4f
-            c.drawArc(RectF(-11f,dy-5f,11f,dy+4f),10f,155f,false,ExpeditionArt.p)
-        }
-        c.restore()
+        // Original crest clipped outside its circular silhouette, supplied by the user.
+        c.drawBitmap(crest,null,RectF(128f,hh/2f-22f,168f,hh/2f+22f),
+            Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
         ExpeditionArt.label(c,"T E R R A",213f,hh/2f+6f,19f,ExpeditionArt.light,true,.4f)
         ExpeditionArt.rule(c,182f,hh/2f+11f,247f,hh/2f+11f,ExpeditionArt.gold,.9f)
         ExpeditionArt.rule(c,265f,hh/2f,273f,hh/2f)
