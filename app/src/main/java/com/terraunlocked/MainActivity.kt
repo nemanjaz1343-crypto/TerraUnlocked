@@ -79,6 +79,57 @@ class MainActivity : Activity(), SensorEventListener {
     private val records = mutableListOf<DiscoveryPoint>()
     private val demo = mutableListOf<DiscoveryPoint>()
     private var mode = "VIEW"
+    private data class MarkState(val manual:List<DiscoveryPoint>,val segments:List<ManualSegment>)
+    private val markUndo=java.util.ArrayDeque<MarkState>()
+    private val markRedo=java.util.ArrayDeque<MarkState>()
+    private val lasso=mutableListOf<GeoPoint>()
+    private fun snapshotMark():MarkState=MarkState(records.filter{it.manual},segments.toList())
+    private fun pushMark() {
+        markUndo.addLast(snapshotMark())
+        if(markUndo.size>20)markUndo.removeFirst()
+        markRedo.clear()
+    }
+    private fun applyMark(state:MarkState) {
+        records.removeAll{it.manual};records.addAll(state.manual)
+        segments.clear();segments.addAll(state.segments)
+        store.replaceAll(records);pathStore.save(segments);refresh()
+    }
+    private fun markUndoAction() {
+        if(markUndo.isEmpty())return
+        markRedo.addLast(snapshotMark());applyMark(markUndo.removeLast())
+    }
+    private fun markRedoAction() {
+        if(markRedo.isEmpty())return
+        markUndo.addLast(snapshotMark());applyMark(markRedo.removeLast())
+    }
+    private fun lassoContains(lat:Double,lon:Double):Boolean {
+        var inside=false;var j=lasso.lastIndex
+        for(i in lasso.indices) {
+            val a=lasso[i];val b=lasso[j]
+            if((a.latitude>lat)!=(b.latitude>lat) &&
+               lon<(b.longitude-a.longitude)*(lat-a.latitude)/(b.latitude-a.latitude)+a.longitude)inside=!inside
+            j=i
+        }
+        return inside
+    }
+    private fun commitLasso() {
+        if(lasso.size<3){status.text="LASSO / MINIMUM 3 POINTS";return}
+        pushMark()
+        val minLat=lasso.minOf{it.latitude};val maxLat=lasso.maxOf{it.latitude}
+        val minLon=lasso.minOf{it.longitude};val maxLon=lasso.maxOf{it.longitude}
+        var added=0;var lat=minLat
+        while(lat<=maxLat && added<1500) {
+            var lon=minLon
+            while(lon<=maxLon && added<1500) {
+                if(lassoContains(lat,lon)){records.add(DiscoveryPoint(lat,lon,true,System.currentTimeMillis()));added++}
+                lon+=0.00018
+            }
+            lat+=0.00018
+        }
+        store.replaceAll(records);lasso.clear();refresh()
+        status.text="LASSO / $added POINTS"
+    }
+
     private var tracking = false
     private var receiverRegistered=false
     private var lastGpsUiRefresh=0L
@@ -375,6 +426,10 @@ class MainActivity : Activity(), SensorEventListener {
                 if (event.actionMasked != MotionEvent.ACTION_DOWN && event.actionMasked != MotionEvent.ACTION_MOVE) return false
                 val projected = mapView.projection.fromPixels(event.x.toInt(), event.y.toInt())
                 val geo = GeoPoint(projected.latitude, projected.longitude)
+                if(mode=="LASSO") {
+                    if(event.actionMasked==MotionEvent.ACTION_DOWN){lasso.add(geo);status.text="LASSO / ${lasso.size} POINTS";refresh()}
+                    return true
+                }
                 if(mode=="PATH") {
                     if(event.actionMasked==MotionEvent.ACTION_DOWN) {
                         pending.add(geo)
@@ -388,6 +443,7 @@ class MainActivity : Activity(), SensorEventListener {
                     val current = GeoPoint(geo.latitude, geo.longitude)
                     val previous = strokeLast
                     if (previous == null || gap(previous, current) > radius * 0.30f) {
+                        if(strokeLast==null)pushMark()
                         val p = DiscoveryPoint(current.latitude, current.longitude, true, System.currentTimeMillis())
                         records.add(p)
                         store.add(p)
@@ -588,6 +644,7 @@ class MainActivity : Activity(), SensorEventListener {
         moveReticle.isClickable=false
         mapArea.addView(movingBar,FrameLayout.LayoutParams(-1,dp(54),Gravity.BOTTOM))
         confirmButton.setOnClickListener {
+            pushMark()
             pending.zipWithNext().forEach { (a,b) ->
                 segments.add(ManualSegment(a.latitude,a.longitude,b.latitude,b.longitude))
             }
