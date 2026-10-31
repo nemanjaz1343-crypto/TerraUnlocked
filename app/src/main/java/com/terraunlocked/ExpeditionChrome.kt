@@ -157,7 +157,7 @@ internal class ExpeditionHeaderView(context:Context,
         ExpeditionArt.rule(c,108f,hh/2f,130f,hh/2f)
         // Mountain and topographic emblem with the cardinal compass points.
         c.save();c.translate(148f,hh/2f)
-        ExpeditionArt.icon(c,"compass", "unused".length.toFloat()*0f,0f,37f,ExpeditionArt.gold)
+        ExpeditionArt.icon(c,"compass",0f,0f,37f,ExpeditionArt.gold)
         ExpeditionArt.p.style=Paint.Style.STROKE;ExpeditionArt.p.color=ExpeditionArt.light
         ExpeditionArt.p.strokeWidth=1f
         c.drawLine(-10f,-1f,-3f,-9f,ExpeditionArt.p)
