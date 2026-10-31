@@ -1364,21 +1364,42 @@ class MainActivity : Activity(), SensorEventListener {
             setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
             elevation=dp(7).toFloat()
         }
+        fun styleActiveButton(button:Button) {
+            val active=objectiveStore.active==o.id
+            button.text=if(active)"✓ ACTIVE\nTAP TO REMOVE" else "⌖ SET ACTIVE"
+            button.setTextColor(if(active)Color.rgb(24,31,22) else sand)
+            button.background=GradientDrawable().apply {
+                cornerRadius=dp(6).toFloat()
+                setColor(if(active)Color.rgb(230,190,111) else Color.rgb(37,46,34))
+                setStroke(dp(1),if(active)Color.rgb(250,226,171) else Color.rgb(151,125,76))
+            }
+            button.contentDescription=if(active)"Deactivate "+o.name else "Activate "+o.name
+        }
         fun actionRow(vararg entries:Pair<String,()->Unit>) {
             val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
             for((caption,click) in entries) {
-                row.addView(action(caption).apply {
+                val button=action(caption).apply {
                     applyExpeditionStyle(this)
                     textSize=10f;maxLines=2
-                    setOnClickListener {click()}
-                },LinearLayout.LayoutParams(0,dp(36),1f))
+                }
+                if(caption=="⌖ SET ACTIVE"){
+                    styleActiveButton(button)
+                    button.setOnClickListener {
+                        click()
+                        styleActiveButton(button)
+                    }
+                } else button.setOnClickListener {click()}
+                row.addView(button,LinearLayout.LayoutParams(0,dp(36),1f))
             }
             body.addView(row)
         }
         actionRow(
             "⌖ SET ACTIVE" to {
-                objectiveStore.active=o.id;refresh();popup.dismiss()
-                status.text="MISSION ACTIVE / "+o.name.take(30)
+                val remove=objectiveStore.active==o.id
+                objectiveStore.active=if(remove)null else o.id
+                refresh()
+                status.text=if(remove)"MISSION DEACTIVATED / "+o.name.take(30)
+                    else "MISSION ACTIVE / "+o.name.take(30)
             },
             "✓ COMPLETE" to {
                 objectiveStore.complete(o.id)
