@@ -199,6 +199,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var movePinBar:LinearLayout?=null
     private var movingPreview:GeoPoint?=null
     private var movingOriginalNote:FieldNote?=null
+    private var pinMoveReticle:View?=null
 
     private fun chooseMoveDestination(point:GeoPoint) {
         if(movingPinTime==null && movingObjectiveId==null)return
@@ -210,6 +211,7 @@ class MainActivity : Activity(), SensorEventListener {
                 latitude=target.latitude,longitude=target.longitude)
         }
         status.text="MOVE PIN / DRAG OR TAP MAP / CONFIRM TO SAVE"
+        pinMoveReticle?.invalidate()
         refresh()
     }
     private fun cancelPinMove() {
@@ -222,6 +224,8 @@ class MainActivity : Activity(), SensorEventListener {
         movingPinTime=null
         movingObjectiveId=null
         movePinBar?.visibility=View.GONE
+        mode="VIEW"
+        pinMoveReticle?.invalidate()
         status.text="MOVE PIN / CANCELLED"
         refresh()
     }
@@ -245,6 +249,8 @@ class MainActivity : Activity(), SensorEventListener {
         movingPinTime=null
         movingObjectiveId=null
         movePinBar?.visibility=View.GONE
+        mode="VIEW"
+        pinMoveReticle?.invalidate()
         status.text="MOVE PIN / LOCATION SAVED"
         refresh()
     }
@@ -639,7 +645,8 @@ class MainActivity : Activity(), SensorEventListener {
                 val all=(ReconObjectives.all+objectiveStore.customPlaces()).filterNot {objectiveStore.isHidden(it.id)}
                 val occupied=mutableListOf<Pair<Float,Float>>()
                 all.forEach {o->
-                    val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
+                    val location=if(o.id==movingObjectiveId) movingPreview else null
+                    val p=mapView.projection.toPixels(location ?: GeoPoint(o.latitude,o.longitude),Point())
                     val x=p.x.toFloat();val y=p.y.toFloat()
                     val selected=objectiveStore.active==o.id || pendingObjective?.id==o.id
                     if(x<0f||y<0f||x>width||y>height) {
@@ -764,31 +771,22 @@ class MainActivity : Activity(), SensorEventListener {
             background=tacticalPanel();visibility=View.GONE
         }
         movePinBar=movingBar
-        movingBar.addView(action("CANCEL MOVE").apply {setOnClickListener {movingPinTime=null;movingObjectiveId=null;movingBar.visibility=View.GONE}},LinearLayout.LayoutParams(0,dp(49),1f))
-        movingBar.addView(action("CONFIRM NEW PIN POSITION").apply {setOnClickListener {
-            val time=movingPinTime
-            val index=notes.indexOfFirst {it.time==time}
-            if(index>=0){
-                val p=map.mapCenter
-                notes[index]=notes[index].copy(latitude=p.latitude,longitude=p.longitude)
-                fieldNotes.save(notes);status.text="PIN MOVED";refresh()
-            }
-            movingObjectiveId?.let {id->
-                val p=map.mapCenter
-                if(objectiveStore.moveCustom(id,p.latitude,p.longitude))status.text="OBJECTIVE MOVED"
-                refresh()
-            }
-            movingObjectiveId=null;movingPinTime=null;movingBar.visibility=View.GONE
-        }},LinearLayout.LayoutParams(0,dp(49),2f))
-        // Center reticle is only visible while relocating a pin, not when reading a place.
+        movingBar.addView(action("× CANCEL").apply {
+            setOnClickListener{cancelPinMove()}
+        },LinearLayout.LayoutParams(0,dp(49),1f))
+        movingBar.addView(action("✓ CONFIRM NEW LOCATION").apply {
+            setOnClickListener{savePinMove()}
+        },LinearLayout.LayoutParams(0,dp(49),2f))
+        // The crosshair follows the touched location, never the map center.
         val moveReticle=object:View(this) {
             private val ink=Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color=Color.rgb(246,211,132);strokeWidth=dp(2).toFloat();style=Paint.Style.STROKE
             }
             override fun onDraw(c:Canvas) {
                 super.onDraw(c)
-                if(movingPinTime==null && movingObjectiveId==null)return
-                val x=width/2f;val y=height/2f
+                val target=movingPreview ?: return
+                val projected=map.projection.toPixels(target,Point())
+                val x=projected.x.toFloat();val y=projected.y.toFloat()
                 c.drawCircle(x,y,dp(13).toFloat(),ink)
                 c.drawLine(x-dp(23),y,x-dp(16),y,ink)
                 c.drawLine(x+dp(16),y,x+dp(23),y,ink)
@@ -796,6 +794,7 @@ class MainActivity : Activity(), SensorEventListener {
                 c.drawLine(x,y+dp(16),x,y+dp(23),ink)
             }
         }
+        pinMoveReticle=moveReticle
         mapArea.addView(moveReticle,FrameLayout.LayoutParams(-1,-1))
         moveReticle.isClickable=false
         mapArea.addView(movingBar,FrameLayout.LayoutParams(-1,dp(54),Gravity.BOTTOM))
@@ -1357,10 +1356,13 @@ class MainActivity : Activity(), SensorEventListener {
             (if(o.id.startsWith("saved_"))"MOVE PIN" else "SOURCE") to {
                 popup.dismiss()
                 if(o.id.startsWith("saved_")) {
-                    movingObjectiveId=o.id;movingPinTime=null;followUser=false
+                    movingObjectiveId=o.id;movingPinTime=null;movingOriginalNote=null
+                    movingPreview=GeoPoint(o.latitude,o.longitude)
+                    mode="MOVE";followUser=false
                     map.controller.animateTo(GeoPoint(o.latitude,o.longitude))
                     movePinBar?.visibility=View.VISIBLE
-                    status.text="MOVE OBJECTIVE / PAN MAP, CONFIRM"
+                    pinMoveReticle?.invalidate()
+                    status.text="MOVE OBJECTIVE / TOUCH MAP TO RELOCATE, THEN CONFIRM"
                 } else if(o.source.startsWith("http")) {
                     startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(o.source)))
                 }
@@ -1793,12 +1795,16 @@ class MainActivity : Activity(), SensorEventListener {
     }
     private fun moveFieldPin(note:FieldNote) {
         movingObjectiveId=null
+        movingOriginalNote=note
         movingPinTime=note.time
+        movingPreview=GeoPoint(note.latitude,note.longitude)
+        mode="MOVE"
         followUser=false
         clearMapPreview()
         map.controller.animateTo(GeoPoint(note.latitude,note.longitude))
         movePinBar?.visibility=View.VISIBLE
-        status.text="MOVE PIN / PAN MAP THEN CONFIRM"
+        pinMoveReticle?.invalidate()
+        status.text="MOVE PIN / TOUCH OR DRAG TARGET, THEN CONFIRM"
     }
     private fun anchor(name:String,save:Boolean) {
         val prefs=getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE)
