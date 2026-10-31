@@ -8,7 +8,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <application android:label="TerraUnlocked" android:theme="@android:style/Theme.Material.NoActionBar" android:usesCleartextTraffic="true">
+    <application android:label="TerraUnlocked" android:icon="@drawable/terra_emblem" android:roundIcon="@drawable/terra_emblem" android:theme="@android:style/Theme.Material.NoActionBar" android:usesCleartextTraffic="true">
         <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.fileprovider" android:exported="false" android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/update_file_paths" />
         </provider>
