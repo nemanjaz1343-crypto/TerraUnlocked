@@ -295,24 +295,22 @@ class MainActivity : Activity(), SensorEventListener {
             setPadding(dp(9), 0, dp(9), 0)
             setBackgroundColor(olive)
         }
-        val brand = label("TERRA", 14, sand).apply {setTypeface(null,Typeface.BOLD);setSingleLine(true)}
-        header.addView(brand,LinearLayout.LayoutParams(0,dp(40),1f))
-        header.addView(action("MISSIONS").apply {setOnClickListener {showObjectives()}},LinearLayout.LayoutParams(dp(76),dp(32)))
-        sensors = getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        compassEnabled = sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR) != null
-        val compass = label(if(compassEnabled)"N --°" else "N/A",11,sand).apply {
-            setSingleLine(true);gravity=Gravity.CENTER
+        val mission=action("MISSIONS ›").apply {setOnClickListener{showObjectives()};textSize=10f;applyExpeditionStyle(this)}
+        header.addView(mission,LinearLayout.LayoutParams(dp(88),dp(33)))
+        val brand=label("✧ TERRA",17,sand).apply {
+            gravity=Gravity.CENTER;setTypeface(Typeface.SERIF,Typeface.BOLD);letterSpacing=0.16f;setSingleLine(true)
         }
+        header.addView(brand,LinearLayout.LayoutParams(0,dp(40),1f))
+        sensors=getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        compassEnabled=sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)!=null
+        val compass=label(if(compassEnabled)"N --°" else "N/A",10,sand).apply {gravity=Gravity.CENTER;setSingleLine(true)}
         compassView=compass
-        header.addView(compass,LinearLayout.LayoutParams(dp(55),dp(40)))
-        weatherView=label("DXB --°",10,sage).apply {setSingleLine(true);gravity=Gravity.CENTER}
-        header.addView(weatherView,LinearLayout.LayoutParams(dp(64),dp(40)))
-        header.addView(action("MAP").apply {setOnClickListener {chooseMapSource()}},LinearLayout.LayoutParams(dp(43),dp(32)))
-        header.addView(action("↻").apply {contentDescription="Check for updates";setOnClickListener {checkForUpdates()}},LinearLayout.LayoutParams(dp(32),dp(32)))
-        val gps = label("●",12,sage)
-        gps.setOnClickListener {setMyLocation()}
-        // GPS status lives in the status line to avoid header overlap.
-        root.addView(header, LinearLayout.LayoutParams(-1, dp(40)))
+        header.addView(compass,LinearLayout.LayoutParams(dp(46),dp(38)))
+        weatherView=label("DXB --°",10,sage).apply {gravity=Gravity.CENTER;setSingleLine(true)}
+        header.addView(weatherView,LinearLayout.LayoutParams(dp(57),dp(38)))
+        header.addView(action("MAP").apply {textSize=10f;applyExpeditionStyle(this);setOnClickListener{chooseMapSource()}},LinearLayout.LayoutParams(dp(44),dp(33)))
+        header.addView(action("↻").apply {applyExpeditionStyle(this);setOnClickListener{checkForUpdates()}},LinearLayout.LayoutParams(dp(30),dp(33)))
+        root.addView(header,LinearLayout.LayoutParams(-1,dp(43)))
         status = label("GPS OFFLINE  |  FOG 82%  |  R 20m", 10, sage)
         status.setPadding(dp(10), dp(4), 0, dp(4))
         root.addView(status)
@@ -673,11 +671,11 @@ class MainActivity : Activity(), SensorEventListener {
         }
         root.addView(mapArea,LinearLayout.LayoutParams(-1,0,1f))
         val markTools=LinearLayout(this).apply {
-            setBackgroundColor(Color.rgb(40,48,36));gravity=Gravity.CENTER
+            setBackgroundColor(Color.rgb(25,32,25));gravity=Gravity.CENTER
             visibility=View.GONE
         }
         fun tool(label:String,click:()->Unit) {
-            markTools.addView(action(label).apply{setOnClickListener{click()}},LinearLayout.LayoutParams(0,dp(40),1f))
+            markTools.addView(action(label).apply{applyExpeditionStyle(this);textSize=10f;setOnClickListener{click()}},LinearLayout.LayoutParams(0,dp(39),1f))
         }
         val controls=LinearLayout(this).apply {setBackgroundColor(olive);gravity=Gravity.CENTER}
         trackButton=action("TRACK")
@@ -704,7 +702,8 @@ class MainActivity : Activity(), SensorEventListener {
         tool("LASSO"){chooseMark("LASSO")}
         tool("✓ APPLY"){if(mode=="LASSO")commitLasso() else if(mode=="PATH" && pending.size>=2)confirmButton.performClick()}
         listOf(trackButton,followButton,markButton,eraseButton,viewButton).forEach {
-            controls.addView(it,LinearLayout.LayoutParams(0,dp(39),1f))
+            applyExpeditionStyle(it)
+            controls.addView(it,LinearLayout.LayoutParams(0,dp(35),1f))
         }
         root.addView(markTools)
         root.addView(controls)
@@ -1711,6 +1710,15 @@ class MainActivity : Activity(), SensorEventListener {
                 }
             }
         }.start()
+    }
+    private fun applyExpeditionStyle(button:Button,selected:Boolean=false) {
+        button.setTextColor(if(selected)Color.rgb(245,218,156) else sand)
+        button.setTypeface(Typeface.SERIF,Typeface.BOLD)
+        button.background=GradientDrawable().apply {
+            cornerRadius=dp(6).toFloat()
+            setColor(if(selected)Color.rgb(69,64,40) else Color.rgb(29,36,27))
+            setStroke(dp(1),Color.rgb(151,125,76))
+        }
     }
     private fun showLayers(anchor: View) {
         if (layersPopup?.isShowing == true) { layersPopup?.dismiss(); return }
