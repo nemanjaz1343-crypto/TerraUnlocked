@@ -772,6 +772,7 @@ class MainActivity : Activity(), SensorEventListener {
         }
         expeditionBottom=controls
         controls.selected=-1
+        controls.trackActive=tracking
         controls.trackingActive=tracking
         fun chooseMark(next:String) {
             mode=next
