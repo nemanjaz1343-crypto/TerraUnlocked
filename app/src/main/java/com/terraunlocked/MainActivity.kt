@@ -81,6 +81,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var mode = "VIEW"
     private var tracking = false
     private var receiverRegistered=false
+    private var lastGpsUiRefresh=0L
     private val trackingReceiver=object:BroadcastReceiver() {
         override fun onReceive(context:Context,intent:Intent) {
             if(intent.action!=TrackingService.ACTION_FIX)return
@@ -91,13 +92,17 @@ class MainActivity : Activity(), SensorEventListener {
             fogOverlay.currentPosition=point
             fogOverlay.positionAccuracy=intent.getFloatExtra("accuracy",0f)
             if(followUser)map.controller.animateTo(point)
-            if(intent.getBooleanExtra("revealed",false)) {
+            val revealed=intent.getBooleanExtra("revealed",false)
+            if(revealed) {
                 records.clear();records.addAll(store.load())
-                maybeRecoverPaths()
             }
             status.text="GPS ACTIVE / ±"+fogOverlay.positionAccuracy.toInt()+"m"
-            updateNavigation()
-            refresh()
+            val now=System.currentTimeMillis()
+            if(now-lastGpsUiRefresh>=3500L) {
+                lastGpsUiRefresh=now
+                updateNavigation()
+                refresh()
+            }
         }
     }
     private var followUser = true
