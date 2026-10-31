@@ -735,6 +735,44 @@ class MainActivity : Activity(), SensorEventListener {
                 }
             }
         })
+        // Relocation gesture has priority over map pan, markers and radial tools.
+        // The dragged pin follows the finger; neither GPS data nor the original
+        // saved location is changed until CONFIRM is pressed.
+        map.overlays.add(object:Overlay() {
+            private var dragging=false
+            override fun onTouchEvent(event:MotionEvent,mapView:MapView):Boolean {
+                if(mode!="MOVE" || (movingPinTime==null && movingObjectiveId==null))return false
+                if(event.pointerCount>1){dragging=false;return false}
+                when(event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        dragging=true
+                        val p=mapView.projection.fromPixels(event.x.toInt(),event.y.toInt())
+                        chooseMoveDestination(GeoPoint(p.latitude,p.longitude))
+                        return true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        if(dragging) {
+                            val p=mapView.projection.fromPixels(event.x.toInt(),event.y.toInt())
+                            val next=GeoPoint(p.latitude,p.longitude)
+                            val prior=movingPreview
+                            if(prior==null || gap(prior,next)>1.5f)
+                                chooseMoveDestination(next)
+                        }
+                        return true
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        if(dragging) {
+                            val p=mapView.projection.fromPixels(event.x.toInt(),event.y.toInt())
+                            chooseMoveDestination(GeoPoint(p.latitude,p.longitude))
+                        }
+                        dragging=false
+                        return true
+                    }
+                    MotionEvent.ACTION_CANCEL -> {dragging=false;return true}
+                }
+                return true
+            }
+        })
         val mapArea=FrameLayout(this)
         mapArea.addView(map,FrameLayout.LayoutParams(-1,-1))
         confirmButton=action("CONFIRM PATH").apply {
