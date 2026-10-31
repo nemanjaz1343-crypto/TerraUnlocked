@@ -655,53 +655,71 @@ class MainActivity : Activity(), SensorEventListener {
             refresh()
         }
         root.addView(mapArea,LinearLayout.LayoutParams(-1,0,1f))
+        val markTools=LinearLayout(this).apply {
+            setBackgroundColor(Color.rgb(40,48,36));gravity=Gravity.CENTER
+            visibility=View.GONE
+        }
+        fun tool(label:String,click:()->Unit) {
+            markTools.addView(action(label).apply{setOnClickListener{click()}},LinearLayout.LayoutParams(0,dp(40),1f))
+        }
         val controls=LinearLayout(this).apply {setBackgroundColor(olive);gravity=Gravity.CENTER}
         trackButton=action("TRACK")
-        followButton=action("FOCUS ●")
-        val pathButton=action("PATH")
-        modeButton=action("PAINT")
+        followButton=action("FOLLOW")
+        val markButton=action("MARK")
         val eraseButton=action("ERASE")
         val viewButton=action("VIEW")
-        listOf(trackButton,followButton,pathButton,modeButton,eraseButton,viewButton).forEach {
-            controls.addView(it,LinearLayout.LayoutParams(0,dp(46),1f))
+        fun chooseMark(next:String) {
+            mode=next
+            pending.clear();lasso.clear()
+            confirmButton.visibility=View.GONE
+            status.text=when(next){
+                "PATH"->"MARK / TAP VERTICES THEN CONFIRM"
+                "PAINT"->"MARK / PAINT TO REVEAL"
+                "LASSO"->"MARK / TAP POLYGON POINTS THEN APPLY"
+                else->"MARK / SELECT A TOOL"
+            }
+            refresh()
         }
+        tool("↶ UNDO"){markUndoAction()}
+        tool("↷ REDO"){markRedoAction()}
+        tool("PATH"){chooseMark("PATH")}
+        tool("PAINT"){chooseMark("PAINT")}
+        tool("LASSO"){chooseMark("LASSO")}
+        tool("✓ APPLY"){if(mode=="LASSO")commitLasso() else if(mode=="PATH" && pending.size>=2)confirmButton.performClick()}
+        listOf(trackButton,followButton,markButton,eraseButton,viewButton).forEach {
+            controls.addView(it,LinearLayout.LayoutParams(0,dp(39),1f))
+        }
+        root.addView(markTools)
         root.addView(controls)
         setContentView(root)
         if(metroStations.isEmpty())handler.post {refreshMetro()}
         handler.postDelayed({maybeRecoverPaths()},12000L)
         trackButton.setOnClickListener {
             if (tracking) stopTracking() else {
-                if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED)
+                if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED)
                     startTracking()
-                else requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), 10)
+                else requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,Manifest.permission.ACCESS_COARSE_LOCATION),10)
             }
         }
         followButton.setOnClickListener {
             followUser=true
-            followButton.text="FOCUS ●"
-            fogOverlay.currentPosition?.let {map.controller.setZoom(18.0);map.controller.animateTo(it)}
-                ?: run {status.text="FOCUS / WAITING FOR GPS"}
+            followButton.text="FOLLOW ●"
+            fogOverlay.currentPosition?.let{map.controller.setZoom(18.0);map.controller.animateTo(it)}
+                ?:run{status.text="FOLLOW / WAITING FOR GPS"}
         }
-        fun activate(selected: String, button: Button) {
-            mode = if (mode == selected) "VIEW" else selected
-            pathStart = null
-            pending.clear()
-            confirmButton.visibility=View.GONE
-            refresh()
-            pathButton.text = if (mode == "PATH") "PATH ●" else "PATH"
-            modeButton.text = if (mode == "PAINT") "PAINT ●" else "PAINT"
-            eraseButton.text = if (mode == "ERASE") "ERASE ●" else "ERASE"
-            status.text = when(mode) {
-                "PATH" -> "PATH / RED VERTICES / CONFIRM"
-                "PAINT" -> "PAINT / DRAG TO REVEAL"
-                "ERASE" -> "ERASE / DRAG TO REMOVE MANUAL REVEALS"
-                else -> "MAP READY"
+        markButton.setOnClickListener {
+            if(markTools.visibility==View.VISIBLE){
+                markTools.visibility=View.GONE;mode="VIEW";pending.clear();lasso.clear();confirmButton.visibility=View.GONE
+            }else{
+                markTools.visibility=View.VISIBLE;mode="VIEW";status.text="MARK / SELECT TOOL"
             }
+            refresh()
         }
-        pathButton.setOnClickListener { activate("PATH", pathButton) }
-        modeButton.setOnClickListener {activate("PAINT",modeButton);if(mode=="PAINT") showPaintSettings() else paintPopup?.dismiss()}
-        eraseButton.setOnClickListener { activate("ERASE", eraseButton) }
-        viewButton.setOnClickListener { showLayers(viewButton) }
+        eraseButton.setOnClickListener {
+            if(mode!="ERASE"){mode="ERASE";markTools.visibility=View.GONE;status.text="ERASE / REMOVE MANUAL PAINT"}
+            else{mode="VIEW";status.text="MAP READY"}
+        }
+        viewButton.setOnClickListener {showLayers(viewButton)}
         compass.setOnClickListener { map.mapOrientation = 0f }
         map.setUseDataConnection(true)
         loadDubaiTemperature()
