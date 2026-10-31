@@ -296,20 +296,25 @@ class MainActivity : Activity(), SensorEventListener {
             setBackgroundColor(olive)
         }
         val mission=action("MISSIONS ›").apply {setOnClickListener{showObjectives()};textSize=10f;applyExpeditionStyle(this)}
-        header.addView(mission,LinearLayout.LayoutParams(dp(88),dp(33)))
-        val brand=label("✧ TERRA",17,sand).apply {
-            gravity=Gravity.CENTER;setTypeface(Typeface.SERIF,Typeface.BOLD);letterSpacing=0.16f;setSingleLine(true)
+        header.addView(mission,LinearLayout.LayoutParams(dp(91),dp(32)))
+        val emblem=android.widget.ImageView(this).apply {
+            setImageResource(com.terraunlocked.R.drawable.terra_emblem)
+            scaleType=android.widget.ImageView.ScaleType.FIT_CENTER
+        }
+        header.addView(emblem,LinearLayout.LayoutParams(dp(34),dp(34)))
+        val brand=label("T E R R A",15,sand).apply {
+            gravity=Gravity.CENTER;setTypeface(Typeface.SERIF,Typeface.BOLD);setSingleLine(true)
         }
         header.addView(brand,LinearLayout.LayoutParams(0,dp(40),1f))
         sensors=getSystemService(Context.SENSOR_SERVICE) as SensorManager
         compassEnabled=sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)!=null
         val compass=label(if(compassEnabled)"N --°" else "N/A",10,sand).apply {gravity=Gravity.CENTER;setSingleLine(true)}
         compassView=compass
-        header.addView(compass,LinearLayout.LayoutParams(dp(46),dp(38)))
-        weatherView=label("DXB --°",10,sage).apply {gravity=Gravity.CENTER;setSingleLine(true)}
-        header.addView(weatherView,LinearLayout.LayoutParams(dp(57),dp(38)))
-        header.addView(action("MAP").apply {textSize=10f;applyExpeditionStyle(this);setOnClickListener{chooseMapSource()}},LinearLayout.LayoutParams(dp(44),dp(33)))
-        header.addView(action("↻").apply {applyExpeditionStyle(this);setOnClickListener{checkForUpdates()}},LinearLayout.LayoutParams(dp(30),dp(33)))
+        header.addView(compass,LinearLayout.LayoutParams(dp(47),dp(38)))
+        weatherView=label("--°",10,sage).apply {gravity=Gravity.CENTER;setSingleLine(true)}
+        header.addView(weatherView,LinearLayout.LayoutParams(dp(30),dp(38)))
+        header.addView(action("▱\nMAP").apply {textSize=9f;applyExpeditionStyle(this);setOnClickListener{chooseMapSource()}},LinearLayout.LayoutParams(dp(43),dp(35)))
+        header.addView(action("↻").apply {applyExpeditionStyle(this);setOnClickListener{checkForUpdates()}},LinearLayout.LayoutParams(dp(28),dp(35)))
         root.addView(header,LinearLayout.LayoutParams(-1,dp(43)))
         status = label("GPS OFFLINE  |  FOG 82%  |  R 20m", 10, sage)
         status.setPadding(dp(10), dp(4), 0, dp(4))
@@ -1507,7 +1512,7 @@ class MainActivity : Activity(), SensorEventListener {
                 } finally {conn.disconnect()}
             }.getOrNull()
             if(temp!=null)runOnUiThread {
-                if(::weatherView.isInitialized)weatherView.text="DXB ${temp.toInt()}°"
+                if(::weatherView.isInitialized)weatherView.text="${temp.toInt()}°"
             }
         }.start()
     }
