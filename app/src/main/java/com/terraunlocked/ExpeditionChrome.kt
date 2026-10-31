@@ -219,8 +219,8 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
             }
             if(i>0 && i!=selected && i-1!=selected)
                 ExpeditionArt.rule(c,3*d+i*step,11*d,3*d+i*step,h-10*d,ExpeditionArt.muted,.75f*d)
-            ExpeditionArt.icon(c,icons[i],x,22*d,25*d,ExpeditionArt.light)
-            ExpeditionArt.label(c,labels[i],x,h-12*d,11*d,ExpeditionArt.light,false,.5f*d)
+            ExpeditionArt.icon(c,icons[i],x,17*d,21*d,ExpeditionArt.light)
+            ExpeditionArt.label(c,labels[i],x,h-8*d,10.5f*d,ExpeditionArt.light,false,.4f*d)
         }
     }
     override fun onTouchEvent(e:MotionEvent):Boolean {
@@ -247,8 +247,8 @@ internal class ExpeditionMarkPanelView(context:Context,val onSelect:(Int)->Unit)
             if(i==selected && i>=2)
                 ExpeditionArt.panel(c,RectF(x-step*.36f,5*d,x+step*.36f,bottom-5*d),true,6*d)
             if(i==2)ExpeditionArt.rule(c,x-step/2,10*d,x-step/2,bottom-8*d,ExpeditionArt.muted,.8f*d)
-            ExpeditionArt.icon(c,names[i],x,25*d,25*d,if((i==0&&!canUndo)||(i==1&&!canRedo))ExpeditionArt.muted else ExpeditionArt.light)
-            if(i>=2)ExpeditionArt.label(c,names[i].uppercase(),x,bottom-11*d,10*d)
+            ExpeditionArt.icon(c,names[i],x,21*d,21*d,if((i==0&&!canUndo)||(i==1&&!canRedo))ExpeditionArt.muted else ExpeditionArt.light)
+            if(i>=2)ExpeditionArt.label(c,names[i].uppercase(),x,bottom-7*d,9.5f*d)
         }
         val tri=Path().apply {moveTo(w/2-12*d,bottom);lineTo(w/2,bottom+13*d);lineTo(w/2+12*d,bottom)}
         ExpeditionArt.p.style=Paint.Style.STROKE;ExpeditionArt.p.color=ExpeditionArt.gold
