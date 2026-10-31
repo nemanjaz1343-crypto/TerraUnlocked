@@ -57,6 +57,8 @@ class ObjectiveMarkerArt(context:Context) {
             type=="ARCH" -> Color.rgb(145,193,207)
             else -> Color.rgb(202,207,190)
         }
+        c.save()
+        c.scale(0.78f,0.78f,x,y)
         val r=d(if(active)19f else 16f)
         paint.style=Paint.Style.FILL;paint.clearShadowLayer()
         paint.color=Color.argb(if(muted)130 else 220,20,32,29)
@@ -82,6 +84,7 @@ class ObjectiveMarkerArt(context:Context) {
             paint.color=if(muted)Color.LTGRAY else color
             c.drawText(distance,x,top+d(12f),paint)
         }
+        c.restore()
     }
     fun edge(c:Canvas,x:Float,y:Float,angle:Double,active:Boolean) {
         val color=if(active)Color.rgb(248,212,129) else Color.rgb(160,186,170)
