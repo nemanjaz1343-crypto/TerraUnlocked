@@ -7,7 +7,8 @@ import org.json.JSONObject
 data class DiscoveryPoint(
     val latitude:Double,val longitude:Double,val manual:Boolean,val timestamp:Long,
     // Optional fix quality metadata; older files are still readable.
-    val accuracy:Float=Float.NaN,val speed:Float=Float.NaN
+    val accuracy:Float=Float.NaN,val speed:Float=Float.NaN,
+    val confidence:Int=0
 )
 
 class DiscoveryStore(context:Context) {
@@ -29,7 +30,8 @@ class DiscoveryStore(context:Context) {
                 DiscoveryPoint(p.getDouble("lat"),p.getDouble("lon"),
                     p.getBoolean("manual"),p.getLong("time"),
                     p.optDouble("accuracy",Double.NaN).toFloat(),
-                    p.optDouble("speed",Double.NaN).toFloat())
+                    p.optDouble("speed",Double.NaN).toFloat(),
+                    p.optInt("confidence",0).coerceIn(0,100))
             }.getOrNull()
         }
     }
@@ -41,6 +43,7 @@ class DiscoveryStore(context:Context) {
                 it.put("accuracy",point.accuracy.toDouble())
             if(point.speed.isFinite() && point.speed>=0f)
                 it.put("speed",point.speed.toDouble())
+            if(point.confidence>0)it.put("confidence",point.confidence)
         }
     fun replaceAll(points:List<DiscoveryPoint>) {
         val data=JSONArray()

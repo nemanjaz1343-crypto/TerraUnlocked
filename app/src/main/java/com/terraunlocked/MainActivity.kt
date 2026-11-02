@@ -154,6 +154,8 @@ class MainActivity : Activity(), SensorEventListener {
             "TRANSPORT" to listOf(
                 "METRO" to "Ⓜ  METRO",
                 "TAXI" to "▣  TAXI (${taxiStands.size})"),
+            "PATH INTELLIGENCE" to listOf(
+                "ESTIMATES" to "⌁  PATH ESTIMATES"),
             "PERSONAL" to listOf(
                 "ANCHORS" to "⌖  HOME / WORK",
                 "JOURNAL" to "▤  FIELD PINS")
@@ -302,6 +304,8 @@ class MainActivity : Activity(), SensorEventListener {
     private var tracking = false
     private var receiverRegistered=false
     private var lastGpsUiRefresh=0L
+    // Short-lived estimates are deliberately NEVER persisted to discoveries.
+    private val uncertainGps=mutableListOf<Pair<GeoPoint,Long>>()
     private val trackingReceiver=object:BroadcastReceiver() {
         override fun onReceive(context:Context,intent:Intent) {
             if(intent.action==TrackingService.ACTION_RESET_COMPLETE) {
@@ -315,6 +319,7 @@ class MainActivity : Activity(), SensorEventListener {
                 simulating=false
                 handler.removeCallbacks(simulationStep)
                 inferredPaths=emptyList()
+                uncertainGps.clear()
                 historyCutoff=null
                 lastRecoveryPointCount=0
                 lastGpsSample=null
@@ -350,19 +355,32 @@ class MainActivity : Activity(), SensorEventListener {
                 if(distance[0]>maxOf(11f,fogOverlay.positionAccuracy*.85f))
                     map.controller.animateTo(point)
             }
+            val confidence=intent.getIntExtra("confidence",0)
+            val accuracy=intent.getFloatExtra("accuracy",99f)
+            val observationTime=System.currentTimeMillis()
+            if(weak && confidence in 35..64 && accuracy<=65f) {
+                uncertainGps.add(point to observationTime)
+                uncertainGps.removeAll{observationTime-it.second>90000L}
+                while(uncertainGps.size>24)uncertainGps.removeAt(0)
+            } else if(!weak) {
+                uncertainGps.clear()
+            }
             val revealed=intent.getBooleanExtra("revealed",false)
             if(revealed) {
                 // Service has already saved the fix; avoid loading all historical JSON.
                 val t=intent.getLongExtra("timestamp",System.currentTimeMillis())
                 if(records.lastOrNull()?.timestamp!=t)
                     records.add(DiscoveryPoint(intent.getDoubleExtra("rawLat",lat),
-                        intent.getDoubleExtra("rawLon",lon),false,t))
+                        intent.getDoubleExtra("rawLon",lon),false,t,
+                        accuracy,intent.getFloatExtra("speed",Float.NaN),confidence))
+                if(!offline && records.size%35==0)handler.post{maybeRecoverPaths()}
             }
             if(!weak)expeditionBottom?.gpsSearching=false
-            status.text=(if(weak)"GPS LOW ACCURACY" else
-                if(intent.getBooleanExtra("eco",false))"GPS ECO" else "GPS ACTIVE")+
+            status.text=(if(weak)"GPS ESTIMATE" else
+                if(intent.getBooleanExtra("eco",false))"GPS ECO" else "GPS VERIFIED")+
                 " / "+(intent.getStringExtra("motionProfile") ?: "WALK")+
-                " / ±"+fogOverlay.positionAccuracy.toInt()+"m / R "+radius+"m"
+                " / C "+confidence+"/100"+
+                " / ±"+fogOverlay.positionAccuracy.toInt()+"m"
             val now=System.currentTimeMillis()
             if(now-lastGpsUiRefresh>=3500L) {
                 lastGpsUiRefresh=now
@@ -663,7 +681,7 @@ class MainActivity : Activity(), SensorEventListener {
         taxiStands.addAll(taxiStandStore.load())
         objectiveStore.enabled=true
         getSharedPreferences("terra_layer_filters",Context.MODE_PRIVATE).let {prefs->
-            listOf("NATURE","HERITAGE","ARCH","ART","SAVED","OTHER","METRO","ANCHORS")
+            listOf("NATURE","HERITAGE","ARCH","ART","SAVED","OTHER","METRO","ANCHORS","ESTIMATES")
                 .forEach{layerFilters[it]=prefs.getBoolean(it,true)}
         }
         notes.addAll(fieldNotes.load())
@@ -731,13 +749,42 @@ class MainActivity : Activity(), SensorEventListener {
                     strokeCap=Paint.Cap.ROUND
                     pathEffect=android.graphics.DashPathEffect(floatArrayOf(dp(7).toFloat(),dp(6).toFloat()),0f)
                 }
-                inferredPaths.filter {historyCutoff==null || it.endTime<=historyCutoff!!}.forEach {candidate->
+                if(!layerVisible("ESTIMATES"))return
+                // Map-matched guesses: visible dashed indication ONLY; no fog erase.
+                inferredPaths.filter {historyCutoff==null || it.endTime<=historyCutoff!!}
+                    .forEach {candidate->
                     val path=android.graphics.Path()
                     candidate.points.forEachIndexed {i,pos->
                         val p=mapView.projection.toPixels(GeoPoint(pos.first,pos.second),Point())
                         if(i==0)path.moveTo(p.x.toFloat(),p.y.toFloat()) else path.lineTo(p.x.toFloat(),p.y.toFloat())
                     }
                     canvas.drawPath(path,ink)
+                    val lastPoint=candidate.points.getOrNull(candidate.points.size/2)
+                    if(lastPoint!=null) {
+                        val labelPt=mapView.projection.toPixels(
+                            GeoPoint(lastPoint.first,lastPoint.second),Point())
+                        val textInk=Paint(Paint.ANTI_ALIAS_FLAG).apply{
+                            color=Color.rgb(235,213,141)
+                            textSize=dp(9).toFloat()
+                            textAlign=Paint.Align.CENTER
+                        }
+                        canvas.drawText("EST "+candidate.confidence+"/100",
+                            labelPt.x.toFloat(),labelPt.y.toFloat()-dp(6),textInk)
+                    }
+                }
+                // Short-lived weak Fused estimates, drawn as outlines, never
+                // mistaken for already-visited territory.
+                val now=System.currentTimeMillis()
+                uncertainGps.filter{now-it.second<90000L}.forEach{(point,_)->
+                    val px=mapView.projection.toPixels(point,Point())
+                    val ring=Paint(Paint.ANTI_ALIAS_FLAG).apply{
+                        color=Color.argb(140,235,185,105)
+                        style=Paint.Style.STROKE
+                        strokeWidth=dp(1).toFloat()
+                        pathEffect=android.graphics.DashPathEffect(
+                            floatArrayOf(dp(3).toFloat(),dp(4).toFloat()),0f)
+                    }
+                    canvas.drawCircle(px.x.toFloat(),px.y.toFloat(),dp(10).toFloat(),ring)
                 }
             }
         })
@@ -2938,14 +2985,15 @@ class MainActivity : Activity(), SensorEventListener {
     }
     private fun maybeRecoverPaths() {
         val now=System.currentTimeMillis()
-        if(recoveryRunning || records.size<3 || records.size==lastRecoveryPointCount)return
-        if(now-lastRecoveryScan<180000L)return
+        if(recoveryRunning || offline || records.size<3 ||
+            records.size<lastRecoveryPointCount+10)return
+        if(now-lastRecoveryScan<480000L)return
         lastRecoveryScan=now
         lastRecoveryPointCount=records.size
         scanSmartPaths(silent=true)
     }
     private fun scanSmartPaths(silent:Boolean=false) {
-        if(recoveryRunning)return
+        if(recoveryRunning || offline)return
         recoveryRunning=true
         if(!silent)status.text="SMART PATH / SCANNING OSM..."
         val snapshot=records.toList()

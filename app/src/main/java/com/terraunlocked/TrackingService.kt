@@ -6,12 +6,47 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.location.Location
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.os.Build
 import android.os.IBinder
 import com.google.android.gms.location.*
 import org.osmdroid.util.GeoPoint
 
-class TrackingService:Service() {
+class TrackingService:Service(),SensorEventListener {
+    private lateinit var motionSensors:SensorManager
+    private var accelerationEnergy=0.0
+    private var lastMotionElapsed=0L
+    private var lastSensorElapsed=0L
+    private fun inertialMoving():Boolean {
+        // Motion is supporting context, never a substitute for a valid GPS fix.
+        val now=android.os.SystemClock.elapsedRealtime()
+        return lastSensorElapsed>0 && now-lastSensorElapsed<5000L &&
+            now-lastMotionElapsed<6500L
+    }
+    override fun onSensorChanged(event:SensorEvent) {
+        if(event.sensor.type!=Sensor.TYPE_LINEAR_ACCELERATION || !running)return
+        if(event.values.size<3)return
+        val magnitude=kotlin.math.sqrt(
+            (event.values[0]*event.values[0]+event.values[1]*event.values[1]+
+                event.values[2]*event.values[2]).toDouble())
+        accelerationEnergy=accelerationEnergy*.82+magnitude*.18
+        val now=android.os.SystemClock.elapsedRealtime()
+        lastSensorElapsed=now
+        if(accelerationEnergy>.48)lastMotionElapsed=now
+    }
+    override fun onAccuracyChanged(sensor:Sensor?,accuracy:Int){}
+    private fun startMotionSensors() {
+        motionSensors=getSystemService(SENSOR_SERVICE) as SensorManager
+        motionSensors.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)?.let {
+            motionSensors.registerListener(this,it,200000)
+        }
+    }
+    private fun stopMotionSensors() {
+        if(::motionSensors.isInitialized)motionSensors.unregisterListener(this)
+    }
     companion object {
         const val ACTION_START="com.terraunlocked.START_TRACK"
         const val ACTION_STOP="com.terraunlocked.STOP_TRACK"
@@ -34,6 +69,7 @@ class TrackingService:Service() {
     private var motionProfile="WALK"
     private var lastSmoothed:Location?=null
     private var lastRecordedTimestamp=0L
+    private var fixConfidence=0
     private var lastBroadcast=0L
     private var lastVisual:Location?=null
     private fun broadcastFix(loc:Location,revealed:Boolean,eco:Boolean,weak:Boolean=false,
@@ -53,6 +89,8 @@ class TrackingService:Service() {
             putExtra("rawLat",discoveryPosition?.latitude ?: loc.latitude)
             putExtra("rawLon",discoveryPosition?.longitude ?: loc.longitude)
             putExtra("accuracy",loc.accuracy);putExtra("revealed",revealed)
+            putExtra("confidence",fixConfidence)
+            putExtra("inertialActive",inertialMoving())
             putExtra("eco",eco);putExtra("weak",weak)
             putExtra("motionProfile",motionProfile)
             putExtra("timestamp",sampleTime)
@@ -127,6 +165,11 @@ class TrackingService:Service() {
                     }
                 }
                 if(loc.accuracy>65f || jump) {
+                    fixConfidence=PathIntelligence.assess(
+                        loc.accuracy,fixAgeMs,
+                        if(loc.hasSpeed())loc.speed else Float.NaN,
+                        if(prev!=null)prev.distanceTo(loc).toDouble() else 0.0,
+                        seconds,inertialMoving()).score
                     if(prev!=null && seconds>45.0)previous=null
                     // Report the uncertainty without recording inaccurate exploration.
                     val now=System.currentTimeMillis()
@@ -156,8 +199,13 @@ class TrackingService:Service() {
                     }
                 }
                 val now=System.currentTimeMillis()
-                // Do not make permanent discoveries from poor urban GPS readings.
-                if(loc.accuracy>35f) {
+                val velocity=if(loc.hasSpeed())loc.speed else Float.NaN
+                val distance=if(prev!=null)prev.distanceTo(loc).toDouble() else 0.0
+                val evidence=PathIntelligence.assess(loc.accuracy,fixAgeMs,
+                    velocity,distance,seconds,inertialMoving())
+                fixConfidence=evidence.score
+                // Weak estimates are preview-only. They cannot unlock fog.
+                if(!evidence.accepted) {
                     if(now-lastBroadcast>=12000L) {
                         lastBroadcast=now
                         broadcastFix(loc,false,ecoMode,weak=true,sampleTime=now)
@@ -208,10 +256,14 @@ class TrackingService:Service() {
                 val step=saved?.distanceTo(smooth) ?: Float.MAX_VALUE
                 val secondsSinceSaved=if(saved!=null)
                     (loc.elapsedRealtimeNanos-saved.elapsedRealtimeNanos)/1e9 else 0.0
-                val speedMps=if(loc.hasSpeed() && loc.speed>=0f)loc.speed
+                val rawSpeed=if(loc.hasSpeed() && loc.speed>=0f)loc.speed
                     else if(saved!=null && secondsSinceSaved in 1.0..20.0 &&
                         loc.accuracy<=20f)
                         (step/secondsSinceSaved).toFloat() else Float.NaN
+                // Inertial movement helps detect walking despite zero/absent GPS speed.
+                val speedMps=if((!rawSpeed.isFinite() || rawSpeed<0.3f) &&
+                    inertialMoving() && secondsSinceSaved>0.0 && step>5f)
+                    1.25f else rawSpeed
 
                 motionProfile=when {
                     speedMps.isFinite() && speedMps>=7f -> "CAR"
@@ -241,7 +293,8 @@ class TrackingService:Service() {
                     lastRecordedTimestamp=measuredAt
                     store.add(DiscoveryPoint(smooth.latitude,smooth.longitude,
                         false,measuredAt,loc.accuracy,
-                        if(speedMps.isFinite())speedMps else Float.NaN))
+                        if(speedMps.isFinite())speedMps else Float.NaN,
+                        fixConfidence))
                     lastSaved=Location(smooth)
                     if(now-lastBroadcast>=1000L) {
                         lastBroadcast=now
@@ -266,6 +319,7 @@ class TrackingService:Service() {
             // Reset is handled on the service main thread, serialized with GPS fixes.
             // Disable tracking before clearing so no late callback can reveal the map.
             running=false
+            stopMotionSensors()
             client.removeLocationUpdates(callback)
             store.replaceAll(emptyList())
             PathStore(this).save(emptyList())
@@ -285,6 +339,7 @@ class TrackingService:Service() {
             startForeground(1801,makeNotification("Moving / high accuracy"),ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
         else startForeground(1801,makeNotification("Moving / high accuracy"))
         running=true
+        startMotionSensors()
         sendBroadcast(Intent(ACTION_STATE).setPackage(packageName).putExtra("running",true))
         ecoMode=false
         lastVisual=null
@@ -304,6 +359,7 @@ class TrackingService:Service() {
     }
     private fun stopTracking() {
         running=false
+        stopMotionSensors()
         client.removeLocationUpdates(callback)
         sendBroadcast(Intent(ACTION_STATE).setPackage(packageName).putExtra("running",false))
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -311,6 +367,7 @@ class TrackingService:Service() {
     }
     override fun onDestroy() {
         running=false
+        stopMotionSensors()
         client.removeLocationUpdates(callback)
         super.onDestroy()
     }
