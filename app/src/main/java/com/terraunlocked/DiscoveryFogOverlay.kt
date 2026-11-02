@@ -40,10 +40,24 @@ class DiscoveryFogOverlay(
         return kotlin.math.abs(east.x - p.x).toFloat().coerceAtLeast(1f)
     }
     private fun canJoin(a: DiscoveryPoint, b: DiscoveryPoint): Boolean {
-        if (a.manual || b.manual || b.timestamp < a.timestamp || b.timestamp - a.timestamp > 90000L) return false
-        val out = FloatArray(1)
-        android.location.Location.distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude, out)
-        return out[0] <= 120f
+        // A fixed 120m limit broke valid highway samples: 100 km/h travels
+        // ~139m between regular five-second fixes. Keep the user's 20m reveal
+        // radius, but allow plausible speed over short gaps. Do not invent
+        // paths over lost GPS coverage or between separate trips.
+        if (a.manual || b.manual || a.timestamp<=0L || b.timestamp<=a.timestamp) return false
+        val elapsed=(b.timestamp-a.timestamp)/1000.0
+        if(elapsed>90.0) return false
+        val out=FloatArray(1)
+        android.location.Location.distanceBetween(a.latitude,a.longitude,b.latitude,b.longitude,out)
+        val distance=out[0].toDouble()
+        if(!distance.isFinite())return false
+        // Short sampling gaps may include cars (~180km/h upper safety bound).
+        // Longer outages get only a small walking/stationary allowance.
+        return if(elapsed<=25.0) {
+            distance<=750.0 && distance<=50.0*elapsed+15.0
+        } else {
+            distance<=70.0
+        }
     }
     private fun segmentPath(a: Point, b: Point): Path =
         Path().apply { moveTo(a.x.toFloat(), a.y.toFloat()); lineTo(b.x.toFloat(), b.y.toFloat()) }

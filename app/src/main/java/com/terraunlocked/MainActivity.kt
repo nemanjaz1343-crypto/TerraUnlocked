@@ -58,6 +58,15 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var weatherView: TextView
     private var weatherLastFetch=0L
     private var expeditionHeader:ExpeditionHeaderView?=null
+    private var solarPopup:PopupWindow?=null
+    private val solarTick=object:Runnable {
+        override fun run() {
+            if(::map.isInitialized && ::fogOverlay.isInitialized) {
+                updateSolarDial()
+                handler.postDelayed(this,60000L)
+            }
+        }
+    }
     private var expeditionBottom:ExpeditionBottomView?=null
     private var expeditionPalette:ExpeditionMarkPanelView?=null
     private lateinit var sensors: SensorManager
@@ -450,7 +459,7 @@ class MainActivity : Activity(), SensorEventListener {
         expeditionHeader=ExpeditionHeaderView(this,
             onMissions={showObjectives()},
             onMap={chooseMapSource()},
-            onUpdate={checkForUpdates()},
+            onSolar={showSolarDetails()},
             onNorth={map.mapOrientation=0f}
         ).also {root.addView(it,LinearLayout.LayoutParams(-1,dp(45)))}
         // The status text remains available to services; no extra row obscures the map.
@@ -1842,6 +1851,62 @@ class MainActivity : Activity(), SensorEventListener {
                     "https://c.tile-cyclosm.openstreetmap.fr/cyclosm/"),
             "© OpenStreetMap contributors · CyclOSM")
     }
+    private fun updateSolarDial() {
+        // Use a real GPS position when available; Dubai until first GPS lock.
+        val position=fogOverlay.currentPosition
+        val lat=position?.latitude ?: 25.2048
+        val lon=position?.longitude ?: 55.2708
+        expeditionHeader?.solarSnapshot=SolarCycle.snapshot(lat,lon)
+    }
+
+    private fun showSolarDetails() {
+        solarPopup?.dismiss()
+        updateSolarDial()
+        val gps=fogOverlay.currentPosition
+        val lat=gps?.latitude ?: 25.2048
+        val lon=gps?.longitude ?: 55.2708
+        val snapshot=SolarCycle.snapshot(lat,lon)
+        val solar=snapshot.day
+        val zone=java.time.ZoneId.systemDefault()
+        val clock=java.time.format.DateTimeFormatter.ofPattern("HH:mm",java.util.Locale.getDefault())
+        fun time(value:java.time.Instant?):String=
+            value?.atZone(zone)?.format(clock) ?: "--:--"
+        fun interval(from:java.time.Instant?,to:java.time.Instant?):String=
+            if(from==null || to==null)"Unavailable" else time(from)+" – "+time(to)
+        val panel=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(15),dp(13),dp(15),dp(13))
+            background=tacticalPanel()
+        }
+        panel.addView(label("☼ SOLAR DIAL / "+(if(gps!=null)"GPS LOCATION" else "DUBAI"),12,sage))
+        panel.addView(label(
+            (if(snapshot.isDay)"DAYLIGHT" else "NIGHT")+
+            "  /  NEXT "+snapshot.nextEvent+" "+time(snapshot.nextTime),13,sand))
+        panel.addView(label("↑ SUNRISE   "+time(solar.sunrise),15,sand))
+        panel.addView(label("↓ SUNSET    "+time(solar.sunset),15,sand))
+        val duration=snapshot.durationMinutes
+        panel.addView(label("DAY LENGTH   "+(if(duration!=null)
+            "${duration/60}h ${duration%60}m" else "Unavailable"),12,sage))
+        panel.addView(label("GOLDEN HOUR / MORNING",11,sage))
+        panel.addView(label(interval(solar.sunrise,solar.morningGoldenEnd),12,sand))
+        panel.addView(label("GOLDEN HOUR / EVENING",11,sage))
+        panel.addView(label(interval(solar.eveningGoldenStart,solar.sunset),12,sand))
+        panel.addView(label("BLUE HOUR / MORNING",11,sage))
+        panel.addView(label(interval(solar.morningBlueStart,solar.morningBlueEnd),12,sand))
+        panel.addView(label("BLUE HOUR / EVENING",11,sage))
+        panel.addView(label(interval(solar.eveningBlueStart,solar.eveningBlueEnd),12,sand))
+        panel.addView(label("Approximate astronomical times • offline • device timezone",10,sage))
+        val popup=PopupWindow(panel,dp(300),-2,true).apply {
+            isOutsideTouchable=true
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+            elevation=dp(7).toFloat()
+        }
+        panel.addView(action("CLOSE").apply {setOnClickListener{popup.dismiss()}})
+        solarPopup=popup
+        popup.setOnDismissListener{if(solarPopup===popup)solarPopup=null}
+        popup.showAtLocation(map,Gravity.TOP or Gravity.RIGHT,dp(9),dp(105))
+    }
+
     private fun loadDubaiTemperature() {
         if(System.currentTimeMillis()-weatherLastFetch<30L*60L*1000L)return
         weatherLastFetch=System.currentTimeMillis()
@@ -2402,6 +2467,9 @@ class MainActivity : Activity(), SensorEventListener {
     }
     override fun onResume() {
         super.onResume(); map.onResume()
+        handler.removeCallbacks(solarTick)
+        updateSolarDial()
+        handler.postDelayed(solarTick,60000L)
         tracking=TrackingService.running
         expeditionBottom?.trackingActive=tracking
         expeditionBottom?.gpsSearching=tracking
@@ -2429,12 +2497,15 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
     override fun onPause() {
+        handler.removeCallbacks(solarTick)
         super.onPause(); sensors.unregisterListener(this); map.onPause()
         if(receiverRegistered) {unregisterReceiver(trackingReceiver);receiverRegistered=false}
     }
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacks(simulationStep)
+        handler.removeCallbacks(solarTick)
+        solarPopup?.dismiss()
         layersPopup?.dismiss()
         poiPopup?.dismiss()
         radialMenu?.dismiss()

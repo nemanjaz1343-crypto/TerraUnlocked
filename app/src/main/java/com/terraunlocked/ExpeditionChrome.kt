@@ -150,10 +150,11 @@ internal object ExpeditionArt {
 }
 
 internal class ExpeditionHeaderView(context:Context,
-    val onMissions:()->Unit,val onMap:()->Unit,val onUpdate:()->Unit,
+    val onMissions:()->Unit,val onMap:()->Unit,val onSolar:()->Unit,
     val onNorth:()->Unit):View(context) {
     var bearing:Int?=null;set(value){field=value;invalidate()}
     var temperature:Int?=null;set(value){field=value;invalidate()}
+    var solarSnapshot:SolarCycle.Snapshot?=null;set(value){field=value;invalidate()}
     private val d=resources.displayMetrics.density
     private val crest by lazy { android.graphics.BitmapFactory.decodeResource(resources,R.drawable.terra_mark) }
     override fun onDraw(c:Canvas) {
@@ -174,7 +175,33 @@ internal class ExpeditionHeaderView(context:Context,
         ExpeditionArt.icon(c,"compass",288f,hh/2f-7f,20f)
         ExpeditionArt.label(c,"N "+(bearing?.let{"%03d°".format(it)} ?: "---°"),288f,hh/2f+19f,10f)
         ExpeditionArt.rule(c,313f,7f,313f,hh-7f,ExpeditionArt.muted)
-        ExpeditionArt.icon(c,"sun",339f,hh/2f-7f,20f)
+        // Compact offline Solar Dial. Gold daylight arc, moss night arc;
+        // the moving dot marks the current point in the day/night cycle.
+        val cy=hh/2f-7f
+        val solar=solarSnapshot
+        val dial=RectF(327f,cy-12f,351f,cy+12f)
+        ExpeditionArt.p.style=Paint.Style.STROKE
+        ExpeditionArt.p.strokeWidth=1.6f
+        ExpeditionArt.p.color=Color.rgb(166,132,73)
+        c.drawArc(dial,180f,180f,false,ExpeditionArt.p)
+        ExpeditionArt.p.color=Color.rgb(81,106,75)
+        c.drawArc(dial,0f,180f,false,ExpeditionArt.p)
+        if(solar!=null) {
+            val degrees=(if(solar.isDay)180.0 else 0.0)+180.0*solar.progress
+            val angle=Math.toRadians(degrees)
+            ExpeditionArt.p.style=Paint.Style.FILL
+            ExpeditionArt.p.color=if(solar.isDay)Color.rgb(245,204,115) else Color.rgb(190,204,174)
+            c.drawCircle(339f+12f*cos(angle).toFloat(),
+                cy+12f*sin(angle).toFloat(),2.8f,ExpeditionArt.p)
+            if(solar.isDay) {
+                ExpeditionArt.icon(c,"sun",339f,cy,10f,ExpeditionArt.light)
+            } else {
+                ExpeditionArt.p.color=ExpeditionArt.light
+                c.drawCircle(339f,cy,4.0f,ExpeditionArt.p)
+                ExpeditionArt.p.color=ExpeditionArt.dark
+                c.drawCircle(341f,cy-1.7f,3.6f,ExpeditionArt.p)
+            }
+        } else ExpeditionArt.icon(c,"sun",339f,cy,10f)
         ExpeditionArt.label(c,(temperature?.toString()?:"--")+"°",339f,hh/2f+19f,10f)
         ExpeditionArt.rule(c,359f,7f,359f,hh-7f,ExpeditionArt.muted)
         ExpeditionArt.icon(c,"map",375f,hh/2f-7f,21f)
@@ -192,7 +219,7 @@ internal class ExpeditionHeaderView(context:Context,
                     frac<.25f->onMissions()
                     frac in .7f.. .805f->onNorth()
                     frac>=.895f->onMap()
-                    frac in .805f.. .895f->onUpdate()
+                    frac in .805f.. .895f->onSolar()
                 }
             }
             return true
