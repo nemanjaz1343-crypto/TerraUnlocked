@@ -17,7 +17,9 @@ data class TaxiStand(
 class TaxiStandStore(context:Context) {
     private val prefs=context.getSharedPreferences("terra_taxi_ranks_v1",Context.MODE_PRIVATE)
 
-    fun lastFetchedAt():Long=prefs.getLong("fetched_at",0L)
+    fun lastFetchedAt():Long=
+        if(prefs.getString("source_revision","")=="overpass-private-coffee-v1")
+            prefs.getLong("fetched_at",0L) else 0L
 
     fun cachedCenter():GeoPoint? {
         val lat=prefs.getString("center_lat",null)?.toDoubleOrNull()
@@ -56,24 +58,44 @@ class TaxiStandStore(context:Context) {
             "node[\"amenity\"=\"taxi\"]($bounds);"+
             "way[\"amenity\"=\"taxi\"]($bounds);"+
             ");out center 200;"
-        val connection=(URL("https://overpass.kumi.systems/api/interpreter")
-            .openConnection() as HttpURLConnection).apply {
-            requestMethod="POST"
-            doOutput=true
-            connectTimeout=12000
-            readTimeout=26000
-            setRequestProperty("Content-Type","application/x-www-form-urlencoded; charset=UTF-8")
-            setRequestProperty("User-Agent","TerraUnlocked/Android OSM taxi-rank layer")
-        }
-        val results=try {
-            val request="data="+java.net.URLEncoder.encode(query,"UTF-8")
-            connection.outputStream.use {it.write(request.toByteArray(Charsets.UTF_8))}
-            require(connection.responseCode==200) {
-                "Overpass returned "+connection.responseCode
+        // The former overpass.kumi.systems host is obsolete. Try the documented
+        // Private.coffee endpoint first and the main OSM Overpass server next.
+        val sources=listOf(
+            "https://overpass.private.coffee/api/interpreter",
+            "https://overpass-api.de/api/interpreter"
+        )
+        val request="data="+java.net.URLEncoder.encode(query,"UTF-8")
+        var body:String?=null
+        var lastFailure:Throwable?=null
+        for(endpoint in sources) {
+            try {
+                val connection=(URL(endpoint).openConnection() as HttpURLConnection).apply {
+                    requestMethod="POST"
+                    doOutput=true
+                    connectTimeout=9000
+                    readTimeout=23000
+                    setRequestProperty("Content-Type",
+                        "application/x-www-form-urlencoded; charset=UTF-8")
+                    setRequestProperty("User-Agent","TerraUnlocked/Android OSM taxi ranks")
+                }
+                try {
+                    connection.outputStream.use {
+                        it.write(request.toByteArray(Charsets.UTF_8))
+                    }
+                    if(connection.responseCode!=200)throw java.io.IOException(
+                        "Overpass HTTP "+connection.responseCode)
+                    body=connection.inputStream.bufferedReader(Charsets.UTF_8)
+                        .use{it.readText()}
+                } finally {connection.disconnect()}
+                if(body!=null)break
+            } catch(error:Exception) {
+                lastFailure=error
             }
-            val body=connection.inputStream.bufferedReader(Charsets.UTF_8)
-                .use {it.readText()}
-            val elements=JSONObject(body).optJSONArray("elements") ?: JSONArray()
+        }
+        val response=body ?: throw java.io.IOException(
+            "OSM taxi data service unavailable",lastFailure)
+        val results=run {
+            val elements=JSONObject(response).optJSONArray("elements") ?: JSONArray()
             val found=LinkedHashMap<String,TaxiStand>()
             for(i in 0 until elements.length()) {
                 val item=elements.optJSONObject(i) ?: continue
@@ -96,8 +118,6 @@ class TaxiStandStore(context:Context) {
                 )
             }
             found.values.toList()
-        } finally {
-            connection.disconnect()
         }
         val archive=JSONArray()
         results.forEach {stand ->
@@ -109,7 +129,8 @@ class TaxiStandStore(context:Context) {
         prefs.edit().putString("ranks",archive.toString())
             .putString("center_lat",lat.toString())
             .putString("center_lon",lon.toString())
-            .putLong("fetched_at",System.currentTimeMillis()).apply()
+            .putLong("fetched_at",System.currentTimeMillis())
+            .putString("source_revision","overpass-private-coffee-v1").apply()
         return results
     }
 }

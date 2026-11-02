@@ -153,7 +153,7 @@ class MainActivity : Activity(), SensorEventListener {
                 "OTHER" to "◇  OTHER"),
             "TRANSPORT" to listOf(
                 "METRO" to "Ⓜ  METRO",
-                "TAXI" to "▣  TAXI"),
+                "TAXI" to "▣  TAXI (${taxiStands.size})"),
             "PERSONAL" to listOf(
                 "ANCHORS" to "⌖  HOME / WORK",
                 "JOURNAL" to "▤  FIELD PINS")
@@ -208,6 +208,20 @@ class MainActivity : Activity(), SensorEventListener {
         quickAction("SHOW ALL",true)
         quickAction("HIDE ALL",false)
         panel.addView(controls)
+        panel.addView(action("⌕  SCAN TAXI STANDS IN THIS AREA").apply{
+            applyExpeditionStyle(this)
+            textSize=11f
+            setOnClickListener {
+                overlayFiltersPopup?.dismiss()
+                setLayerVisible("TAXI",true)
+                maybeRefreshTaxiStands(force=true)
+            }
+        },LinearLayout.LayoutParams(-1,dp(42)).apply{
+            setMargins(dp(2),dp(4),dp(2),0)
+        })
+        panel.addView(label("Taxi places come from OSM: not all ranks are mapped.",9,sage).apply{
+            gravity=Gravity.CENTER
+        })
         panel.addView(label("Visibility only / your data stays saved",9,sage).apply{
             gravity=Gravity.CENTER
         },LinearLayout.LayoutParams(-1,dp(26)))
@@ -2337,21 +2351,34 @@ class MainActivity : Activity(), SensorEventListener {
         handler.postDelayed(taxiRefreshTask,1800L)
     }
 
-    private fun maybeRefreshTaxiStands() {
-        if(!::map.isInitialized || !taxiStandsEnabled || taxiStandLoading ||
-            map.zoomLevelDouble<14.8 || offline)return
+    private fun maybeRefreshTaxiStands(force:Boolean=false) {
+        if(!::map.isInitialized || taxiStandLoading)return
+        if(!taxiStandsEnabled) {
+            if(force)status.text="TAXI / ENABLE TAXI STANDS LAYER FIRST"
+            return
+        }
+        if(offline) {
+            if(force)status.text="TAXI / OFFLINE: RECONNECT TO LOAD STANDS"
+            return
+        }
+        if(map.zoomLevelDouble<14.8) {
+            if(force)status.text="TAXI / ZOOM IN TO VIEW STANDS"
+            return
+        }
         val now=System.currentTimeMillis()
-        if(now-lastTaxiStandAttempt<120000L)return
+        if(!force && now-lastTaxiStandAttempt<120000L)return
         val center=GeoPoint(map.mapCenter.latitude,map.mapCenter.longitude)
         val cached=taxiStandStore.cachedCenter()
-        val recent=now-taxiStandStore.lastFetchedAt()<6L*60L*60L*1000L
+        val recent=now-taxiStandStore.lastFetchedAt()<6L*60L*60L*1000L &&
+            taxiStands.isNotEmpty()
         val delta=FloatArray(1)
         if(cached!=null)android.location.Location.distanceBetween(
             cached.latitude,cached.longitude,
             center.latitude,center.longitude,delta)
-        if(cached!=null && recent && delta[0]<2800f)return
+        if(!force && cached!=null && recent && delta[0]<2800f)return
         taxiStandLoading=true
         lastTaxiStandAttempt=now
+        if(force)status.text="TAXI / SCANNING OSM STAND LOCATIONS..."
         Thread {
             val result=runCatching{taxiStandStore.fetch(center)}
             runOnUiThread {
@@ -2361,10 +2388,23 @@ class MainActivity : Activity(), SensorEventListener {
                     taxiStands.clear()
                     taxiStands.addAll(stands)
                     refresh()
+                    if(force) {
+                        status.text="TAXI / FOUND "+stands.size+" MAPPED STANDS"
+                        if(stands.isEmpty())android.app.AlertDialog.Builder(this)
+                            .setTitle("TAXI STANDS / NO MAP DATA")
+                            .setMessage("No taxi stands are currently mapped in OpenStreetMap for this area. This does not mean taxis are unavailable. Try another part of Dubai, or use a taxi-booking app.")
+                            .setPositiveButton("OK",null).show()
+                    }
                 }
-                result.onFailure {
-                    // Keep last cached ranks visible if Overpass is unavailable.
-                    // No artificial taxi locations and no repeat-request loop.
+                result.onFailure {error->
+                    if(force) {
+                        status.text="TAXI / ONLINE DATA UNAVAILABLE"
+                        android.app.AlertDialog.Builder(this)
+                            .setTitle("TAXI STANDS / CONNECTION ERROR")
+                            .setMessage("Could not retrieve taxi stand locations from the OpenStreetMap data service. Previously cached locations remain visible. Retry later.\n\n"+
+                                (error.message ?: "Unknown network error"))
+                            .setPositiveButton("OK",null).show()
+                    }
                 }
             }
         }.start()
