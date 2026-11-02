@@ -57,6 +57,9 @@ class MainActivity : Activity(), SensorEventListener {
     private lateinit var compassView: TextView
     private lateinit var weatherView: TextView
     private var weatherLastFetch=0L
+    private val weatherPrefs by lazy {getSharedPreferences("terra_weather_v1",Context.MODE_PRIVATE)}
+    private var mapSearchGeneration=0
+    private var mapSearchLastRequest=0L
     private var expeditionHeader:ExpeditionHeaderView?=null
     private var solarPopup:PopupWindow?=null
     private val solarTick=object:Runnable {
@@ -444,6 +447,12 @@ class MainActivity : Activity(), SensorEventListener {
         objectivePhotoTargetId=savedInstanceState?.getString("objective_photo_target")
         objectivePhotoPermissionId=savedInstanceState?.getString("objective_photo_permission")
         savedInstanceState?.getString("objective_camera_uri")?.let { cameraUri=Uri.parse(it) }
+        if(savedInstanceState?.containsKey("field_photo_lat")==true &&
+           savedInstanceState.containsKey("field_photo_lon")) {
+            attachmentPoint=GeoPoint(
+                savedInstanceState.getDouble("field_photo_lat"),
+                savedInstanceState.getDouble("field_photo_lon"))
+        }
         window.statusBarColor = olive
         window.navigationBarColor = olive
         Configuration.getInstance().userAgentValue = packageName
@@ -463,12 +472,16 @@ class MainActivity : Activity(), SensorEventListener {
         compassEnabled=sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)!=null
         compassView=label("N ---°",10,sand)
         weatherView=label("--°",10,sage)
+        val cachedTemperature=weatherPrefs.getInt("last_temperature",Int.MIN_VALUE)
         expeditionHeader=ExpeditionHeaderView(this,
             onMissions={showObjectives()},
             onMap={chooseMapSource()},
             onSolar={showSolarDetails()},
             onNorth={map.mapOrientation=0f}
-        ).also {root.addView(it,LinearLayout.LayoutParams(-1,dp(45)))}
+        ).also {
+            if(cachedTemperature!=Int.MIN_VALUE)it.temperature=cachedTemperature
+            root.addView(it,LinearLayout.LayoutParams(-1,dp(45)))
+        }
         // The status text remains available to services; no extra row obscures the map.
         status=label("GPS OFFLINE  |  FOG 82%  |  R 20m",10,sage).apply{
             setPadding(dp(12),dp(1),dp(8),dp(3))
@@ -835,18 +848,27 @@ class MainActivity : Activity(), SensorEventListener {
         }
         previewBar=previewControls
         previewControls.addView(action("× CANCEL").apply {setOnClickListener {clearMapPreview()}},LinearLayout.LayoutParams(0,dp(48),1f))
-        previewControls.addView(action("✓ CONFIRM OBJECTIVE").apply {setOnClickListener {
-            val point=previewLocation
-            if(point!=null) {
-                val chosen=pendingObjective
-                if(chosen!=null) {clearMapPreview();showObjective(chosen)}
-                else {
-                    objectiveStore.addPlace(previewLabel,point.latitude,point.longitude,"Saved map target")
-                    objectiveStore.enabled=true
-                    clearMapPreview();status.text="OBJECTIVE SAVED";refresh()
-                }
-            }
-        }},LinearLayout.LayoutParams(0,dp(48),2f))
+        previewControls.addView(action("⌖ SET OBJECTIVE").apply {setOnClickListener {
+            val point=previewLocation ?: return@setOnClickListener
+            val chosen=pendingObjective
+            val target=chosen ?: objectiveStore.addPlace(
+                previewLabel.ifBlank{"Map target"},point.latitude,point.longitude,"Map search target")
+            objectiveStore.active=target.id
+            objectiveStore.enabled=true
+            clearMapPreview()
+            status.text="ACTIVE OBJECTIVE / "+target.name.take(32)
+            refresh()
+        }},LinearLayout.LayoutParams(0,dp(48),1.2f))
+        previewControls.addView(action("＋ SAVE PIN").apply {setOnClickListener {
+            val point=previewLocation ?: return@setOnClickListener
+            notes.add(FieldNote(point.latitude,point.longitude,
+                previewLabel.ifBlank{"Saved location"},"POI","Saved from map search",
+                System.currentTimeMillis(),"◆"))
+            fieldNotes.save(notes)
+            clearMapPreview()
+            status.text="PIN SAVED / FIELD JOURNAL"
+            refresh()
+        }},LinearLayout.LayoutParams(0,dp(48),1f))
         mapArea.addView(previewControls,FrameLayout.LayoutParams(-1,dp(54),Gravity.BOTTOM))
         val movingBar=LinearLayout(this).apply {
             orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER
@@ -1054,6 +1076,44 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
 
+    private fun showMapPhotoOptions(where:GeoPoint) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("PHOTO / FIELD LOCATION")
+            .setItems(arrayOf("TAKE PHOTO", "ATTACH FROM GALLERY")) {_,choice->
+                attachmentPoint=where
+                if(choice==1) {
+                    startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type="image/*"
+                    },82)
+                } else {
+                    val values=android.content.ContentValues().apply {
+                        put(android.provider.MediaStore.Images.Media.DISPLAY_NAME,
+                            "terra_photo_"+System.currentTimeMillis()+".jpg")
+                        put(android.provider.MediaStore.Images.Media.MIME_TYPE,"image/jpeg")
+                    }
+                    val uri=contentResolver.insert(
+                        android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values)
+                    if(uri==null) {
+                        attachmentPoint=null
+                        status.text="PHOTO / STORAGE UNAVAILABLE"
+                    } else {
+                        cameraUri=uri
+                        try {
+                            startActivityForResult(Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE).apply {
+                                putExtra(android.provider.MediaStore.EXTRA_OUTPUT,uri)
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                            },88)
+                        } catch(e:Exception) {
+                            runCatching{contentResolver.delete(uri,null,null)}
+                            cameraUri=null;attachmentPoint=null
+                            status.text="PHOTO / CAMERA UNAVAILABLE"
+                        }
+                    }
+                }
+            }.setNegativeButton("CANCEL",null).show()
+    }
+
     private fun showRadialMenu(x:Int,y:Int,where:GeoPoint) {
         radialMenu?.dismiss()
         val size=dp(256)
@@ -1061,12 +1121,7 @@ class MainActivity : Activity(), SensorEventListener {
             radialMenu?.dismiss()
             when(choice) {
                 0 -> showNoteEditor(where,"CHECKPOINT")
-                1 -> {
-                    attachmentPoint=where
-                    startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                        addCategory(Intent.CATEGORY_OPENABLE);type="image/*"
-                    },82)
-                }
+                1 -> showMapPhotoOptions(where)
                 2 -> showMapLookup()
                 3 -> {
                     notes.add(FieldNote(where.latitude,where.longitude,"Quick pin","POI","",System.currentTimeMillis(),"◆"))
@@ -1209,37 +1264,175 @@ class MainActivity : Activity(), SensorEventListener {
         setColor(Color.argb(238,38,47,38))
         setStroke(dp(1),Color.argb(190,155,181,134))
     }
+    private data class MapPlaceSuggestion(
+        val title:String,val subtitle:String,val lat:Double,val lon:Double
+    )
+
+    private fun fetchMapSuggestions(query:String):List<MapPlaceSuggestion> {
+        val pos=if(::fogOverlay.isInitialized)fogOverlay.currentPosition else null
+        val lat=pos?.latitude ?: map.mapCenter.latitude
+        val lon=pos?.longitude ?: map.mapCenter.longitude
+        val url="https://photon.komoot.io/api/?q="+
+            java.net.URLEncoder.encode(query,"UTF-8")+
+            "&limit=5&lang=en&lat="+lat+"&lon="+lon
+        val conn=(java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+            connectTimeout=8000
+            readTimeout=8000
+            setRequestProperty("User-Agent","TerraUnlocked/0.4 (Android; OSM Photon search)")
+        }
+        try {
+            require(conn.responseCode==200){"Search unavailable"}
+            val featureList=org.json.JSONObject(conn.inputStream.bufferedReader().use{it.readText()})
+                .optJSONArray("features") ?: return emptyList()
+            return (0 until featureList.length()).mapNotNull {i->
+                val entry=featureList.optJSONObject(i) ?: return@mapNotNull null
+                val coords=entry.optJSONObject("geometry")?.optJSONArray("coordinates")
+                    ?: return@mapNotNull null
+                if(coords.length()<2)return@mapNotNull null
+                val x=coords.optDouble(0,Double.NaN)
+                val y=coords.optDouble(1,Double.NaN)
+                if(!x.isFinite() || !y.isFinite() || x !in -180.0..180.0 ||
+                    y !in -90.0..90.0)return@mapNotNull null
+                val p=entry.optJSONObject("properties") ?: return@mapNotNull null
+                val name=p.optString("name").ifBlank {p.optString("street")}
+                    .ifBlank {p.optString("city")}.ifBlank{"Unnamed location"}
+                val address=listOf(p.optString("housenumber"),p.optString("street"),
+                    p.optString("district"),p.optString("city"),p.optString("country"))
+                    .filter{it.isNotBlank()}.distinct().joinToString(", ")
+                MapPlaceSuggestion(name,address,y,x)
+            }.distinctBy{it.title to it.lat}
+        } finally {conn.disconnect()}
+    }
+
     private fun showMapLookup() {
         clearMapPreview()
+        mapSearchGeneration++
         val box=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
-            setPadding(dp(14),dp(12),dp(14),dp(12))
+            setPadding(dp(12),dp(12),dp(12),dp(12))
             background=tacticalPanel()
         }
-        box.addView(label("⌕ MAP / TARGET SEARCH",13,sand))
+        box.addView(label("⌕ MAP / LOCATION SEARCH",13,sand))
         val query=EditText(this).apply {
-            hint="Google Maps link, coordinates or address"
-            setTextColor(sand);setHintTextColor(sage);minLines=2;maxLines=3
+            hint="Search address, place, coordinates or link..."
+            setSingleLine(true)
+            setTextColor(sand)
+            setHintTextColor(sage)
+            textSize=14f
         }
-        box.addView(query)
-        val popup=PopupWindow(box,dp(310),dp(204),true).apply {
+        box.addView(query,LinearLayout.LayoutParams(-1,dp(49)))
+        val feedback=label("Type 3+ letters for location suggestions",11,sage)
+        box.addView(feedback)
+        val results=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
+        box.addView(android.widget.ScrollView(this).apply {
+            isFillViewport=false
+            addView(results)
+        },LinearLayout.LayoutParams(-1,0,1f))
+        box.addView(label("Search data: © OpenStreetMap contributors · Photon",9,sage))
+        val actions=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        box.addView(actions)
+        val popup=PopupWindow(box,dp(330).coerceAtMost(resources.displayMetrics.widthPixels-dp(16)),
+            dp(365).coerceAtMost(resources.displayMetrics.heightPixels-dp(160)),true).apply {
             isOutsideTouchable=true
+            inputMethodMode=PopupWindow.INPUT_METHOD_NEEDED
+            softInputMode=android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
             setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
             elevation=dp(7).toFloat()
         }
+        var pending:Runnable?=null
         fun locate() {
             val value=query.text.toString().trim()
-            if(value.isNotEmpty()) {popup.dismiss();resolveMapLocation(value)}
+            if(value.isNotEmpty()) {
+                pending?.let{handler.removeCallbacks(it)}
+                mapSearchGeneration++
+                popup.dismiss()
+                resolveMapLocation(value)
+            }
         }
-        box.addView(action("▣ PASTE & LOCATE").apply {setOnClickListener {
-            val clipboard=getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-            val copied=clipboard.primaryClip?.getItemAt(0)?.coerceToText(this@MainActivity)?.toString()
-            if(!copied.isNullOrBlank())query.setText(copied)
-            if(query.text.isBlank())status.text="CLIPBOARD EMPTY / COPY GOOGLE MAPS LINK FIRST"
-            else locate()
-        }})
-        box.addView(action("⌖ SEARCH TEXT").apply {setOnClickListener {locate()}})
-        popup.showAtLocation(map,Gravity.TOP or Gravity.CENTER_HORIZONTAL,0,dp(115))
+        actions.addView(action("⌕ SEARCH").apply{setOnClickListener{locate()}},
+            LinearLayout.LayoutParams(0,dp(45),1f))
+        actions.addView(action("▣ PASTE").apply{setOnClickListener{
+            val clipboard=getSystemService(Context.CLIPBOARD_SERVICE)
+                as android.content.ClipboardManager
+            val content=clipboard.primaryClip?.getItemAt(0)
+                ?.coerceToText(this@MainActivity)?.toString()
+            if(content.isNullOrBlank())status.text="CLIPBOARD / EMPTY"
+            else {
+                query.setText(content)
+                query.setSelection(query.length())
+                // Preserve the existing coordinate / Google Maps URL handling.
+                locate()
+            }
+        }},LinearLayout.LayoutParams(0,dp(45),1f))
+        actions.addView(action("× CANCEL").apply{setOnClickListener{popup.dismiss()}},
+            LinearLayout.LayoutParams(0,dp(45),1f))
+        query.addTextChangedListener(object:android.text.TextWatcher {
+            override fun beforeTextChanged(t:CharSequence?,start:Int,count:Int,after:Int){}
+            override fun onTextChanged(t:CharSequence?,start:Int,before:Int,count:Int){
+                pending?.let{handler.removeCallbacks(it)}
+                val text=t?.toString()?.trim().orEmpty()
+                val generation=++mapSearchGeneration
+                results.removeAllViews()
+                if(text.length<3 || text.startsWith("http",true) ||
+                   text.matches(Regex("""^-?\d+(\.\d+)?\s*[, ]\s*-?\d+(\.\d+)?$"""))) {
+                    feedback.text="Type 3+ letters for suggestions, or press SEARCH"
+                    return
+                }
+                feedback.text="SEARCH / FINDING PLACES..."
+                // Public Photon is a demo service: debounce and cap at 1 request/sec.
+                val delay=maxOf(800L,1000L-(System.currentTimeMillis()-mapSearchLastRequest))
+                val work=Runnable {
+                    if(generation!=mapSearchGeneration || !popup.isShowing)return@Runnable
+                    mapSearchLastRequest=System.currentTimeMillis()
+                    Thread {
+                        val response=runCatching{fetchMapSuggestions(text)}
+                        runOnUiThread {
+                            if(generation!=mapSearchGeneration || !popup.isShowing)return@runOnUiThread
+                            results.removeAllViews()
+                            response.onSuccess {places->
+                                feedback.text=if(places.isEmpty())"No suggestions — try SEARCH"
+                                    else "SUGGESTIONS / "+places.size
+                                places.forEach {place->
+                                    val row=LinearLayout(this@MainActivity).apply{
+                                        orientation=LinearLayout.VERTICAL
+                                        setPadding(dp(10),dp(8),dp(8),dp(8))
+                                        background=GradientDrawable().apply{
+                                            cornerRadius=dp(5).toFloat()
+                                            setColor(Color.rgb(32,44,35))
+                                        }
+                                        setOnClickListener {
+                                            mapSearchGeneration++
+                                            popup.dismiss()
+                                            showFoundLocation(
+                                                if(place.subtitle.isBlank())place.title
+                                                else place.title+", "+place.subtitle,
+                                                place.lat,place.lon)
+                                        }
+                                    }
+                                    row.addView(label(place.title,13,sand))
+                                    if(place.subtitle.isNotBlank())row.addView(label(place.subtitle,10,sage).apply{
+                                        maxLines=2
+                                        ellipsize=android.text.TextUtils.TruncateAt.END
+                                    })
+                                    results.addView(row,LinearLayout.LayoutParams(-1,dp(63)).apply{
+                                        bottomMargin=dp(3)
+                                    })
+                                }
+                            }
+                            response.onFailure{feedback.text="Suggestions unavailable — SEARCH still works"}
+                        }
+                    }.start()
+                }
+                pending=work
+                handler.postDelayed(work,delay)
+            }
+            override fun afterTextChanged(t:android.text.Editable?){}
+        })
+        popup.setOnDismissListener{
+            pending?.let{handler.removeCallbacks(it)}
+            mapSearchGeneration++
+        }
+        popup.showAtLocation(map,Gravity.TOP or Gravity.CENTER_HORIZONTAL,0,dp(112))
     }
     private fun resolveMapLocation(raw:String) {
         if(raw.isBlank())return
@@ -1974,21 +2167,39 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun loadDubaiTemperature() {
-        if(System.currentTimeMillis()-weatherLastFetch<30L*60L*1000L)return
-        weatherLastFetch=System.currentTimeMillis()
+        val now=System.currentTimeMillis()
+        if(now-weatherLastFetch<5L*60L*1000L)return
+        weatherLastFetch=now
+        val loc=if(::fogOverlay.isInitialized)fogOverlay.currentPosition else null
+        val latitude=loc?.latitude ?: 25.2048
+        val longitude=loc?.longitude ?: 55.2708
         Thread {
-            val temp=runCatching {
-                val conn=(java.net.URL("https://api.open-meteo.com/v1/forecast?latitude=25.2048&longitude=55.2708&current=temperature_2m").openConnection() as java.net.HttpURLConnection).apply {
+            val result=runCatching {
+                val url="https://api.open-meteo.com/v1/forecast?latitude="+latitude+
+                    "&longitude="+longitude+"&current=temperature_2m"
+                val conn=(java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
                     connectTimeout=8000;readTimeout=8000
+                    setRequestProperty("User-Agent","TerraUnlocked/Android")
                 }
                 try {
-                    if(conn.responseCode!=200)throw java.io.IOException("Weather service unavailable")
-                    org.json.JSONObject(conn.inputStream.bufferedReader().use{it.readText()}).getJSONObject("current").getDouble("temperature_2m")
+                    if(conn.responseCode!=200)throw java.io.IOException("Weather unavailable")
+                    org.json.JSONObject(conn.inputStream.bufferedReader().use{it.readText()})
+                        .getJSONObject("current").getDouble("temperature_2m")
                 } finally {conn.disconnect()}
-            }.getOrNull()
-            if(temp!=null)runOnUiThread {
-                if(::weatherView.isInitialized)weatherView.text="${temp.toInt()}°"
-                expeditionHeader?.temperature=temp.toInt()
+            }
+            runOnUiThread {
+                result.onSuccess {temperature->
+                    if(!temperature.isFinite())return@onSuccess
+                    val rounded=kotlin.math.round(temperature).toInt()
+                    weatherPrefs.edit().putInt("last_temperature",rounded).apply()
+                    if(::weatherView.isInitialized)weatherView.text="${rounded}°"
+                    expeditionHeader?.temperature=rounded
+                    weatherLastFetch=System.currentTimeMillis()+25L*60L*1000L
+                }
+                result.onFailure {
+                    // Keep cached temperature visible; retry next time the app resumes.
+                    weatherLastFetch=System.currentTimeMillis()
+                }
             }
         }.start()
     }
@@ -2403,6 +2614,10 @@ class MainActivity : Activity(), SensorEventListener {
     }
     override fun onSaveInstanceState(outState:Bundle) {
         super.onSaveInstanceState(outState)
+        attachmentPoint?.let {
+            outState.putDouble("field_photo_lat",it.latitude)
+            outState.putDouble("field_photo_lon",it.longitude)
+        }
         outState.putString("objective_photo_target",objectivePhotoTargetId)
         outState.putString("objective_photo_permission",objectivePhotoPermissionId)
         cameraUri?.let {outState.putString("objective_camera_uri",it.toString())}
@@ -2449,6 +2664,31 @@ class MainActivity : Activity(), SensorEventListener {
             return
         }
 
+        if(requestCode==88) {
+            val uri=cameraUri
+            val point=attachmentPoint
+            if(resultCode==RESULT_OK && uri!=null && point!=null) {
+                val file=File(filesDir,"field_photo_"+System.currentTimeMillis()+".jpg")
+                runCatching {
+                    contentResolver.openInputStream(uri)?.use {source->
+                        file.outputStream().use{destination->source.copyTo(destination)}
+                    } ?: error("Photo unavailable")
+                    require(file.length()>0L){"Empty photo"}
+                    notes.add(FieldNote(point.latitude,point.longitude,"Field photo",
+                        "PHOTO",file.name,System.currentTimeMillis(),"▣"))
+                    fieldNotes.save(notes)
+                    status.text="PHOTO SAVED / FIELD PIN CREATED"
+                    refresh()
+                }.onFailure {
+                    file.delete()
+                    status.text="PHOTO / SAVE FAILED"
+                }
+            } else status.text="PHOTO / CANCELLED"
+            uri?.let{runCatching{contentResolver.delete(it,null,null)}}
+            cameraUri=null
+            attachmentPoint=null
+            return
+        }
         if(requestCode==85 || requestCode==86) {
             val uri=data?.data
             if(resultCode==RESULT_OK && uri!=null) {
@@ -2600,6 +2840,7 @@ class MainActivity : Activity(), SensorEventListener {
         super.onResume(); map.onResume()
         handler.removeCallbacks(solarTick)
         updateSolarDial()
+        loadDubaiTemperature()
         handler.postDelayed(solarTick,60000L)
         tracking=TrackingService.running
         expeditionBottom?.trackingActive=tracking
