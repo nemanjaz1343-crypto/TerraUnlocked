@@ -208,6 +208,7 @@ class MainActivity : Activity(), SensorEventListener {
             if(!weak)expeditionBottom?.gpsSearching=false
             status.text=(if(weak)"GPS LOW ACCURACY" else
                 if(intent.getBooleanExtra("eco",false))"GPS ECO" else "GPS ACTIVE")+
+                " / "+(intent.getStringExtra("motionProfile") ?: "WALK")+
                 " / ±"+fogOverlay.positionAccuracy.toInt()+"m / R "+radius+"m"
             val now=System.currentTimeMillis()
             if(now-lastGpsUiRefresh>=3500L) {
@@ -226,6 +227,9 @@ class MainActivity : Activity(), SensorEventListener {
     private var attachmentPoint:GeoPoint?=null
     private var attachmentNoteTime:Long?=null
     private var cameraUri:Uri?=null
+    // A mission can only be completed after a fresh GPS check and a new camera photo.
+    private var objectivePhotoTargetId:String?=null
+    private var objectivePhotoPermissionId:String?=null
     private var previewLocation:GeoPoint?=null
     private var previewLabel=""
     private var pendingObjective:ReconObjective?=null
@@ -437,6 +441,9 @@ class MainActivity : Activity(), SensorEventListener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        objectivePhotoTargetId=savedInstanceState?.getString("objective_photo_target")
+        objectivePhotoPermissionId=savedInstanceState?.getString("objective_photo_permission")
+        savedInstanceState?.getString("objective_camera_uri")?.let { cameraUri=Uri.parse(it) }
         window.statusBarColor = olive
         window.navigationBarColor = olive
         Configuration.getInstance().userAgentValue = packageName
@@ -1364,6 +1371,68 @@ class MainActivity : Activity(), SensorEventListener {
             showAtLocation(map,Gravity.TOP or Gravity.START,dp(8),dp(84))
         }
     }
+    private fun requestObjectiveProofPhoto(o:ReconObjective) {
+        if(objectiveStore.completed(o.id)) {
+            status.text="MISSION ALREADY COMPLETED / "+o.name.take(30)
+            return
+        }
+        if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED) {
+            objectivePhotoPermissionId=o.id
+            requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),12)
+            return
+        }
+        status.text="MISSION / VERIFYING LIVE GPS..."
+        // Never use map center, an old location, or a manually placed marker as proof.
+        val token=com.google.android.gms.tasks.CancellationTokenSource()
+        client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY,token.token)
+            .addOnSuccessListener {fix->
+                if(isFinishing || isDestroyed)return@addOnSuccessListener
+                if(fix==null || !fix.hasAccuracy() || fix.accuracy>35f ||
+                    !fix.latitude.isFinite() || !fix.longitude.isFinite()) {
+                    status.text="MISSION / GPS ACCURACY REQUIRED (35m OR BETTER)"
+                    return@addOnSuccessListener
+                }
+                val fixAgeMillis=(android.os.SystemClock.elapsedRealtimeNanos()-fix.elapsedRealtimeNanos)/1000000L
+                if(fixAgeMillis<0L || fixAgeMillis>30000L) {
+                    status.text="MISSION / WAIT FOR A FRESH GPS FIX"
+                    return@addOnSuccessListener
+                }
+                val distance=FloatArray(1)
+                android.location.Location.distanceBetween(
+                    fix.latitude,fix.longitude,o.latitude,o.longitude,distance)
+                if(distance[0]>100f) {
+                    status.text="MISSION LOCKED / "+distance[0].toInt()+"m AWAY / NEED 100m"
+                    return@addOnSuccessListener
+                }
+                val values=android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.Images.Media.DISPLAY_NAME,
+                        "terra_mission_"+System.currentTimeMillis()+".jpg")
+                    put(android.provider.MediaStore.Images.Media.MIME_TYPE,"image/jpeg")
+                }
+                val uri=contentResolver.insert(
+                    android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values)
+                if(uri==null) {
+                    status.text="MISSION / CAMERA STORAGE UNAVAILABLE"
+                    return@addOnSuccessListener
+                }
+                cameraUri=uri
+                objectivePhotoTargetId=o.id
+                try {
+                    startActivityForResult(Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE).apply {
+                        putExtra(android.provider.MediaStore.EXTRA_OUTPUT,uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                    },87)
+                } catch(ex:Exception) {
+                    contentResolver.delete(uri,null,null)
+                    cameraUri=null
+                    objectivePhotoTargetId=null
+                    status.text="MISSION / CAMERA UNAVAILABLE"
+                }
+            }.addOnFailureListener {
+                status.text="MISSION / LIVE GPS UNAVAILABLE"
+            }
+    }
+
     private fun showObjective(o:ReconObjective) {
         objectiveBubble?.dismiss()
         objectiveBubblePlace=o
@@ -1380,6 +1449,7 @@ class MainActivity : Activity(), SensorEventListener {
             }
         }
         body.addView(label("FIELD OBJECTIVE / "+o.category,10,sage))
+        body.addView(label("CHECK-IN / WITHIN 100m + 1 CAMERA PHOTO",10,sage))
         body.addView(label(o.name,17,sand).apply{
             setTypeface(Typeface.SERIF,Typeface.BOLD)
             setSingleLine(true);ellipsize=android.text.TextUtils.TruncateAt.END
@@ -1438,13 +1508,9 @@ class MainActivity : Activity(), SensorEventListener {
                 status.text=if(remove)"MISSION DEACTIVATED / "+o.name.take(30)
                     else "MISSION ACTIVE / "+o.name.take(30)
             },
-            "✓ COMPLETE" to {
-                objectiveStore.complete(o.id)
-                if(notes.none{it.title==o.name}) {
-                    notes.add(FieldNote(o.latitude,o.longitude,o.name,"CHECKPOINT",o.brief,System.currentTimeMillis(),"⚑"))
-                    fieldNotes.save(notes)
-                }
-                refresh();popup.dismiss()
+            (if(objectiveStore.completed(o.id))"✓ COMPLETED" else "▣ PHOTO + COMPLETE") to {
+                popup.dismiss()
+                requestObjectiveProofPhoto(o)
             }
         )
         actionRow(
@@ -2323,8 +2389,53 @@ class MainActivity : Activity(), SensorEventListener {
             showAtLocation(map,Gravity.END or Gravity.BOTTOM,dp(9),dp(66))
         }
     }
+    override fun onSaveInstanceState(outState:Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString("objective_photo_target",objectivePhotoTargetId)
+        outState.putString("objective_photo_permission",objectivePhotoPermissionId)
+        cameraUri?.let {outState.putString("objective_camera_uri",it.toString())}
+    }
+
     override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?) {
         super.onActivityResult(requestCode,resultCode,data)
+
+        if(requestCode==87) {
+            val id=objectivePhotoTargetId
+            val uri=cameraUri
+            if(resultCode==RESULT_OK && id!=null && uri!=null) {
+                val objective=(ReconObjectives.all+objectiveStore.customPlaces())
+                    .firstOrNull{it.id==id}
+                if(objective!=null) {
+                    val file=File(filesDir,"mission_"+System.currentTimeMillis()+".jpg")
+                    runCatching {
+                        contentResolver.openInputStream(uri)?.use {input->
+                            file.outputStream().use {output->input.copyTo(output)}
+                        } ?: error("Cannot read camera image")
+                        require(file.length()>0L) {"Empty camera image"}
+                        val idx=notes.indexOfFirst{it.kind=="CHECKPOINT" && it.title==objective.name}
+                        if(idx>=0) {
+                            notes[idx]=notes[idx].copy(attachments=notes[idx].attachments+file.name)
+                        } else {
+                            notes.add(FieldNote(objective.latitude,objective.longitude,
+                                objective.name,"CHECKPOINT",objective.brief,
+                                System.currentTimeMillis(),"⚑",listOf(file.name)))
+                        }
+                        // Mark completion only after the photo was saved to field journal.
+                        fieldNotes.save(notes)
+                        objectiveStore.complete(id)
+                        status.text="MISSION COMPLETED / GPS + PHOTO VERIFIED"
+                        refresh()
+                    }.onFailure {
+                        file.delete()
+                        status.text="MISSION NOT COMPLETED / PHOTO SAVE FAILED"
+                    }
+                } else status.text="MISSION NOT COMPLETED / OBJECTIVE NOT FOUND"
+            } else status.text="MISSION NOT COMPLETED / PHOTO CANCELLED"
+            uri?.let {runCatching{contentResolver.delete(it,null,null)}}
+            cameraUri=null
+            objectivePhotoTargetId=null
+            return
+        }
 
         if(requestCode==85 || requestCode==86) {
             val uri=data?.data
@@ -2464,6 +2575,14 @@ class MainActivity : Activity(), SensorEventListener {
         super.onRequestPermissionsResult(code, permissions, grants)
         if (code == 10 && grants.isNotEmpty() && grants[0] == PackageManager.PERMISSION_GRANTED) startTracking()
         if (code == 11 && grants.isNotEmpty() && grants[0] == PackageManager.PERMISSION_GRANTED) voicePoint?.let {startVoice(it)}
+        if(code==12) {
+            val id=objectivePhotoPermissionId
+            objectivePhotoPermissionId=null
+            if(grants.isNotEmpty() && grants[0]==PackageManager.PERMISSION_GRANTED && id!=null) {
+                (ReconObjectives.all+objectiveStore.customPlaces()).firstOrNull{it.id==id}
+                    ?.let {requestObjectiveProofPhoto(it)}
+            } else status.text="MISSION / LOCATION PERMISSION REQUIRED"
+        }
     }
     override fun onResume() {
         super.onResume(); map.onResume()

@@ -31,6 +31,7 @@ class TrackingService:Service() {
     private var stationarySince=0L
     private var lastSwitch=0L
     private var ecoMode=false
+    private var motionProfile="WALK"
     private var lastBroadcast=0L
     private var lastVisual:Location?=null
     private fun broadcastFix(loc:Location,revealed:Boolean,eco:Boolean,weak:Boolean=false,
@@ -50,6 +51,7 @@ class TrackingService:Service() {
             putExtra("rawLat",loc.latitude);putExtra("rawLon",loc.longitude)
             putExtra("accuracy",loc.accuracy);putExtra("revealed",revealed)
             putExtra("eco",eco);putExtra("weak",weak)
+            putExtra("motionProfile",motionProfile)
             putExtra("timestamp",sampleTime)
             putExtra("speed",if(loc.hasSpeed())loc.speed else -1f)
         })
@@ -170,10 +172,23 @@ class TrackingService:Service() {
                 // Don't permanently reveal random stationary GPS wandering.
                 // Moving users still get regular samples, including fast scooter/car trips.
                 val step=saved?.distanceTo(loc) ?: Float.MAX_VALUE
-                val movingSpeed=loc.hasSpeed() && loc.speed>=0.9f
-                val threshold=if(movingSpeed)maxOf(12f,1.25f*loc.accuracy)
-                    else maxOf(24f,1.9f*loc.accuracy)
-                val moved=saved==null || step>=threshold
+                val secondsSinceSaved=if(saved!=null)
+                    (loc.elapsedRealtimeNanos-saved.elapsedRealtimeNanos)/1e9 else 0.0
+                val speedMps=if(loc.hasSpeed() && loc.speed>=0f)loc.speed
+                    else if(saved!=null && secondsSinceSaved in 1.0..20.0 && loc.accuracy<=20f)
+                        (step/secondsSinceSaved).toFloat() else 0f
+                // Motion profiles adjust sample density without changing 20m reveal radius.
+                motionProfile=when {
+                    speedMps>=7f -> "CAR"
+                    speedMps>=2f -> "SCOOTER"
+                    else -> "WALK"
+                }
+                val threshold=when(motionProfile) {
+                    "CAR" -> maxOf(14f,1.15f*loc.accuracy)
+                    "SCOOTER" -> maxOf(10f,1.15f*loc.accuracy)
+                    else -> maxOf(20f,1.6f*loc.accuracy)
+                }
+                val moved=saved==null || (secondsSinceSaved>0.0 && step>=threshold)
                 if(moved) {
                     store.add(DiscoveryPoint(loc.latitude,loc.longitude,false,now))
                     lastSaved=loc
