@@ -512,6 +512,47 @@ class MainActivity : Activity(), SensorEventListener {
     private var lastRecoveryPointCount=0
     private var measure=false
     private val measurePoints=mutableListOf<GeoPoint>()
+    private var rulerBar:LinearLayout?=null
+    private var rulerCaption:TextView?=null
+
+    /** Ruler is a modal map interaction: a marker tap adds a measurement point. */
+    private fun toggleRuler(active:Boolean) {
+        measure=active
+        measurePoints.clear()
+        rulerBar?.visibility=if(active)View.VISIBLE else View.GONE
+        if(active) {
+            mode="VIEW"
+            expeditionPalette?.visibility=View.GONE
+            radialMenu?.dismiss()
+            status.text="RULER / TAP TWO POINTS OR MARKERS"
+        } else {
+            status.text="RULER / OFF"
+        }
+        updateRulerCaption()
+        refresh()
+    }
+
+    private fun recordRulerPoint(point:GeoPoint) {
+        if(!measure)return
+        if(measurePoints.size>=2)measurePoints.clear()
+        measurePoints.add(GeoPoint(point.latitude,point.longitude))
+        updateRulerCaption()
+        refresh()
+    }
+
+    private fun updateRulerCaption() {
+        val caption=when(measurePoints.size) {
+            0 -> "RULER  /  SELECT START"
+            1 -> "RULER  /  SELECT END"
+            else -> {
+                val metres=gap(measurePoints[0],measurePoints[1])
+                if(metres>=1000f) "DISTANCE  /  %.2f km".format(java.util.Locale.US,metres/1000f)
+                else "DISTANCE  /  %.0f m".format(java.util.Locale.US,metres)
+            }
+        }
+        rulerCaption?.text=caption
+        if(measure)status.text=caption
+    }
     private var filteredFixes=0
     private var stableFixCount=0
     private var lastSavedLocation:android.location.Location?=null
@@ -600,6 +641,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        attachmentNoteTime=savedInstanceState?.getLong("attachment_note_time")?.takeIf{it!=0L}
         objectivePhotoTargetId=savedInstanceState?.getString("objective_photo_target")
         objectivePhotoPermissionId=savedInstanceState?.getString("objective_photo_permission")
         savedInstanceState?.getString("objective_camera_uri")?.let { cameraUri=Uri.parse(it) }
@@ -706,6 +748,7 @@ class MainActivity : Activity(), SensorEventListener {
                 val pixel=mapView.projection.toPixels(pos,Point())
                 val distance=kotlin.math.hypot((e.x-pixel.x).toDouble(),(e.y-pixel.y).toDouble())
                 if(distance>dp(25))return false
+                if(measure){recordRulerPoint(pos);return true}
                 setMyLocation();return true
             }
         })
@@ -716,15 +759,14 @@ class MainActivity : Activity(), SensorEventListener {
                     val p=mapView.projection.toPixels(GeoPoint(note.latitude,note.longitude),Point())
                     kotlin.math.hypot((event.x-p.x).toDouble(),(event.y-p.y).toDouble())<dp(24)
                 }
-                if(clicked!=null) {showExisting(clicked);return true}
                 if(measure) {
-                    val p=mapView.projection.fromPixels(event.x.toInt(),event.y.toInt())
-                    if(measurePoints.size==2) measurePoints.clear()
-                    measurePoints.add(GeoPoint(p.latitude,p.longitude))
-                    status.text=if(measurePoints.size==2) "DISTANCE / %.0f m".format(gap(measurePoints[0],measurePoints[1]))
-                        else "RULER / SELECT END POINT"
-                    refresh();return true
+                    val point=clicked?.let{GeoPoint(it.latitude,it.longitude)}
+                        ?: mapView.projection.fromPixels(event.x.toInt(),event.y.toInt())
+                            .let{GeoPoint(it.latitude,it.longitude)}
+                    recordRulerPoint(point)
+                    return true
                 }
+                if(clicked!=null) {showExisting(clicked);return true}
                 return false
             }
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
@@ -756,6 +798,10 @@ class MainActivity : Activity(), SensorEventListener {
             }
             override fun onLongPress(e:MotionEvent,mapView:MapView):Boolean {
                 val p=mapView.projection.fromPixels(e.x.toInt(),e.y.toInt())
+                if(measure) {
+                    recordRulerPoint(GeoPoint(p.latitude,p.longitude))
+                    return true
+                }
                 showRadialMenu(e.x.toInt(),e.y.toInt(),GeoPoint(p.latitude,p.longitude))
                 return true
             }
@@ -915,7 +961,9 @@ class MainActivity : Activity(), SensorEventListener {
                     val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
                     kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(22)
                 } ?: return false
-                showObjective(hit);return true
+                if(measure)recordRulerPoint(GeoPoint(hit.latitude,hit.longitude))
+                else showObjective(hit)
+                return true
             }
             override fun onLongPress(event:MotionEvent,mapView:MapView):Boolean {
                 if(mode!="VIEW")return false
@@ -923,7 +971,9 @@ class MainActivity : Activity(), SensorEventListener {
                     val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
                     kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(24)
                 } ?: return false
-                showObjective(hit);return true
+                if(measure)recordRulerPoint(GeoPoint(hit.latitude,hit.longitude))
+                else showObjective(hit)
+                return true
             }
         })
         map.overlays.add(object:Overlay() {
@@ -956,7 +1006,9 @@ class MainActivity : Activity(), SensorEventListener {
                     val p=mapView.projection.toPixels(GeoPoint(station.lat,station.lon),Point())
                     kotlin.math.hypot((e.x-p.x).toDouble(),(e.y-p.y).toDouble())<dp(20)
                 } ?: return false
-                showTransitStation(hit);return true
+                if(measure)recordRulerPoint(GeoPoint(hit.lat,hit.lon))
+                else showTransitStation(hit)
+                return true
             }
         })
         map.overlays.add(object:Overlay() {
@@ -1002,7 +1054,8 @@ class MainActivity : Activity(), SensorEventListener {
                     kotlin.math.hypot((event.x-at.x).toDouble(),
                         (event.y-at.y).toDouble())<dp(20)
                 } ?: return false
-                showTaxiStand(hit)
+                if(measure)recordRulerPoint(GeoPoint(hit.latitude,hit.longitude))
+                else showTaxiStand(hit)
                 return true
             }
         })
@@ -1062,6 +1115,41 @@ class MainActivity : Activity(), SensorEventListener {
         })
         val mapArea=FrameLayout(this)
         mapArea.addView(map,FrameLayout.LayoutParams(-1,-1))
+        // Always-visible ruler overlay with clear and exit actions. It does not
+        // change saved map data and only occupies a small strip above the map.
+        val measureBar=LinearLayout(this).apply {
+            orientation=LinearLayout.HORIZONTAL
+            gravity=Gravity.CENTER_VERTICAL
+            visibility=View.GONE
+            setPadding(dp(8),0,dp(4),0)
+            background=GradientDrawable().apply {
+                cornerRadius=dp(9).toFloat()
+                setColor(Color.argb(239,23,34,27))
+                setStroke(dp(1),Color.rgb(218,181,113))
+            }
+        }
+        rulerBar=measureBar
+        val rulerText=label("RULER  /  SELECT START",11,sand).apply{
+            isSingleLine=true
+            ellipsize=android.text.TextUtils.TruncateAt.END
+        }
+        rulerCaption=rulerText
+        measureBar.addView(rulerText,LinearLayout.LayoutParams(0,-2,1f))
+        measureBar.addView(action("CLEAR").apply{
+            textSize=10f
+            setOnClickListener {
+                measurePoints.clear()
+                updateRulerCaption()
+                refresh()
+            }
+        },LinearLayout.LayoutParams(dp(55),dp(36)).apply{rightMargin=dp(5)})
+        measureBar.addView(action("× EXIT").apply{
+            textSize=10f
+            setOnClickListener{toggleRuler(false)}
+        },LinearLayout.LayoutParams(dp(60),dp(36)))
+        mapArea.addView(measureBar,FrameLayout.LayoutParams(-1,dp(47),Gravity.TOP).apply{
+            setMargins(dp(8),dp(7),dp(8),0)
+        })
         confirmButton=action("CONFIRM PATH").apply {
             visibility=View.GONE
             setTextColor(Color.WHITE)
@@ -1359,7 +1447,7 @@ class MainActivity : Activity(), SensorEventListener {
                     notes.add(FieldNote(where.latitude,where.longitude,"Quick pin","POI","",System.currentTimeMillis(),"◆"))
                     fieldNotes.save(notes);status.text="QUICK PIN SAVED";refresh()
                 }
-                4 -> {measure=!measure;measurePoints.clear();status.text=if(measure)"RULER / TAP TWO POINTS" else "RULER OFF";refresh()}
+                4 -> toggleRuler(!measure)
                 5 -> showNoteEditor(where,"MEMORY")
             }
         }
@@ -1454,18 +1542,40 @@ class MainActivity : Activity(), SensorEventListener {
         dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
     }
 
-    private fun loadOrientedPhoto(file:File):android.graphics.Bitmap? {
-        val bitmap=android.graphics.BitmapFactory.decodeFile(file.absolutePath) ?: return null
-        val exif=android.media.ExifInterface(file.absolutePath)
-        val angle=when(exif.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION,1)) {
-            6 -> 90f
-            3 -> 180f
-            8 -> 270f
-            else -> 0f
+    private fun photoFiles(note:FieldNote):List<String> {
+        val photos=note.attachments.filterNot{it.endsWith(".m4a",ignoreCase=true)}
+        return (if(note.kind=="PHOTO" && note.body.isNotBlank())
+            listOf(note.body)+photos else photos).distinct().filter{
+            File(filesDir,it).isFile
         }
-        if(angle==0f)return bitmap
-        val matrix=android.graphics.Matrix().apply {postRotate(angle)}
-        return android.graphics.Bitmap.createBitmap(bitmap,0,0,bitmap.width,bitmap.height,matrix,true)
+    }
+
+    /** Decode a suitably sampled, EXIF-correct image rather than a full-res bitmap. */
+    private fun loadOrientedPhoto(file:File,maxDimension:Int=1400):android.graphics.Bitmap? {
+        if(!file.isFile)return null
+        return runCatching {
+            val bounds=android.graphics.BitmapFactory.Options().apply{inJustDecodeBounds=true}
+            android.graphics.BitmapFactory.decodeFile(file.absolutePath,bounds)
+            var sample=1
+            while(bounds.outWidth/sample>maxDimension*2 ||
+                bounds.outHeight/sample>maxDimension*2) sample*=2
+            val options=android.graphics.BitmapFactory.Options().apply {
+                inSampleSize=sample
+                inPreferredConfig=android.graphics.Bitmap.Config.RGB_565
+            }
+            val bitmap=android.graphics.BitmapFactory.decodeFile(file.absolutePath,options)
+                ?: return@runCatching null
+            val exif=android.media.ExifInterface(file.absolutePath)
+            val angle=when(exif.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION,1)) {
+                6 -> 90f
+                3 -> 180f
+                8 -> 270f
+                else -> 0f
+            }
+            if(angle==0f)bitmap else android.graphics.Bitmap.createBitmap(
+                bitmap,0,0,bitmap.width,bitmap.height,
+                android.graphics.Matrix().apply{postRotate(angle)},true)
+        }.getOrNull()
     }
     private fun updateNavigation() {
         val target=notes.firstOrNull {it.time==navigationTarget} ?: return
@@ -2036,9 +2146,26 @@ class MainActivity : Activity(), SensorEventListener {
                 val date=java.text.SimpleDateFormat("dd MMM yyyy",java.util.Locale.getDefault()).format(java.util.Date(entry.time))
                 val photos=entry.attachments.count{!it.endsWith(".m4a")}+(if(entry.kind=="PHOTO")1 else 0)
                 val card=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(10),dp(8),dp(10),dp(8));background=tacticalPanel()}
-                card.addView(label(entry.title,15,sand))
-                card.addView(label("$date / ${entry.visits.size} VISITS / $photos PHOTOS",11,sage))
-                if(entry.body.isNotBlank()&&entry.kind!="VOICE")card.addView(label(entry.body.take(100),12,sand))
+                val contents=LinearLayout(this).apply{
+                    orientation=LinearLayout.HORIZONTAL
+                    gravity=Gravity.CENTER_VERTICAL
+                }
+                photoFiles(entry).firstOrNull()?.let{filename->
+                    contents.addView(android.widget.ImageView(this).apply{
+                        scaleType=android.widget.ImageView.ScaleType.CENTER_CROP
+                        setImageBitmap(loadOrientedPhoto(File(filesDir,filename),180))
+                    },LinearLayout.LayoutParams(dp(62),dp(62)).apply{rightMargin=dp(9)})
+                }
+                val summary=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
+                summary.addView(label(entry.title,15,sand).apply{
+                    maxLines=2
+                    ellipsize=android.text.TextUtils.TruncateAt.END
+                })
+                summary.addView(label("$date / ${entry.visits.size} VISITS / $photos PHOTOS",11,sage))
+                if(entry.body.isNotBlank()&&entry.kind!="VOICE"&&entry.kind!="PHOTO")
+                    summary.addView(label(entry.body.take(100),12,sand))
+                contents.addView(summary,LinearLayout.LayoutParams(0,-2,1f))
+                card.addView(contents)
                 card.setOnClickListener {dialog.dismiss();showExisting(entry)}
                 list.addView(card,LinearLayout.LayoutParams(-1,-2).apply {bottomMargin=dp(7)})
             }
@@ -2092,13 +2219,14 @@ class MainActivity : Activity(), SensorEventListener {
             },LinearLayout.LayoutParams(0,dp(32),1f))
         }
         panel.addView(choices)
-        val count=label("ATTACHMENTS / "+current.attachments.size,12,sage)
+        val count=label("PHOTOS / "+photoFiles(current).size+
+            "    ATTACHMENTS / "+current.attachments.size,12,sage)
         panel.addView(count)
         val photoStrip=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
-        current.attachments.filterNot {it.endsWith(".m4a")}.forEach { filename ->
+        photoFiles(current).forEach { filename ->
             val thumb=android.widget.ImageView(this).apply {
                 scaleType=android.widget.ImageView.ScaleType.CENTER_CROP
-                setImageBitmap(loadOrientedPhoto(File(filesDir,filename)))
+                setImageBitmap(loadOrientedPhoto(File(filesDir,filename),280))
                 setOnClickListener {
                     val bitmap=loadOrientedPhoto(File(filesDir,filename))
                     if(bitmap!=null)android.app.AlertDialog.Builder(this@MainActivity)
@@ -2114,7 +2242,9 @@ class MainActivity : Activity(), SensorEventListener {
                         }.show()
                 }
             }
-            photoStrip.addView(thumb,LinearLayout.LayoutParams(dp(90),dp(88)))
+            photoStrip.addView(thumb,LinearLayout.LayoutParams(dp(90),dp(88)).apply{
+                rightMargin=dp(5)
+            })
         }
         val scroller=android.widget.HorizontalScrollView(this)
         scroller.addView(photoStrip);panel.addView(scroller)
@@ -2990,6 +3120,7 @@ class MainActivity : Activity(), SensorEventListener {
             outState.putDouble("field_photo_lat",it.latitude)
             outState.putDouble("field_photo_lon",it.longitude)
         }
+        if(attachmentNoteTime!=null)outState.putLong("attachment_note_time",attachmentNoteTime!!)
         outState.putString("objective_photo_target",objectivePhotoTargetId)
         outState.putString("objective_photo_permission",objectivePhotoPermissionId)
         cameraUri?.let {outState.putString("objective_camera_uri",it.toString())}
@@ -3046,11 +3177,13 @@ class MainActivity : Activity(), SensorEventListener {
                         file.outputStream().use{destination->source.copyTo(destination)}
                     } ?: error("Photo unavailable")
                     require(file.length()>0L){"Empty photo"}
-                    notes.add(FieldNote(point.latitude,point.longitude,"Field photo",
-                        "PHOTO",file.name,System.currentTimeMillis(),"▣"))
+                    val newPhoto=FieldNote(point.latitude,point.longitude,"Field photo",
+                        "PHOTO",file.name,System.currentTimeMillis(),"▣")
+                    notes.add(newPhoto)
                     fieldNotes.save(notes)
-                    status.text="PHOTO SAVED / FIELD PIN CREATED"
+                    status.text="PHOTO SAVED / THUMBNAIL READY"
                     refresh()
+                    handler.post{if(!isFinishing && !isDestroyed)showExisting(newPhoto)}
                 }.onFailure {
                     file.delete()
                     status.text="PHOTO / SAVE FAILED"
@@ -3094,8 +3227,10 @@ class MainActivity : Activity(), SensorEventListener {
                     if(idx>=0) {
                         notes[idx]=notes[idx].copy(attachments=notes[idx].attachments+file.name)
                         fieldNotes.save(notes);refresh()
-                        status.text="PHOTO ATTACHED TO MARKER"
-                    }
+                        status.text="PHOTO ATTACHED / THUMBNAIL READY"
+                        val updated=notes[idx]
+                        handler.post {if(!isFinishing && !isDestroyed)showExisting(updated)}
+                    } else file.delete()
                 }.onFailure {status.text="PHOTO SAVE FAILED"}
             }
             if(requestCode==84) {
@@ -3114,10 +3249,13 @@ class MainActivity : Activity(), SensorEventListener {
                     contentResolver.openInputStream(uri)?.use { input ->
                         file.outputStream().use { output -> input.copyTo(output) }
                     } ?: error("Cannot open image")
-                    notes.add(FieldNote(point.latitude,point.longitude,"Photo","PHOTO",file.name,System.currentTimeMillis()))
+                    val newPhoto=FieldNote(point.latitude,point.longitude,"Photo",
+                        "PHOTO",file.name,System.currentTimeMillis(),"▣")
+                    notes.add(newPhoto)
                     fieldNotes.save(notes)
-                    status.text="PHOTO ATTACHED"
+                    status.text="PHOTO ATTACHED / THUMBNAIL READY"
                     refresh()
+                    handler.post{if(!isFinishing && !isDestroyed)showExisting(newPhoto)}
                 } catch(e:Exception) {status.text="PHOTO IMPORT FAILED"}
             }
             attachmentPoint=null
