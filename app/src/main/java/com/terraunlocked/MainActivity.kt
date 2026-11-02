@@ -303,6 +303,12 @@ class MainActivity : Activity(), SensorEventListener {
     private var timeMachinePopup:PopupWindow?=null
     private lateinit var objectiveStore:ObjectiveStore
     private val metroStations=mutableListOf<TransitStation>()
+    private val taxiStandStore by lazy { TaxiStandStore(this) }
+    private val taxiStands=mutableListOf<TaxiStand>()
+    private var taxiStandsEnabled=true
+    private var taxiStandLoading=false
+    private var lastTaxiStandAttempt=0L
+    private val taxiRefreshTask=Runnable { maybeRefreshTaxiStands() }
     private var stationLoading=false
     private var objectivesPopup:PopupWindow?=null
     private var objectiveBubble:PopupWindow?=null
@@ -460,6 +466,9 @@ class MainActivity : Activity(), SensorEventListener {
         fieldNotes=FieldNotes(this)
         objectiveStore=ObjectiveStore(this)
         metroStations.addAll(TransitStations(this).load())
+        taxiStandsEnabled=getSharedPreferences("terra_taxi_settings",Context.MODE_PRIVATE)
+            .getBoolean("enabled",true)
+        taxiStands.addAll(taxiStandStore.load())
         objectiveStore.enabled=true
         notes.addAll(fieldNotes.load())
         pathStore = PathStore(this)
@@ -777,6 +786,53 @@ class MainActivity : Activity(), SensorEventListener {
             }
         })
         map.overlays.add(object:Overlay() {
+            private val ink=Paint(Paint.ANTI_ALIAS_FLAG)
+            override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
+                if(shadow || !taxiStandsEnabled || mapView.zoomLevelDouble<14.8)return
+                val scale=resources.displayMetrics.density
+                taxiStands.forEach {stand->
+                    val at=mapView.projection.toPixels(
+                        GeoPoint(stand.latitude,stand.longitude),Point())
+                    val x=at.x.toFloat();val y=at.y.toFloat()
+                    if(x<0f || y<0f || x>canvas.width || y>canvas.height)return@forEach
+                    // Square amber taxi-sign marker: distinct from blue Metro
+                    // circles and gold objective diamonds.
+                    ink.style=Paint.Style.FILL
+                    ink.color=Color.rgb(28,33,25)
+                    val w=14f*scale
+                    canvas.drawRoundRect(x-w,y-w,x+w,y+w,5f*scale,5f*scale,ink)
+                    ink.style=Paint.Style.STROKE
+                    ink.strokeWidth=1.6f*scale
+                    ink.color=Color.rgb(238,193,94)
+                    canvas.drawRoundRect(x-w,y-w,x+w,y+w,5f*scale,5f*scale,ink)
+                    // A clean taxi roof sign and wheels, not an animated car.
+                    ink.strokeWidth=1.7f*scale
+                    canvas.drawLine(x-7f*scale,y+3f*scale,x-5f*scale,y-3f*scale,ink)
+                    canvas.drawLine(x-5f*scale,y-3f*scale,x+5f*scale,y-3f*scale,ink)
+                    canvas.drawLine(x+5f*scale,y-3f*scale,x+7f*scale,y+3f*scale,ink)
+                    canvas.drawLine(x-8f*scale,y+3f*scale,x+8f*scale,y+3f*scale,ink)
+                    canvas.drawLine(x-6f*scale,y+3f*scale,x-6f*scale,y+6f*scale,ink)
+                    canvas.drawLine(x+6f*scale,y+3f*scale,x+6f*scale,y+6f*scale,ink)
+                    ink.style=Paint.Style.FILL
+                    ink.typeface=Typeface.create("sans-serif-condensed",Typeface.BOLD)
+                    ink.textAlign=Paint.Align.CENTER
+                    ink.textSize=6.5f*scale
+                    canvas.drawText("TAXI",x,y-6f*scale,ink)
+                }
+            }
+            override fun onSingleTapConfirmed(event:MotionEvent,mapView:MapView):Boolean {
+                if(!taxiStandsEnabled || mode!="VIEW" || mapView.zoomLevelDouble<14.8)return false
+                val hit=taxiStands.firstOrNull{stand->
+                    val at=mapView.projection.toPixels(
+                        GeoPoint(stand.latitude,stand.longitude),Point())
+                    kotlin.math.hypot((event.x-at.x).toDouble(),
+                        (event.y-at.y).toDouble())<dp(20)
+                } ?: return false
+                showTaxiStand(hit)
+                return true
+            }
+        })
+        map.overlays.add(object:Overlay() {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
                 if(shadow)return
                 val prefs=getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE)
@@ -1063,10 +1119,12 @@ class MainActivity : Activity(), SensorEventListener {
         map.addMapListener(object:org.osmdroid.events.MapListener {
             override fun onScroll(event:org.osmdroid.events.ScrollEvent?):Boolean {
                 handler.post{updateObjectiveBubblePosition()}
+                scheduleTaxiStandsRefresh()
                 return false
             }
             override fun onZoom(event:org.osmdroid.events.ZoomEvent?):Boolean {
                 handler.post{updateObjectiveBubblePosition()}
+                scheduleTaxiStandsRefresh()
                 return false
             }
         })
@@ -2114,6 +2172,69 @@ class MainActivity : Activity(), SensorEventListener {
             }
         }.start()
     }
+    private fun scheduleTaxiStandsRefresh() {
+        handler.removeCallbacks(taxiRefreshTask)
+        handler.postDelayed(taxiRefreshTask,1800L)
+    }
+
+    private fun maybeRefreshTaxiStands() {
+        if(!::map.isInitialized || !taxiStandsEnabled || taxiStandLoading ||
+            map.zoomLevelDouble<14.8 || offline)return
+        val now=System.currentTimeMillis()
+        if(now-lastTaxiStandAttempt<120000L)return
+        val center=GeoPoint(map.mapCenter.latitude,map.mapCenter.longitude)
+        val cached=taxiStandStore.cachedCenter()
+        val recent=now-taxiStandStore.lastFetchedAt()<6L*60L*60L*1000L
+        val delta=FloatArray(1)
+        if(cached!=null)android.location.Location.distanceBetween(
+            cached.latitude,cached.longitude,
+            center.latitude,center.longitude,delta)
+        if(cached!=null && recent && delta[0]<2800f)return
+        taxiStandLoading=true
+        lastTaxiStandAttempt=now
+        Thread {
+            val result=runCatching{taxiStandStore.fetch(center)}
+            runOnUiThread {
+                taxiStandLoading=false
+                if(isFinishing || isDestroyed)return@runOnUiThread
+                result.onSuccess {stands->
+                    taxiStands.clear()
+                    taxiStands.addAll(stands)
+                    refresh()
+                }
+                result.onFailure {
+                    // Keep last cached ranks visible if Overpass is unavailable.
+                    // No artificial taxi locations and no repeat-request loop.
+                }
+            }
+        }.start()
+    }
+
+    private fun showTaxiStand(stand:TaxiStand) {
+        val panel=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(16),dp(13),dp(16),dp(13))
+            background=tacticalPanel()
+        }
+        panel.addView(label("TAXI STAND / OPENSTREETMAP",12,sand))
+        panel.addView(label(stand.name,16,sand))
+        if(stand.operator.isNotBlank())
+            panel.addView(label("OPERATOR / "+stand.operator,11,sage))
+        fogOverlay.currentPosition?.let {here->
+            val distance=FloatArray(1)
+            android.location.Location.distanceBetween(
+                here.latitude,here.longitude,stand.latitude,stand.longitude,distance)
+            val formatted=if(distance[0]>=1000f)
+                "%.1f km".format(java.util.Locale.US,distance[0]/1000f)
+                else "${distance[0].toInt()} m"
+            panel.addView(label("DISTANCE / "+formatted,12,sage))
+        }
+        panel.addView(label("Mapped taxi rank, not live vehicle availability.",10,sage))
+        panel.addView(label("© OpenStreetMap contributors",9,sage))
+        android.app.AlertDialog.Builder(this).setView(panel)
+            .setNegativeButton("CLOSE",null).show()
+    }
+
     private fun showTransitStation(station:TransitStation) {
         val panel=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(15),dp(12),dp(15),dp(12));background=tacticalPanel()}
         panel.addView(label("Ⓜ TRANSIT / METRO",13,sand))
@@ -2587,6 +2708,13 @@ class MainActivity : Activity(), SensorEventListener {
                     },
                     "ROUTE  ${if(fogOverlay.showRoute) "ON" else "OFF"}" to {
                         fogOverlay.showRoute=!fogOverlay.showRoute;refresh()
+                    },
+                    "TAXI STANDS  ${if(taxiStandsEnabled) "ON" else "OFF"}" to {
+                        taxiStandsEnabled=!taxiStandsEnabled
+                        getSharedPreferences("terra_taxi_settings",Context.MODE_PRIVATE)
+                            .edit().putBoolean("enabled",taxiStandsEnabled).apply()
+                        if(taxiStandsEnabled)scheduleTaxiStandsRefresh()
+                        refresh()
                     }
                 )
                 else->listOf(
@@ -2885,6 +3013,7 @@ class MainActivity : Activity(), SensorEventListener {
         handler.removeCallbacks(solarTick)
         updateSolarDial()
         loadDubaiTemperature()
+        scheduleTaxiStandsRefresh()
         handler.postDelayed(solarTick,60000L)
         tracking=TrackingService.running
         expeditionBottom?.trackingActive=tracking
@@ -2913,6 +3042,7 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
     override fun onPause() {
+        handler.removeCallbacks(taxiRefreshTask)
         handler.removeCallbacks(solarTick)
         super.onPause(); sensors.unregisterListener(this); map.onPause()
         if(receiverRegistered) {unregisterReceiver(trackingReceiver);receiverRegistered=false}
@@ -2920,6 +3050,7 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacks(simulationStep)
+        handler.removeCallbacks(taxiRefreshTask)
         handler.removeCallbacks(solarTick)
         solarPopup?.dismiss()
         layersPopup?.dismiss()
