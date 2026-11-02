@@ -4,7 +4,11 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
-data class DiscoveryPoint(val latitude:Double,val longitude:Double,val manual:Boolean,val timestamp:Long)
+data class DiscoveryPoint(
+    val latitude:Double,val longitude:Double,val manual:Boolean,val timestamp:Long,
+    // Optional fix quality metadata; older files are still readable.
+    val accuracy:Float=Float.NaN,val speed:Float=Float.NaN
+)
 
 class DiscoveryStore(context:Context) {
     private val preferences=context.getSharedPreferences("terra_discoveries_v1",Context.MODE_PRIVATE)
@@ -23,13 +27,21 @@ class DiscoveryStore(context:Context) {
             runCatching {
                 val p=data.getJSONObject(index)
                 DiscoveryPoint(p.getDouble("lat"),p.getDouble("lon"),
-                    p.getBoolean("manual"),p.getLong("time"))
+                    p.getBoolean("manual"),p.getLong("time"),
+                    p.optDouble("accuracy",Double.NaN).toFloat(),
+                    p.optDouble("speed",Double.NaN).toFloat())
             }.getOrNull()
         }
     }
     private fun json(point:DiscoveryPoint)=JSONObject()
         .put("lat",point.latitude).put("lon",point.longitude)
         .put("manual",point.manual).put("time",point.timestamp)
+        .also {
+            if(point.accuracy.isFinite() && point.accuracy>=0f)
+                it.put("accuracy",point.accuracy.toDouble())
+            if(point.speed.isFinite() && point.speed>=0f)
+                it.put("speed",point.speed.toDouble())
+        }
     fun replaceAll(points:List<DiscoveryPoint>) {
         val data=JSONArray()
         points.forEach {data.put(json(it))}

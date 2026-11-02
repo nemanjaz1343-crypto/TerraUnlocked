@@ -39,25 +39,18 @@ class DiscoveryFogOverlay(
         val east = toPoint(map, lat, lon + radiusMeters / (111320.0 * cos(Math.toRadians(lat)).coerceAtLeast(.01)))
         return kotlin.math.abs(east.x - p.x).toFloat().coerceAtLeast(1f)
     }
-    private fun canJoin(a: DiscoveryPoint, b: DiscoveryPoint): Boolean {
-        // A fixed 120m limit broke valid highway samples: 100 km/h travels
-        // ~139m between regular five-second fixes. Keep the user's 20m reveal
-        // radius, but allow plausible speed over short gaps. Do not invent
-        // paths over lost GPS coverage or between separate trips.
-        if (a.manual || b.manual || a.timestamp<=0L || b.timestamp<=a.timestamp) return false
-        val elapsed=(b.timestamp-a.timestamp)/1000.0
-        if(elapsed>90.0) return false
-        val out=FloatArray(1)
-        android.location.Location.distanceBetween(a.latitude,a.longitude,b.latitude,b.longitude,out)
-        val distance=out[0].toDouble()
-        if(!distance.isFinite())return false
-        // Short sampling gaps may include cars (~180km/h upper safety bound).
-        // Longer outages get only a small walking/stationary allowance.
-        return if(elapsed<=25.0) {
-            distance<=750.0 && distance<=50.0*elapsed+15.0
-        } else {
-            distance<=70.0
-        }
+    private fun canJoin(points:List<DiscoveryPoint>, index:Int):Boolean {
+        val a=points[index-1]
+        val b=points[index]
+        if(a.manual || b.manual)return false
+        fun converted(p:DiscoveryPoint)=TraceReconstruction.Fix(
+            p.latitude,p.longitude,p.timestamp,p.accuracy,p.speed
+        )
+        val before=if(index>=2 && !points[index-2].manual)converted(points[index-2]) else null
+        val after=if(index+1<points.size && !points[index+1].manual)
+            converted(points[index+1]) else null
+        return TraceReconstruction.shouldJoin(
+            converted(a),converted(b),before,after)
     }
     private fun segmentPath(a: Point, b: Point): Path =
         Path().apply { moveTo(a.x.toFloat(), a.y.toFloat()); lineTo(b.x.toFloat(), b.y.toFloat()) }
@@ -122,7 +115,7 @@ class DiscoveryFogOverlay(
             val rr=r(p.latitude,p.longitude).coerceAtLeast(.5f)
             ink.style=Paint.Style.FILL
             maskCanvas.drawCircle(xy.x/4f,xy.y/4f,rr,ink)
-            if(i>0 && canJoin(points[i-1],p)) {
+            if(i>0 && canJoin(points,i)) {
                 val prev=points[i-1];val ab=pt(prev.latitude,prev.longitude)
                 ink.style=Paint.Style.STROKE;ink.strokeWidth=rr*2f
                 maskCanvas.drawLine(ab.x/4f,ab.y/4f,xy.x/4f,xy.y/4f,ink)
@@ -184,7 +177,7 @@ class DiscoveryFogOverlay(
         if (showRoute) {
             for (i in 1 until points.size) {
                 val a = points[i-1]; val b = points[i]
-                if (canJoin(a,b)) {
+                if (canJoin(points,i)) {
                     val x = toPoint(mapView,a.latitude,a.longitude)
                     val y = toPoint(mapView,b.latitude,b.longitude)
                     canvas.drawLine(x.x.toFloat(),x.y.toFloat(),y.x.toFloat(),y.y.toFloat(),routePaint)
@@ -240,7 +233,7 @@ class DiscoveryFogOverlay(
                 color=Color.rgb(120,210,246);strokeWidth=5f;style=Paint.Style.STROKE
             }
             val trail=records().filter { !it.manual }.takeLast(600)
-            for(i in 1 until trail.size) if(canJoin(trail[i-1],trail[i])) {
+            for(i in 1 until trail.size) if(canJoin(trail,i)) {
                 val a=toPoint(mapView,trail[i-1].latitude,trail[i-1].longitude)
                 val b=toPoint(mapView,trail[i].latitude,trail[i].longitude)
                 canvas.drawLine(a.x.toFloat(),a.y.toFloat(),b.x.toFloat(),b.y.toFloat(),paint)

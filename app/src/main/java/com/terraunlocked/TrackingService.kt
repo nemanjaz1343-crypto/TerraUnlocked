@@ -32,10 +32,12 @@ class TrackingService:Service() {
     private var lastSwitch=0L
     private var ecoMode=false
     private var motionProfile="WALK"
+    private var lastSmoothed:Location?=null
+    private var lastRecordedTimestamp=0L
     private var lastBroadcast=0L
     private var lastVisual:Location?=null
     private fun broadcastFix(loc:Location,revealed:Boolean,eco:Boolean,weak:Boolean=false,
-        sampleTime:Long=System.currentTimeMillis()) {
+        sampleTime:Long=System.currentTimeMillis(),discoveryPosition:Location?=null) {
         val previous=lastVisual
         // Filter mild stationary wander for the on-screen marker only, never recorded GPS.
         val stationary=!loc.hasSpeed() || loc.speed<1.5f
@@ -48,7 +50,8 @@ class TrackingService:Service() {
         if(!weak)lastVisual=shown
         sendBroadcast(Intent(ACTION_FIX).setPackage(packageName).apply {
             putExtra("lat",shown.latitude);putExtra("lon",shown.longitude)
-            putExtra("rawLat",loc.latitude);putExtra("rawLon",loc.longitude)
+            putExtra("rawLat",discoveryPosition?.latitude ?: loc.latitude)
+            putExtra("rawLon",discoveryPosition?.longitude ?: loc.longitude)
             putExtra("accuracy",loc.accuracy);putExtra("revealed",revealed)
             putExtra("eco",eco);putExtra("weak",weak)
             putExtra("motionProfile",motionProfile)
@@ -111,8 +114,13 @@ class TrackingService:Service() {
                 val anchorBeforeFilter=motionAnchor
                 if(ecoMode && anchorBeforeFilter!=null) {
                     val traveled=anchorBeforeFilter.distanceTo(loc)
-                    if((loc.hasSpeed() && loc.speed>3f) ||
-                       (loc.accuracy<=100f && traveled>maxOf(35f,2f*loc.accuracy))) {
+                    // Walking at 1.3m/s previously could not exit ECO while GPS
+                    // reported a 40-100m uncertainty. Wake high-accuracy updates
+                    // even on weak movement, without accepting weak discoveries.
+                    if(loc.accuracy>35f ||
+                       (loc.hasSpeed() && loc.speed>=0.85f) ||
+                       (loc.accuracy<=25f &&
+                           traveled>maxOf(13f,1.25f*loc.accuracy))) {
                         switchMode(false)
                         motionAnchor=loc
                         stationarySince=android.os.SystemClock.elapsedRealtime()
@@ -134,17 +142,19 @@ class TrackingService:Service() {
                     motionAnchor=loc
                     stationarySince=nowElapsed
                 } else {
-                    val threshold=maxOf(22f,2f*maxOf(anchor.accuracy,loc.accuracy))
-                    val moving=anchor.distanceTo(loc)>threshold || (loc.hasSpeed() && loc.speed>2.5f)
+                    val threshold=maxOf(14f,1.25f*maxOf(anchor.accuracy,loc.accuracy))
+                    val moving=(loc.hasSpeed() && loc.speed>=0.85f) ||
+                        (loc.accuracy<=25f && anchor.distanceTo(loc)>threshold)
                     if(moving) {
                         motionAnchor=loc
                         stationarySince=nowElapsed
                         if(ecoMode)switchMode(false)
-                    } else if(!ecoMode && nowElapsed-stationarySince>=120000L) {
+                    } else if(!ecoMode && loc.accuracy<=20f &&
+                        nowElapsed-stationarySince>=180000L) {
+                        // Enter battery saver only after a confident 3-minute stop.
                         switchMode(true)
                     }
                 }
-                previous=loc
                 val now=System.currentTimeMillis()
                 // Do not make permanent discoveries from poor urban GPS readings.
                 if(loc.accuracy>35f) {
@@ -168,34 +178,84 @@ class TrackingService:Service() {
                     }
                     if(changed)fieldNotes.save(updated)
                 }
+                // Reject a very fast positional jump when Android itself reports
+                // walking speed. We do not use this jump to anchor the next sample.
+                val priorStable=lastSmoothed
+                val rawDelta=if(priorStable!=null)
+                    (loc.elapsedRealtimeNanos-priorStable.elapsedRealtimeNanos)/1e9 else 0.0
+                if(priorStable!=null && rawDelta in 0.2..20.0 &&
+                    loc.hasSpeed() && loc.speed<3f &&
+                    priorStable.distanceTo(loc)>maxOf(45f,
+                        (4.0*rawDelta).toFloat()+loc.accuracy)) {
+                    return@forEach
+                }
+
+                val smooth=Location(loc)
+                if(priorStable!=null && rawDelta in 0.2..12.0 &&
+                    loc.accuracy>12f && (!loc.hasSpeed() || loc.speed<4f) &&
+                    priorStable.distanceTo(loc)<=maxOf(35f,
+                        (3.5*rawDelta).toFloat()+loc.accuracy)) {
+                    // Accuracy-weighted short-range smoothing reduces reflected
+                    // skyscraper signals without dragging the trail over long gaps.
+                    val weight=if(loc.accuracy<=22f)0.65 else 0.48
+                    smooth.latitude=priorStable.latitude*(1.0-weight)+loc.latitude*weight
+                    smooth.longitude=priorStable.longitude*(1.0-weight)+loc.longitude*weight
+                }
+                lastSmoothed=smooth
+                previous=loc
+
                 val saved=lastSaved
-                // Don't permanently reveal random stationary GPS wandering.
-                // Moving users still get regular samples, including fast scooter/car trips.
-                val step=saved?.distanceTo(loc) ?: Float.MAX_VALUE
+                val step=saved?.distanceTo(smooth) ?: Float.MAX_VALUE
                 val secondsSinceSaved=if(saved!=null)
                     (loc.elapsedRealtimeNanos-saved.elapsedRealtimeNanos)/1e9 else 0.0
                 val speedMps=if(loc.hasSpeed() && loc.speed>=0f)loc.speed
-                    else if(saved!=null && secondsSinceSaved in 1.0..20.0 && loc.accuracy<=20f)
-                        (step/secondsSinceSaved).toFloat() else 0f
-                // Motion profiles adjust sample density without changing 20m reveal radius.
+                    else if(saved!=null && secondsSinceSaved in 1.0..20.0 &&
+                        loc.accuracy<=20f)
+                        (step/secondsSinceSaved).toFloat() else Float.NaN
+
                 motionProfile=when {
-                    speedMps>=7f -> "CAR"
-                    speedMps>=2f -> "SCOOTER"
+                    speedMps.isFinite() && speedMps>=7f -> "CAR"
+                    speedMps.isFinite() && speedMps>=2f -> "SCOOTER"
                     else -> "WALK"
                 }
-                val threshold=when(motionProfile) {
-                    "CAR" -> maxOf(14f,1.15f*loc.accuracy)
-                    "SCOOTER" -> maxOf(10f,1.15f*loc.accuracy)
-                    else -> maxOf(20f,1.6f*loc.accuracy)
-                }
-                val moved=saved==null || (secondsSinceSaved>0.0 && step>=threshold)
+                val spacing=TraceReconstruction.sampleSpacing(loc.accuracy,speedMps)
+                // A single erroneous 'good accuracy' result should not draw a
+                // false isolated discovery 100m away from a walking trajectory.
+                val estimatedTravelSpeed=if(secondsSinceSaved>0.0 && saved!=null)
+                    step/secondsSinceSaved else 0.0
+                val plausible= saved==null || secondsSinceSaved>20.0 ||
+                    estimatedTravelSpeed<=when {
+                        speedMps.isFinite() && speedMps>=7f ->
+                            maxOf(20.0,speedMps*2.0+5.0)
+                        speedMps.isFinite() && speedMps>=2f ->
+                            maxOf(8.0,speedMps*2.0+3.0)
+                        else -> 6.0
+                    }
+                val moved=plausible && (saved==null ||
+                    (secondsSinceSaved>0.0 && step>=spacing))
                 if(moved) {
-                    store.add(DiscoveryPoint(loc.latitude,loc.longitude,false,now))
-                    lastSaved=loc
-                }
-                if(moved || now-lastBroadcast>=15000L) {
+                    // Use the measurement timestamp, NOT the shared callback time.
+                    // Batched fixes arriving together must remain ordered and joinable.
+                    val measuredAt=(now-fixAgeMs.coerceAtLeast(0L))
+                        .coerceAtLeast(lastRecordedTimestamp+1L)
+                    lastRecordedTimestamp=measuredAt
+                    store.add(DiscoveryPoint(smooth.latitude,smooth.longitude,
+                        false,measuredAt,loc.accuracy,
+                        if(speedMps.isFinite())speedMps else Float.NaN))
+                    lastSaved=Location(smooth)
+                    if(now-lastBroadcast>=1000L) {
+                        lastBroadcast=now
+                        broadcastFix(loc,true,ecoMode,sampleTime=measuredAt,
+                            discoveryPosition=smooth)
+                    } else {
+                        // Preserve UI sync even if several batched GPS fixes
+                        // are stored in the same callback.
+                        broadcastFix(loc,true,ecoMode,sampleTime=measuredAt,
+                            discoveryPosition=smooth)
+                    }
+                } else if(now-lastBroadcast>=15000L) {
                     lastBroadcast=now
-                    broadcastFix(loc,moved,ecoMode,sampleTime=now)
+                    broadcastFix(loc,false,ecoMode,sampleTime=now)
                 }
             }
         }
@@ -230,6 +290,8 @@ class TrackingService:Service() {
         lastVisual=null
         previous=null
         lastSaved=null
+        lastSmoothed=null
+        lastRecordedTimestamp=0L
         motionAnchor=null
         stationarySince=0L
         lastSwitch=0L

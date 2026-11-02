@@ -17,6 +17,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
+      - name: Run GPS reconstruction unit tests
+        run: gradle :app:testDebugUnitTest --stacktrace
       - name: Build debug APK (development only)
         run: gradle :app:assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4

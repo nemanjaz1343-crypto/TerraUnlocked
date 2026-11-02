@@ -28,8 +28,8 @@ android {
         applicationId = "com.terraunlocked"
         minSdk = 26
         targetSdk = 35
-        versionCode = 67
-        versionName = "0.4.38"
+        versionCode = 68
+        versionName = "0.4.39"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -41,4 +41,5 @@ dependencies {
     implementation("androidx.core:core:1.15.0")
     implementation("org.osmdroid:osmdroid-android:6.1.20")
     implementation("com.google.android.gms:play-services-location:21.3.0")
+    testImplementation("junit:junit:4.13.2")
 }
