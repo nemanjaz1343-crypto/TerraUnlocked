@@ -2289,6 +2289,18 @@ class MainActivity : Activity(), SensorEventListener {
         },LinearLayout.LayoutParams(-1,dp(20)))
         val tabBar=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
         panel.addView(tabBar,LinearLayout.LayoutParams(-1,dp(40)))
+        // Quick updater stays visible in FIELD, DISPLAY and DATA tabs.
+        // Keep the existing update checker and install flow unchanged.
+        panel.addView(action("↻  CHECK FOR UPDATES").apply {
+            applyExpeditionStyle(this,true)
+            textSize=11f
+            setOnClickListener {
+                layersPopup?.dismiss()
+                checkForUpdates()
+            }
+        },LinearLayout.LayoutParams(-1,dp(44)).apply {
+            setMargins(dp(2),dp(6),dp(2),dp(6))
+        })
         val optionGrid=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
         panel.addView(optionGrid,LinearLayout.LayoutParams(-1,-2))
         val tabs=listOf("FIELD","DISPLAY","DATA")
