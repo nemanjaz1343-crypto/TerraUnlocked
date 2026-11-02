@@ -88,6 +88,142 @@ class MainActivity : Activity(), SensorEventListener {
     private var pathStart: GeoPoint? = null
     private var layersPopup: PopupWindow? = null
     private lateinit var status: TextView
+    private var overlayFiltersPopup:PopupWindow?=null
+    private val layerFilters=mutableMapOf<String,Boolean>()
+    private val objectiveLayerCategories=setOf("NATURE","HERITAGE","ARCH","ART","SAVED")
+
+    private fun layerVisible(category:String):Boolean=when(category) {
+        "TAXI" -> taxiStandsEnabled
+        "JOURNAL" -> ::fogOverlay.isInitialized && fogOverlay.showCheckpoints
+        else -> layerFilters[category]!=false
+    }
+
+    private fun objectiveVisible(o:ReconObjective):Boolean {
+        if(objectiveStore.isHidden(o.id))return false
+        val category=o.category.uppercase(java.util.Locale.US)
+        return layerVisible(if(category in objectiveLayerCategories)category else "OTHER")
+    }
+
+    private fun setLayerVisible(category:String,show:Boolean) {
+        when(category) {
+            "TAXI" -> {
+                taxiStandsEnabled=show
+                getSharedPreferences("terra_taxi_settings",Context.MODE_PRIVATE)
+                    .edit().putBoolean("enabled",show).apply()
+                if(show)scheduleTaxiStandsRefresh()
+            }
+            "JOURNAL" -> fogOverlay.showCheckpoints=show
+            else -> {
+                layerFilters[category]=show
+                getSharedPreferences("terra_layer_filters",Context.MODE_PRIVATE)
+                    .edit().putBoolean(category,show).apply()
+            }
+        }
+        refresh()
+    }
+
+    private fun showOverlayFilters() {
+        if(overlayFiltersPopup?.isShowing==true){
+            overlayFiltersPopup?.dismiss()
+            return
+        }
+        val panel=LinearLayout(this).apply{
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(12),dp(10),dp(12),dp(12))
+            background=GradientDrawable().apply{
+                cornerRadius=dp(12).toFloat()
+                setColor(Color.rgb(20,31,24))
+                setStroke(dp(1),Color.rgb(189,156,92))
+            }
+        }
+        panel.addView(label("◈  MAP / OVERLAY FILTERS",15,sand).apply{
+            setTypeface(Typeface.SERIF,Typeface.BOLD)
+        },LinearLayout.LayoutParams(-1,dp(33)))
+        panel.addView(label("Choose what appears on your map",10,sage),
+            LinearLayout.LayoutParams(-1,dp(22)))
+        val contents=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
+        panel.addView(contents)
+        val sets=listOf(
+            "OBJECTIVES" to listOf(
+                "NATURE" to "▲  NATURE",
+                "HERITAGE" to "⌂  HERITAGE",
+                "ARCH" to "⌗  ARCH",
+                "ART" to "✧  ART",
+                "SAVED" to "◆  SAVED",
+                "OTHER" to "◇  OTHER"),
+            "TRANSPORT" to listOf(
+                "METRO" to "Ⓜ  METRO",
+                "TAXI" to "▣  TAXI"),
+            "PERSONAL" to listOf(
+                "ANCHORS" to "⌖  HOME / WORK",
+                "JOURNAL" to "▤  FIELD PINS")
+        )
+        fun render(){
+            contents.removeAllViews()
+            sets.forEach{(heading,items)->
+                contents.addView(label(heading,11,sage).apply{
+                    setPadding(dp(3),dp(5),0,0)
+                    setTypeface(Typeface.DEFAULT,Typeface.BOLD)
+                },LinearLayout.LayoutParams(-1,dp(27)))
+                items.chunked(2).forEach{pair->
+                    val line=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+                    for((key,name) in pair){
+                        val visible=layerVisible(key)
+                        val button=action((if(visible)"✓ " else "○ ")+name).apply{
+                            applyExpeditionStyle(this,visible)
+                            textSize=10f
+                            isAllCaps=false
+                            maxLines=1
+                            gravity=Gravity.CENTER
+                            setOnClickListener{
+                                setLayerVisible(key,!layerVisible(key))
+                                render()
+                            }
+                        }
+                        line.addView(button,LinearLayout.LayoutParams(0,dp(39),1f).apply{
+                            setMargins(dp(2),dp(2),dp(2),dp(2))
+                        })
+                    }
+                    if(pair.size==1)line.addView(View(this),
+                        LinearLayout.LayoutParams(0,dp(39),1f))
+                    contents.addView(line)
+                }
+            }
+        }
+        render()
+        val controls=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        fun quickAction(name:String,visible:Boolean) {
+            controls.addView(action(name).apply{
+                applyExpeditionStyle(this)
+                setOnClickListener{
+                    sets.forEach{(_,entries)->
+                        entries.forEach{(key,_)->setLayerVisible(key,visible)}
+                    }
+                    render()
+                }
+            },LinearLayout.LayoutParams(0,dp(37),1f).apply{
+                setMargins(dp(2),dp(5),dp(2),0)
+            })
+        }
+        quickAction("SHOW ALL",true)
+        quickAction("HIDE ALL",false)
+        panel.addView(controls)
+        panel.addView(label("Visibility only / your data stays saved",9,sage).apply{
+            gravity=Gravity.CENTER
+        },LinearLayout.LayoutParams(-1,dp(26)))
+        val scroll=android.widget.ScrollView(this).apply{
+            isFillViewport=false
+            addView(panel)
+        }
+        overlayFiltersPopup=PopupWindow(
+            scroll,dp(310).coerceAtMost(resources.displayMetrics.widthPixels-dp(20)),
+            -2,true).apply{
+            isOutsideTouchable=true
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+            elevation=dp(8).toFloat()
+            showAtLocation(map,Gravity.TOP or Gravity.END,dp(10),dp(96))
+        }
+    }
     private lateinit var trackButton: Button
     private lateinit var modeButton: Button
     private lateinit var fogOverlay: DiscoveryFogOverlay
@@ -470,6 +606,10 @@ class MainActivity : Activity(), SensorEventListener {
             .getBoolean("enabled",true)
         taxiStands.addAll(taxiStandStore.load())
         objectiveStore.enabled=true
+        getSharedPreferences("terra_layer_filters",Context.MODE_PRIVATE).let {prefs->
+            listOf("NATURE","HERITAGE","ARCH","ART","SAVED","OTHER","METRO","ANCHORS")
+                .forEach{layerFilters[it]=prefs.getBoolean(it,true)}
+        }
         notes.addAll(fieldNotes.load())
         pathStore = PathStore(this)
         segments.addAll(pathStore.load())
@@ -496,7 +636,27 @@ class MainActivity : Activity(), SensorEventListener {
             setPadding(dp(12),dp(1),dp(8),dp(3))
             setBackgroundColor(Color.rgb(14,20,16))
         }
-        root.addView(status,LinearLayout.LayoutParams(-1,dp(22)))
+        status.isSingleLine=true
+        status.ellipsize=android.text.TextUtils.TruncateAt.END
+        val statusRow=LinearLayout(this).apply{
+            orientation=LinearLayout.HORIZONTAL
+            gravity=Gravity.CENTER_VERTICAL
+            setBackgroundColor(Color.rgb(14,20,16))
+        }
+        statusRow.addView(status,LinearLayout.LayoutParams(0,dp(23),1f))
+        statusRow.addView(action("▤ LAYERS").apply{
+            textSize=10f
+            setTextColor(sand)
+            background=GradientDrawable().apply{
+                cornerRadius=dp(4).toFloat()
+                setColor(Color.rgb(32,45,34))
+                setStroke(dp(1),Color.rgb(165,143,92))
+            }
+            setOnClickListener{showOverlayFilters()}
+        },LinearLayout.LayoutParams(dp(84),dp(22)).apply{
+            setMargins(dp(2),0,dp(8),0)
+        })
+        root.addView(statusRow,LinearLayout.LayoutParams(-1,dp(23)))
         map = MapView(this).apply {
             setTileSource(TileSourceFactory.MAPNIK)
             setMultiTouchControls(true)
@@ -538,7 +698,7 @@ class MainActivity : Activity(), SensorEventListener {
         map.overlays.add(object : Overlay() {
             override fun onSingleTapConfirmed(event:MotionEvent,mapView:MapView):Boolean {
                 if(mode!="VIEW") return false
-                val clicked=notes.asReversed().firstOrNull { note ->
+                val clicked=notes.asReversed().takeIf{fogOverlay.showCheckpoints}?.firstOrNull { note ->
                     val p=mapView.projection.toPixels(GeoPoint(note.latitude,note.longitude),Point())
                     kotlin.math.hypot((event.x-p.x).toDouble(),(event.y-p.y).toDouble())<dp(24)
                 }
@@ -708,7 +868,7 @@ class MainActivity : Activity(), SensorEventListener {
                 val user=fogOverlay.currentPosition
                 val width=canvas.width.toFloat()
                 val height=canvas.height.toFloat()
-                val all=(ReconObjectives.all+objectiveStore.customPlaces()).filterNot {objectiveStore.isHidden(it.id)}
+                val all=(ReconObjectives.all+objectiveStore.customPlaces()).filter{objectiveVisible(it)}
                 val occupied=mutableListOf<Pair<Float,Float>>()
                 all.forEach {o->
                     val location=if(o.id==movingObjectiveId) movingPreview else null
@@ -737,7 +897,7 @@ class MainActivity : Activity(), SensorEventListener {
             }
             override fun onSingleTapConfirmed(event:MotionEvent,mapView:MapView):Boolean {
                 if(!objectiveStore.enabled || mode!="VIEW")return false
-                val hit=(ReconObjectives.all+objectiveStore.customPlaces()).filterNot {objectiveStore.isHidden(it.id)}.firstOrNull {o->
+                val hit=(ReconObjectives.all+objectiveStore.customPlaces()).filter{objectiveVisible(it)}.firstOrNull {o->
                     val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
                     kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(22)
                 } ?: return false
@@ -745,7 +905,7 @@ class MainActivity : Activity(), SensorEventListener {
             }
             override fun onLongPress(event:MotionEvent,mapView:MapView):Boolean {
                 if(mode!="VIEW")return false
-                val hit=(ReconObjectives.all+objectiveStore.customPlaces()).filterNot {objectiveStore.isHidden(it.id)}.firstOrNull {o->
+                val hit=(ReconObjectives.all+objectiveStore.customPlaces()).filter{objectiveVisible(it)}.firstOrNull {o->
                     val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
                     kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(24)
                 } ?: return false
@@ -768,7 +928,7 @@ class MainActivity : Activity(), SensorEventListener {
         })
         map.overlays.add(object:Overlay() {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
-                if(shadow)return
+                if(shadow || !layerVisible("METRO"))return
                 val painter=markerArt
                 metroStations.forEach {station->
                     val p=mapView.projection.toPixels(GeoPoint(station.lat,station.lon),Point())
@@ -777,7 +937,7 @@ class MainActivity : Activity(), SensorEventListener {
                 }
             }
             override fun onSingleTapConfirmed(e:MotionEvent,mapView:MapView):Boolean {
-                if(mode!="VIEW")return false
+                if(mode!="VIEW" || !layerVisible("METRO"))return false
                 val hit=metroStations.firstOrNull {station->
                     val p=mapView.projection.toPixels(GeoPoint(station.lat,station.lon),Point())
                     kotlin.math.hypot((e.x-p.x).toDouble(),(e.y-p.y).toDouble())<dp(20)
@@ -834,7 +994,7 @@ class MainActivity : Activity(), SensorEventListener {
         })
         map.overlays.add(object:Overlay() {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
-                if(shadow)return
+                if(shadow || !layerVisible("ANCHORS"))return
                 val prefs=getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE)
                 val painter=markerArt
                 listOf("HOME","OFFICE").forEach {name->
@@ -3053,6 +3213,7 @@ class MainActivity : Activity(), SensorEventListener {
         handler.removeCallbacks(taxiRefreshTask)
         handler.removeCallbacks(solarTick)
         solarPopup?.dismiss()
+        overlayFiltersPopup?.dismiss()
         layersPopup?.dismiss()
         poiPopup?.dismiss()
         radialMenu?.dismiss()
