@@ -67,5 +67,26 @@ class ObjectiveStore(context:Context) {
         }
         return false
     }
+    /** Delete only user-created objectives. Built-in objectives can be hidden instead. */
+    fun deleteCustom(id:String):Boolean {
+        if(!id.startsWith("saved_"))return false
+        val source=runCatching{
+            org.json.JSONArray(prefs.getString("custom_places","[]"))
+        }.getOrNull() ?: return false
+        val remaining=org.json.JSONArray()
+        var found=false
+        for(i in 0 until source.length()) {
+            val entry=source.optJSONObject(i) ?: continue
+            if(entry.optString("id")==id) found=true else remaining.put(entry)
+        }
+        if(!found)return false
+        val edit=prefs.edit()
+            .putString("custom_places",remaining.toString())
+            .remove("done_"+id)
+            .remove("hidden_"+id)
+        if(active==id)edit.remove("active")
+        edit.apply()
+        return true
+    }
     fun resetHiding(){ReconObjectives.all.forEach{hide(it.id,false)}}
 }

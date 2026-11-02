@@ -1538,7 +1538,8 @@ class MainActivity : Activity(), SensorEventListener {
         panel.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
         fun populate(query:String) {
             list.removeAllViews()
-            ReconObjectives.all.filterNot {objectiveStore.isHidden(it.id)}
+            (ReconObjectives.all+objectiveStore.customPlaces())
+                .filterNot {objectiveStore.isHidden(it.id)}
                 .filter {it.name.contains(query,true)||it.category.contains(query,true)}
                 .sortedWith(compareBy<ReconObjective> {if(objectiveStore.completed(it.id))2 else if(objectiveStore.active==it.id)0 else 1}.thenBy{it.name})
                 .forEach {o ->
@@ -1626,11 +1627,34 @@ class MainActivity : Activity(), SensorEventListener {
             }
     }
 
+    private fun confirmDeleteObjective(o:ReconObjective) {
+        if(!o.id.startsWith("saved_")) {
+            status.text="BUILT-IN OBJECTIVES CAN BE HIDDEN, NOT DELETED"
+            return
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("DELETE OBJECTIVE?")
+            .setMessage("Permanently remove \""+o.name+"\" from your saved objectives? "+
+                "This cannot be undone. Field journal photos and notes will be preserved.")
+            .setNegativeButton("CANCEL",null)
+            .setPositiveButton("DELETE") {_,_->
+                if(objectiveStore.deleteCustom(o.id)) {
+                    if(movingObjectiveId==o.id)cancelPinMove()
+                    if(pendingObjective?.id==o.id)clearMapPreview()
+                    objectiveBubble?.dismiss()
+                    objectivesPopup?.dismiss()
+                    status.text="OBJECTIVE DELETED / "+o.name.take(24)
+                    refresh()
+                } else status.text="OBJECTIVE / DELETE FAILED"
+            }.show().getButton(android.app.AlertDialog.BUTTON_POSITIVE)
+            .setTextColor(Color.rgb(227,128,112))
+    }
+
     private fun showObjective(o:ReconObjective) {
         objectiveBubble?.dismiss()
         objectiveBubblePlace=o
         objectiveBubbleBelow=false
-        val width=dp(296).coerceAtMost((map.width-dp(24)).coerceAtLeast(dp(220)))
+        val width=dp(328).coerceAtMost((map.width-dp(24)).coerceAtLeast(dp(220)))
         val stack=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
         val body=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
@@ -1643,9 +1667,11 @@ class MainActivity : Activity(), SensorEventListener {
         }
         body.addView(label("FIELD OBJECTIVE / "+o.category,10,sage))
         body.addView(label("CHECK-IN / WITHIN 100m + 1 CAMERA PHOTO",10,sage))
-        body.addView(label(o.name,17,sand).apply{
+        body.addView(label(o.name,16,sand).apply{
             setTypeface(Typeface.SERIF,Typeface.BOLD)
-            setSingleLine(true);ellipsize=android.text.TextUtils.TruncateAt.END
+            maxLines=2
+            ellipsize=android.text.TextUtils.TruncateAt.END
+            setPadding(0,dp(4),0,dp(4))
         })
         body.addView(label(o.brief,12,sand).apply {
             maxLines=2;ellipsize=android.text.TextUtils.TruncateAt.END
@@ -1680,7 +1706,11 @@ class MainActivity : Activity(), SensorEventListener {
             for((caption,click) in entries) {
                 val button=action(caption).apply {
                     applyExpeditionStyle(this)
-                    textSize=10f;maxLines=2
+                    textSize=9.5f
+                    maxLines=2
+                    isSingleLine=false
+                    setPadding(dp(4),dp(4),dp(4),dp(4))
+                    gravity=Gravity.CENTER
                 }
                 if(caption=="⌖ SET ACTIVE"){
                     styleActiveButton(button)
@@ -1689,9 +1719,13 @@ class MainActivity : Activity(), SensorEventListener {
                         styleActiveButton(button)
                     }
                 } else button.setOnClickListener {click()}
-                row.addView(button,LinearLayout.LayoutParams(0,dp(36),1f))
+                row.addView(button,LinearLayout.LayoutParams(0,dp(52),1f).apply{
+                    setMargins(dp(2),0,dp(2),0)
+                })
             }
-            body.addView(row)
+            body.addView(row,LinearLayout.LayoutParams(-1,-2).apply {
+                topMargin=dp(5)
+            })
         }
         actionRow(
             "⌖ SET ACTIVE" to {
@@ -1707,7 +1741,17 @@ class MainActivity : Activity(), SensorEventListener {
             }
         )
         actionRow(
-            "HIDE" to {objectiveStore.hide(o.id);refresh();popup.dismiss()},
+            (if(o.id.startsWith("saved_"))"× DELETE" else "HIDE") to {
+                if(o.id.startsWith("saved_")) {
+                    popup.dismiss()
+                    confirmDeleteObjective(o)
+                } else {
+                    objectiveStore.hide(o.id)
+                    if(objectiveStore.active==o.id)objectiveStore.active=null
+                    refresh()
+                    popup.dismiss()
+                }
+            },
             (if(o.id.startsWith("saved_"))"MOVE PIN" else "SOURCE") to {
                 popup.dismiss()
                 if(o.id.startsWith("saved_")) {
