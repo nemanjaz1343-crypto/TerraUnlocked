@@ -304,6 +304,29 @@ class MainActivity : Activity(), SensorEventListener {
     private var tracking = false
     private var receiverRegistered=false
     private var lastGpsUiRefresh=0L
+    private var lastKnownFixTime=0L
+    private fun restoreLastKnownFix():Boolean {
+        if(!::fogOverlay.isInitialized)return false
+        val prefs=getSharedPreferences("terra_last_fix",Context.MODE_PRIVATE)
+        val time=prefs.getLong("time",0L)
+        if(time<=0L || time>System.currentTimeMillis())return false
+        val lat=java.lang.Double.longBitsToDouble(prefs.getLong("latBits",0L))
+        val lon=java.lang.Double.longBitsToDouble(prefs.getLong("lonBits",0L))
+        if(!lat.isFinite() || !lon.isFinite() ||
+            lat !in -90.0..90.0 || lon !in -180.0..180.0)return false
+        fogOverlay.currentPosition=GeoPoint(lat,lon)
+        fogOverlay.positionAccuracy=prefs.getFloat("accuracy",0f)
+        lastKnownFixTime=time
+        return true
+    }
+    private fun lastKnownLabel():String {
+        val age=((System.currentTimeMillis()-lastKnownFixTime)/1000L).coerceAtLeast(0L)
+        return when {
+            age<60L -> "LAST KNOWN / ${age}s AGO"
+            age<3600L -> "LAST KNOWN / ${age/60L}m AGO"
+            else -> "LAST KNOWN / ${age/3600L}h AGO"
+        }
+    }
     // Short-lived estimates are deliberately NEVER persisted to discoveries.
     private val uncertainGps=mutableListOf<Pair<GeoPoint,Long>>()
     private val trackingReceiver=object:BroadcastReceiver() {
@@ -375,7 +398,10 @@ class MainActivity : Activity(), SensorEventListener {
                         accuracy,intent.getFloatExtra("speed",Float.NaN),confidence))
                 if(!offline && records.size%35==0)handler.post{maybeRecoverPaths()}
             }
-            if(!weak)expeditionBottom?.gpsSearching=false
+            if(!weak) {
+                lastKnownFixTime=System.currentTimeMillis()
+                expeditionBottom?.gpsSearching=false
+            }
             status.text=(if(weak)"GPS ESTIMATE" else
                 if(intent.getBooleanExtra("eco",false))"GPS ECO" else "GPS VERIFIED")+
                 " / "+(intent.getStringExtra("motionProfile") ?: "WALK")+
@@ -740,6 +766,7 @@ class MainActivity : Activity(), SensorEventListener {
         }
         fogOverlay = DiscoveryFogOverlay({ records.filter { historyCutoff==null || it.timestamp<=historyCutoff!! } }, { if(historyCutoff==null)demo else emptyList() }, { if(historyCutoff==null)segments else emptyList() }, { notes.filter {historyCutoff==null || it.time<=historyCutoff!!} })
         map.overlays.add(fogOverlay)
+        restoreLastKnownFix()
         map.overlays.add(object:Overlay() {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
                 if(shadow)return
@@ -1389,7 +1416,7 @@ class MainActivity : Activity(), SensorEventListener {
                 else requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,Manifest.permission.ACCESS_COARSE_LOCATION),10)
             }
             controls.trackingActive=tracking
-            controls.gpsSearching=tracking
+            controls.gpsSearching=tracking && fogOverlay.currentPosition==null
         }
         followButton.setOnClickListener {
             followUser=true
@@ -3479,7 +3506,10 @@ class MainActivity : Activity(), SensorEventListener {
             status.text="TRACK INTERRUPTED / TAP TRACK TO RESUME"
         }
         expeditionBottom?.trackingActive=tracking
-        expeditionBottom?.gpsSearching=tracking
+        val hasCachedFix=restoreLastKnownFix()
+        expeditionBottom?.gpsSearching=tracking && !hasCachedFix
+        if(hasCachedFix)status.text=lastKnownLabel()+
+            (if(tracking)" / REFRESHING GPS" else " / TRACK STOPPED")
         if(::trackButton.isInitialized)trackButton.text=if(tracking)"STOP GPS" else "TRACK"
         if(::store.isInitialized) {
             records.clear();records.addAll(store.load())

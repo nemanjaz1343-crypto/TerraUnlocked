@@ -111,7 +111,16 @@ class TrackingService:Service(),SensorEventListener {
             shown.latitude=previous.latitude*.65+loc.latitude*.35
             shown.longitude=previous.longitude*.65+loc.longitude*.35
         }
-        if(!weak)lastVisual=shown
+        if(!weak) {
+            lastVisual=shown
+            // Cache display position independently of Activity lifecycle.
+            getSharedPreferences("terra_last_fix",MODE_PRIVATE).edit()
+                .putLong("time",System.currentTimeMillis())
+                .putLong("latBits",java.lang.Double.doubleToRawLongBits(shown.latitude))
+                .putLong("lonBits",java.lang.Double.doubleToRawLongBits(shown.longitude))
+                .putFloat("accuracy",loc.accuracy)
+                .apply()
+        }
         sendBroadcast(Intent(ACTION_FIX).setPackage(packageName).apply {
             putExtra("lat",shown.latitude);putExtra("lon",shown.longitude)
             putExtra("rawLat",discoveryPosition?.latitude ?: loc.latitude)
