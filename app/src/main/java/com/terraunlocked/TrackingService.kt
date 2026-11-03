@@ -12,6 +12,9 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Build
 import android.os.IBinder
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import com.google.android.gms.location.*
 import org.osmdroid.util.GeoPoint
 
@@ -55,6 +58,31 @@ class TrackingService:Service(),SensorEventListener {
         const val ACTION_RESET_EXPLORATION="com.terraunlocked.RESET_EXPLORATION"
         const val ACTION_RESET_COMPLETE="com.terraunlocked.RESET_EXPLORATION_COMPLETE"
         var running=false
+    }
+    private val trackingPrefs by lazy {getSharedPreferences("terra_tracking_state",MODE_PRIVATE)}
+    private val diagnostics by lazy {GpsDiagnostics(this)}
+    private val classifier=MotionClassifier()
+    private val heartbeatHandler=Handler(Looper.getMainLooper())
+    private var lastFixElapsed=0L
+    private var lastGapAlertElapsed=0L
+    private val heartbeat=object:Runnable {
+        override fun run() {
+            if(!running)return
+            val elapsed=SystemClock.elapsedRealtime()
+            val age=elapsed-lastFixElapsed
+            if(lastFixElapsed>0L && age>45000L &&
+                elapsed-lastGapAlertElapsed>60000L) {
+                lastGapAlertElapsed=elapsed
+                diagnostics.record(null,age,0.0,0.0,fixConfidence,
+                    motionProfile,"NO_FIX","NO_CALLBACK_45S")
+                (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                    .notify(1801,makeNotification("GPS signal missing / "+(age/1000L)+"s"))
+            }
+            heartbeatHandler.postDelayed(this,45000L)
+        }
+    }
+    private fun saveTrackingRequested(active:Boolean) {
+        trackingPrefs.edit().putBoolean("requested",active).commit()
     }
     private val client by lazy {LocationServices.getFusedLocationProviderClient(this)}
     private val store by lazy {DiscoveryStore(this)}
@@ -137,11 +165,20 @@ class TrackingService:Service(),SensorEventListener {
         override fun onLocationResult(result:LocationResult) {
             if(!running)return
             result.locations.forEach {loc->
-                if(!loc.hasAccuracy() || !loc.latitude.isFinite() || !loc.longitude.isFinite())return@forEach
+                lastFixElapsed=SystemClock.elapsedRealtime()
+                if(!loc.hasAccuracy() || !loc.latitude.isFinite() || !loc.longitude.isFinite()) {
+                    diagnostics.record(loc,-1L,0.0,0.0,0,motionProfile,
+                        "REJECTED","INVALID_FIX")
+                    return@forEach
+                }
                 // Ignore stale batched/cached positions; a delayed old fix can appear
                 // as a wild GPS jump beside skyscrapers.
                 val fixAgeMs=(android.os.SystemClock.elapsedRealtimeNanos()-loc.elapsedRealtimeNanos)/1000000L
-                if(fixAgeMs>25000L || fixAgeMs< -5000L)return@forEach
+                if(fixAgeMs>25000L || fixAgeMs< -5000L) {
+                    diagnostics.record(loc,fixAgeMs,0.0,0.0,0,motionProfile,
+                        "REJECTED","STALE_FIX")
+                    return@forEach
+                }
                 val prev=previous
                 val seconds=if(prev!=null)(loc.elapsedRealtimeNanos-prev.elapsedRealtimeNanos)/1e9 else 0.0
                 val jump=prev!=null && seconds>0.5 &&
@@ -170,6 +207,10 @@ class TrackingService:Service(),SensorEventListener {
                         if(loc.hasSpeed())loc.speed else Float.NaN,
                         if(prev!=null)prev.distanceTo(loc).toDouble() else 0.0,
                         seconds,inertialMoving()).score
+                    diagnostics.record(loc,fixAgeMs,seconds,
+                        if(prev!=null)prev.distanceTo(loc).toDouble() else 0.0,
+                        fixConfidence,motionProfile,"REJECTED",
+                        if(jump)"GPS_JUMP" else "POOR_ACCURACY")
                     if(prev!=null && seconds>45.0)previous=null
                     // Report the uncertainty without recording inaccurate exploration.
                     val now=System.currentTimeMillis()
@@ -202,10 +243,14 @@ class TrackingService:Service(),SensorEventListener {
                 val velocity=if(loc.hasSpeed())loc.speed else Float.NaN
                 val distance=if(prev!=null)prev.distanceTo(loc).toDouble() else 0.0
                 val evidence=PathIntelligence.assess(loc.accuracy,fixAgeMs,
-                    velocity,distance,seconds,inertialMoving())
+                    if(velocity.isFinite() && velocity>=0.4f)velocity
+                    else if(motionProfile=="SCOOTER")5f else Float.NaN,
+                    distance,seconds,inertialMoving())
                 fixConfidence=evidence.score
                 // Weak estimates are preview-only. They cannot unlock fog.
                 if(!evidence.accepted) {
+                    diagnostics.record(loc,fixAgeMs,seconds,distance,
+                        fixConfidence,motionProfile,"REJECTED","LOW_CONFIDENCE")
                     if(now-lastBroadcast>=12000L) {
                         lastBroadcast=now
                         broadcastFix(loc,false,ecoMode,weak=true,sampleTime=now)
@@ -235,6 +280,9 @@ class TrackingService:Service(),SensorEventListener {
                     loc.hasSpeed() && loc.speed<3f &&
                     priorStable.distanceTo(loc)>maxOf(45f,
                         (4.0*rawDelta).toFloat()+loc.accuracy)) {
+                    diagnostics.record(loc,fixAgeMs,rawDelta,
+                        priorStable.distanceTo(loc).toDouble(),
+                        fixConfidence,motionProfile,"REJECTED","SPEED_CONFLICT")
                     return@forEach
                 }
 
@@ -257,19 +305,23 @@ class TrackingService:Service(),SensorEventListener {
                 val secondsSinceSaved=if(saved!=null)
                     (loc.elapsedRealtimeNanos-saved.elapsedRealtimeNanos)/1e9 else 0.0
                 val rawSpeed=if(loc.hasSpeed() && loc.speed>=0f)loc.speed
-                    else if(saved!=null && secondsSinceSaved in 1.0..20.0 &&
-                        loc.accuracy<=20f)
-                        (step/secondsSinceSaved).toFloat() else Float.NaN
-                // Inertial movement helps detect walking despite zero/absent GPS speed.
-                val speedMps=if((!rawSpeed.isFinite() || rawSpeed<0.3f) &&
-                    inertialMoving() && secondsSinceSaved>0.0 && step>5f)
-                    1.25f else rawSpeed
-
-                motionProfile=when {
-                    speedMps.isFinite() && speedMps>=7f -> "CAR"
-                    speedMps.isFinite() && speedMps>=2f -> "SCOOTER"
-                    else -> "WALK"
+                    else Float.NaN
+                // A zero or absent speed is common after urban GNSS interruptions.
+                // Derive speed only from sufficiently accurate, recent verified fixes.
+                val positionalSpeed=if(saved!=null &&
+                    secondsSinceSaved in 2.0..25.0 && loc.accuracy<=20f &&
+                    saved.accuracy<=20f &&
+                    step>=maxOf(10f,loc.accuracy*1.5f))
+                    (step/secondsSinceSaved).toFloat().coerceAtMost(35f)
+                    else Float.NaN
+                val speedMps=when {
+                    positionalSpeed.isFinite() &&
+                        (!rawSpeed.isFinite() || rawSpeed<0.4f) -> positionalSpeed
+                    rawSpeed.isFinite() -> rawSpeed
+                    inertialMoving() && secondsSinceSaved>0.0 && step>5f -> 1.25f
+                    else -> Float.NaN
                 }
+                motionProfile=classifier.update(speedMps,loc.accuracy)
                 val spacing=TraceReconstruction.sampleSpacing(loc.accuracy,speedMps)
                 // A single erroneous 'good accuracy' result should not draw a
                 // false isolated discovery 100m away from a walking trajectory.
@@ -296,6 +348,9 @@ class TrackingService:Service(),SensorEventListener {
                         if(speedMps.isFinite())speedMps else Float.NaN,
                         fixConfidence))
                     lastSaved=Location(smooth)
+                    diagnostics.record(loc,fixAgeMs,secondsSinceSaved,
+                        if(saved!=null && step.isFinite())step.toDouble() else 0.0,
+                        fixConfidence,motionProfile,"SAVED","VERIFIED")
                     if(now-lastBroadcast>=1000L) {
                         lastBroadcast=now
                         broadcastFix(loc,true,ecoMode,sampleTime=measuredAt,
@@ -306,9 +361,15 @@ class TrackingService:Service(),SensorEventListener {
                         broadcastFix(loc,true,ecoMode,sampleTime=measuredAt,
                             discoveryPosition=smooth)
                     }
-                } else if(now-lastBroadcast>=15000L) {
+                } else {
+                    diagnostics.record(loc,fixAgeMs,secondsSinceSaved,
+                        if(saved!=null && step.isFinite())step.toDouble() else 0.0,
+                        fixConfidence,motionProfile,"SKIPPED",
+                        if(!plausible)"IMPLAUSIBLE_STEP" else "BELOW_SPACING")
+                    if(now-lastBroadcast>=15000L) {
                     lastBroadcast=now
                     broadcastFix(loc,false,ecoMode,sampleTime=now)
+                    }
                 }
             }
         }
@@ -318,7 +379,9 @@ class TrackingService:Service(),SensorEventListener {
         if(intent?.action==ACTION_RESET_EXPLORATION) {
             // Reset is handled on the service main thread, serialized with GPS fixes.
             // Disable tracking before clearing so no late callback can reveal the map.
+            saveTrackingRequested(false)
             running=false
+            heartbeatHandler.removeCallbacks(heartbeat)
             stopMotionSensors()
             client.removeLocationUpdates(callback)
             store.replaceAll(emptyList())
@@ -329,16 +392,36 @@ class TrackingService:Service(),SensorEventListener {
             return START_NOT_STICKY
         }
         if(intent?.action==ACTION_STOP) {stopTracking();return START_NOT_STICKY}
+        // Android may restart a sticky service with a null intent after a kill.
+        // Never resume unless TRACK was explicitly enabled by the user.
+        if(intent?.action==null && !trackingPrefs.getBoolean("requested",false)) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if(running)return START_STICKY
+        diagnostics.record(null,-1L,0.0,0.0,0,motionProfile,
+            "EVENT",if(intent?.action==null)"STICKY_RESTART" else "TRACK_START_REQUEST")
         if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED) {
             stopSelf();return START_NOT_STICKY
         }
         val manager=getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         manager.createNotificationChannel(NotificationChannel("terra_recon","TerraUnlocked tracking",NotificationManager.IMPORTANCE_LOW))
-        if(Build.VERSION.SDK_INT>=29)
-            startForeground(1801,makeNotification("Moving / high accuracy"),ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
-        else startForeground(1801,makeNotification("Moving / high accuracy"))
+        try {
+            if(Build.VERSION.SDK_INT>=29)
+                startForeground(1801,makeNotification("Moving / high accuracy"),ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+            else startForeground(1801,makeNotification("Moving / high accuracy"))
+        } catch(error:Exception) {
+            diagnostics.record(null,-1L,0.0,0.0,0,motionProfile,
+                "REJECTED","SERVICE_START_DENIED")
+            stopSelf()
+            return START_NOT_STICKY
+        }
         running=true
+        saveTrackingRequested(true)
+        lastFixElapsed=SystemClock.elapsedRealtime()
+        lastGapAlertElapsed=0L
+        heartbeatHandler.removeCallbacks(heartbeat)
+        heartbeatHandler.postDelayed(heartbeat,45000L)
         startMotionSensors()
         sendBroadcast(Intent(ACTION_STATE).setPackage(packageName).putExtra("running",true))
         ecoMode=false
@@ -354,19 +437,43 @@ class TrackingService:Service(),SensorEventListener {
             .setMinUpdateIntervalMillis(2500L)
             .setMaxUpdateDelayMillis(10000L)
             .setMinUpdateDistanceMeters(5f).build()
-        client.requestLocationUpdates(request,callback,mainLooper)
+        try {
+            client.requestLocationUpdates(request,callback,mainLooper)
+                .addOnFailureListener {
+                    diagnostics.record(null,-1L,0.0,0.0,0,motionProfile,
+                        "REJECTED","LOCATION_REQUEST_FAILED")
+                    (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                        .notify(1801,makeNotification("GPS unavailable / open Terra"))
+                }
+        } catch(error:SecurityException) {
+            stopTracking()
+            return START_NOT_STICKY
+        }
         return START_STICKY
     }
     private fun stopTracking() {
+        diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
+            "EVENT","TRACK_STOPPED")
+        saveTrackingRequested(false)
         running=false
+        heartbeatHandler.removeCallbacks(heartbeat)
         stopMotionSensors()
         client.removeLocationUpdates(callback)
         sendBroadcast(Intent(ACTION_STATE).setPackage(packageName).putExtra("running",false))
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
+    override fun onTaskRemoved(rootIntent:Intent?) {
+        // Task dismissal is not STOP; the visible foreground notification remains.
+        diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
+            "EVENT","TASK_REMOVED")
+        super.onTaskRemoved(rootIntent)
+    }
     override fun onDestroy() {
+        if(running)diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
+            "EVENT","SERVICE_DESTROYED")
         running=false
+        heartbeatHandler.removeCallbacks(heartbeat)
         stopMotionSensors()
         client.removeLocationUpdates(callback)
         super.onDestroy()

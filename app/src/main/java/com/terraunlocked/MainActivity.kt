@@ -2810,8 +2810,12 @@ class MainActivity : Activity(), SensorEventListener {
                     if(silent)return@runOnUiThread
                     status.text="UPDATES / CHECK FAILED"
                     android.app.AlertDialog.Builder(this).setTitle("TERRA / UPDATES")
-                        .setMessage("Could not check published releases. Check your connection and try again.")
-                        .setPositiveButton("OK",null).show()
+                        .setMessage("GitHub update check failed: "+(result.exceptionOrNull()?.message ?: "Unknown error")+"\n\nYou can open the official releases page in your browser.")
+                        .setPositiveButton("OPEN RELEASES") {_,_->
+                            startActivity(Intent(Intent.ACTION_VIEW,
+                                Uri.parse("https://github.com/nemanjaz1343-crypto/TerraUnlocked/releases/latest")))
+                        }
+                        .setNegativeButton("CLOSE",null).show()
                     return@runOnUiThread
                 }
                 val tag=latest.optString("tag_name")
@@ -2949,6 +2953,34 @@ class MainActivity : Activity(), SensorEventListener {
             }.show()
     }
 
+    private fun backgroundGpsGranted():Boolean =
+        android.os.Build.VERSION.SDK_INT<29 ||
+        checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION)==PackageManager.PERMISSION_GRANTED
+
+    private fun explainBackgroundGps() {
+        if(android.os.Build.VERSION.SDK_INT<29) {
+            status.text="BACKGROUND GPS / FOREGROUND SERVICE ACTIVE"
+            return
+        }
+        if(backgroundGpsGranted()) {
+            android.app.AlertDialog.Builder(this).setTitle("TERRA / BACKGROUND GPS")
+                .setMessage("Always-allow location permission is already granted. TRACK uses a visible Android notification; STOP ends tracking.")
+                .setPositiveButton("OK",null).show()
+            return
+        }
+        android.app.AlertDialog.Builder(this).setTitle("TERRA / BACKGROUND GPS")
+            .setMessage("For tracking after closing Terra and for service recovery, enable 'Allow all the time' in Android location permissions. Tracking always shows an Android notification and can be stopped there. Android battery restrictions and Force stop may still interrupt it.")
+            .setPositiveButton("OPEN SETTINGS") {_,_->
+                if(android.os.Build.VERSION.SDK_INT==29) {
+                    requestPermissions(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION),13)
+                } else {
+                    startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:"+packageName)))
+                }
+            }
+            .setNegativeButton("LATER",null).show()
+    }
+
     private fun showDataMenu() {
         val panel=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL;setPadding(dp(12),dp(12),dp(12),dp(12));background=tacticalPanel()
@@ -2956,6 +2988,26 @@ class MainActivity : Activity(), SensorEventListener {
         panel.addView(label("▣ DATA / SOURCES & BACKUP",14,sand))
         fun option(name:String,fn:()->Unit) {panel.addView(action(name).apply {setOnClickListener {fn()}})}
         option("CHECK FOR UPDATES") {checkForUpdates()}
+        option("BACKGROUND GPS PERMISSION") {explainBackgroundGps()}
+        option("GPS DIAGNOSTICS / EXPORT CSV") {
+            android.app.AlertDialog.Builder(this).setTitle("TERRA / GPS DIAGNOSTICS")
+                .setMessage(GpsDiagnostics(this).summary()+"\n\nThe CSV includes precise locations and is saved only on your phone until you export it.")
+                .setPositiveButton("EXPORT CSV") {_,_->
+                    startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type="text/csv"
+                        putExtra(Intent.EXTRA_TITLE,"Terra-GPS-diagnostics.csv")
+                    },91)
+                }.setNegativeButton("CLOSE",null).show()
+        }
+        option("CLEAR GPS DIAGNOSTICS") {
+            android.app.AlertDialog.Builder(this).setTitle("CLEAR GPS DIAGNOSTICS?")
+                .setMessage("Delete the local GPS diagnostic history? Your discovered map is not affected.")
+                .setPositiveButton("CLEAR") {_,_->
+                    GpsDiagnostics(this).clear()
+                    status.text="GPS DIAGNOSTICS / CLEARED"
+                }.setNegativeButton("CANCEL",null).show()
+        }
         option("EXPORT BACKUP ZIP") {
             startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
@@ -2977,7 +3029,7 @@ class MainActivity : Activity(), SensorEventListener {
             startActivityForResult(intent, 81)
         }
 
-        val window=PopupWindow(panel,dp(285),dp(290),true).apply {
+        val window=PopupWindow(panel,dp(305),dp(430),true).apply {
             isOutsideTouchable=true
             setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
         }
@@ -3242,6 +3294,17 @@ class MainActivity : Activity(), SensorEventListener {
             attachmentPoint=null
             return
         }
+        if(requestCode==91) {
+            val uri=data?.data
+            if(resultCode==RESULT_OK && uri!=null) {
+                runCatching {
+                    contentResolver.openOutputStream(uri)?.use{GpsDiagnostics(this).exportTo(it)}
+                        ?: error("Cannot write diagnostics")
+                    status.text="GPS DIAGNOSTICS / CSV EXPORTED"
+                }.onFailure {status.text="GPS DIAGNOSTICS / EXPORT FAILED"}
+            }
+            return
+        }
         if(requestCode==85 || requestCode==86) {
             val uri=data?.data
             if(resultCode==RESULT_OK && uri!=null) {
@@ -3349,6 +3412,13 @@ class MainActivity : Activity(), SensorEventListener {
         expeditionBottom?.gpsSearching=true
         trackButton.text="STOP GPS"
         status.text="RECON ACTIVE / BACKGROUND ENABLED"
+        if(android.os.Build.VERSION.SDK_INT>=29 && !backgroundGpsGranted()) {
+            val prefs=getSharedPreferences("terra_tracking_state",Context.MODE_PRIVATE)
+            if(!prefs.getBoolean("background_explained",false)) {
+                prefs.edit().putBoolean("background_explained",true).apply()
+                handler.postDelayed({if(!isFinishing)explainBackgroundGps()},650L)
+            }
+        }
     }
     private fun stopTracking() {
         startService(Intent(this,TrackingService::class.java).apply {action=TrackingService.ACTION_STOP})
@@ -3384,6 +3454,8 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, grants: IntArray) {
         super.onRequestPermissionsResult(code, permissions, grants)
         if (code == 10 && grants.isNotEmpty() && grants[0] == PackageManager.PERMISSION_GRANTED) startTracking()
+        if (code == 13)status.text=if(backgroundGpsGranted())
+            "BACKGROUND GPS / PERMISSION GRANTED" else "BACKGROUND GPS / PERMISSION LIMITED"
         if (code == 11 && grants.isNotEmpty() && grants[0] == PackageManager.PERMISSION_GRANTED) voicePoint?.let {startVoice(it)}
         if(code==12) {
             val id=objectivePhotoPermissionId
@@ -3402,6 +3474,10 @@ class MainActivity : Activity(), SensorEventListener {
         scheduleTaxiStandsRefresh()
         handler.postDelayed(solarTick,60000L)
         tracking=TrackingService.running
+        if(!tracking && getSharedPreferences("terra_tracking_state",Context.MODE_PRIVATE)
+                .getBoolean("requested",false)) {
+            status.text="TRACK INTERRUPTED / TAP TRACK TO RESUME"
+        }
         expeditionBottom?.trackingActive=tracking
         expeditionBottom?.gpsSearching=tracking
         if(::trackButton.isInitialized)trackButton.text=if(tracking)"STOP GPS" else "TRACK"
