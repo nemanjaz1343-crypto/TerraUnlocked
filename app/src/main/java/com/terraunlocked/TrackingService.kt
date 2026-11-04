@@ -66,6 +66,10 @@ class TrackingService:Service(),SensorEventListener {
     private var lastFixElapsed=0L
     private var lastGapAlertElapsed=0L
     private var lastRecoveryElapsed=0L
+    private var lastGoodFixElapsed=0L
+    private var lastNoFixLogElapsed=0L
+    private var stationaryRecoveryCount=0
+    private var pendingRecoveryAt=0L
     private var recoveryPending=false
     private fun recoverGps(reason:String) {
         if(!running || recoveryPending)return
@@ -75,6 +79,7 @@ class TrackingService:Service(),SensorEventListener {
             return
         }
         recoveryPending=true
+        pendingRecoveryAt=SystemClock.elapsedRealtime()
         diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
             "EVENT","GPS_RESTART_"+reason)
         try {
@@ -101,6 +106,18 @@ class TrackingService:Service(),SensorEventListener {
             if(!running)return
             val elapsed=SystemClock.elapsedRealtime()
             val age=elapsed-lastFixElapsed
+            // Distinguish missing callbacks from callbacks that contain unusable fixes.
+            val goodAge=if(lastGoodFixElapsed>0L)elapsed-lastGoodFixElapsed else -1L
+            if(goodAge>90000L && elapsed-lastNoFixLogElapsed>=120000L) {
+                lastNoFixLogElapsed=elapsed
+                diagnostics.record(null,goodAge,0.0,0.0,fixConfidence,
+                    motionProfile,"EVENT","NO_USABLE_FIX_90S")
+            }
+            if(recoveryPending && elapsed-pendingRecoveryAt>45000L) {
+                recoveryPending=false
+                diagnostics.record(null,-1L,0.0,0.0,fixConfidence,
+                    motionProfile,"EVENT","GPS_REQUEST_TIMEOUT")
+            }
             if(lastFixElapsed>0L && age>45000L &&
                 elapsed-lastGapAlertElapsed>60000L) {
                 lastGapAlertElapsed=elapsed
@@ -109,9 +126,12 @@ class TrackingService:Service(),SensorEventListener {
                 (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
                     .notify(1801,makeNotification("GPS signal missing / "+(age/1000L)+"s"))
             }
-            if(age>=90000L && elapsed-lastRecoveryElapsed>=90000L && !recoveryPending) {
+            // Avoid repeated high-power recovery when a stationary device has
+            // no GNSS reception. Keep occasional recovery for a moving device.
+            val recoveryInterval=if(stationaryRecoveryCount>=2)300000L else 90000L
+            if(age>=90000L && elapsed-lastRecoveryElapsed>=recoveryInterval && !recoveryPending) {
                 lastRecoveryElapsed=elapsed
-                ecoMode=false
+                stationaryRecoveryCount++
                 recoverGps("WATCHDOG_90S")
             }
             heartbeatHandler.postDelayed(this,30000L)
@@ -211,6 +231,12 @@ class TrackingService:Service(),SensorEventListener {
             if(!running)return
             result.locations.forEach {loc->
                 lastFixElapsed=SystemClock.elapsedRealtime()
+                stationaryRecoveryCount=0
+                if(lastRecoveryElapsed>0L && lastFixElapsed-lastRecoveryElapsed<90000L) {
+                    diagnostics.record(loc,-1L,0.0,0.0,fixConfidence,motionProfile,
+                        "EVENT","GPS_CALLBACK_AFTER_RECOVERY")
+                    lastRecoveryElapsed=0L
+                }
                 if(!loc.hasAccuracy() || !loc.latitude.isFinite() || !loc.longitude.isFinite()) {
                     diagnostics.record(loc,-1L,0.0,0.0,0,motionProfile,
                         "REJECTED","INVALID_FIX")
@@ -265,6 +291,7 @@ class TrackingService:Service(),SensorEventListener {
                     }
                     return@forEach
                 }
+                lastGoodFixElapsed=SystemClock.elapsedRealtime()
                 val nowElapsed=android.os.SystemClock.elapsedRealtime()
                 val anchor=motionAnchor
                 if(anchor==null) {
@@ -466,6 +493,9 @@ class TrackingService:Service(),SensorEventListener {
         lastFixElapsed=SystemClock.elapsedRealtime()
         lastGapAlertElapsed=0L
         lastRecoveryElapsed=0L
+        lastGoodFixElapsed=0L
+        lastNoFixLogElapsed=0L
+        stationaryRecoveryCount=0
         recoveryPending=false
         heartbeatHandler.removeCallbacks(heartbeat)
         heartbeatHandler.postDelayed(heartbeat,30000L)
@@ -483,7 +513,7 @@ class TrackingService:Service(),SensorEventListener {
         val request=LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,5000L)
             .setMinUpdateIntervalMillis(2500L)
             .setMaxUpdateDelayMillis(10000L)
-            .setMinUpdateDistanceMeters(5f).build()
+            .setMinUpdateDistanceMeters(0f).build()
         try {
             client.requestLocationUpdates(request,callback,mainLooper)
                 .addOnFailureListener {
