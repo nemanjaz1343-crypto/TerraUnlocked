@@ -65,6 +65,37 @@ class TrackingService:Service(),SensorEventListener {
     private val heartbeatHandler=Handler(Looper.getMainLooper())
     private var lastFixElapsed=0L
     private var lastGapAlertElapsed=0L
+    private var lastRecoveryElapsed=0L
+    private var recoveryPending=false
+    private fun recoverGps(reason:String) {
+        if(!running || recoveryPending)return
+        if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED) {
+            diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
+                "EVENT","GPS_PERMISSION_MISSING")
+            return
+        }
+        recoveryPending=true
+        diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
+            "EVENT","GPS_RESTART_"+reason)
+        try {
+            val request=LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,5000L)
+                .setMinUpdateIntervalMillis(2500L).setMaxUpdateDelayMillis(10000L)
+                .setMinUpdateDistanceMeters(0f).build()
+            client.requestLocationUpdates(request,callback,mainLooper)
+                .addOnCompleteListener { task ->
+                    recoveryPending=false
+                    diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
+                        "EVENT",if(task.isSuccessful)"GPS_RESTART_OK" else "GPS_RESTART_FAILED")
+                    if(!task.isSuccessful)
+                        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                            .notify(1801,makeNotification("GPS unavailable / check location"))
+                }
+        } catch(error:Exception) {
+            recoveryPending=false
+            diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
+                "EVENT","GPS_RESTART_EXCEPTION")
+        }
+    }
     private val heartbeat=object:Runnable {
         override fun run() {
             if(!running)return
@@ -78,7 +109,12 @@ class TrackingService:Service(),SensorEventListener {
                 (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
                     .notify(1801,makeNotification("GPS signal missing / "+(age/1000L)+"s"))
             }
-            heartbeatHandler.postDelayed(this,45000L)
+            if(age>=90000L && elapsed-lastRecoveryElapsed>=90000L && !recoveryPending) {
+                lastRecoveryElapsed=elapsed
+                ecoMode=false
+                recoverGps("WATCHDOG_90S")
+            }
+            heartbeatHandler.postDelayed(this,30000L)
         }
     }
     private fun saveTrackingRequested(active:Boolean) {
@@ -429,8 +465,10 @@ class TrackingService:Service(),SensorEventListener {
         saveTrackingRequested(true)
         lastFixElapsed=SystemClock.elapsedRealtime()
         lastGapAlertElapsed=0L
+        lastRecoveryElapsed=0L
+        recoveryPending=false
         heartbeatHandler.removeCallbacks(heartbeat)
-        heartbeatHandler.postDelayed(heartbeat,45000L)
+        heartbeatHandler.postDelayed(heartbeat,30000L)
         startMotionSensors()
         sendBroadcast(Intent(ACTION_STATE).setPackage(packageName).putExtra("running",true))
         ecoMode=false
