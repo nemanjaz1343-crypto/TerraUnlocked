@@ -64,6 +64,8 @@ class TrackingService:Service(),SensorEventListener {
     private val classifier=MotionClassifier()
     private val heartbeatHandler=Handler(Looper.getMainLooper())
     private var lastFixElapsed=0L
+    private var lastCallbackElapsed=0L
+    private var lastMeasurementNanos=0L
     private var lastGapAlertElapsed=0L
     private var lastRecoveryElapsed=0L
     private var lastGoodFixElapsed=0L
@@ -106,6 +108,12 @@ class TrackingService:Service(),SensorEventListener {
             if(!running)return
             val elapsed=SystemClock.elapsedRealtime()
             val age=elapsed-lastFixElapsed
+            val callbackAge=elapsed-lastCallbackElapsed
+            // A callback containing only cached measurements is not fresh GPS.
+            if(callbackAge>90000L && elapsed-lastNoFixLogElapsed>=120000L) {
+                diagnostics.record(null,callbackAge,0.0,0.0,fixConfidence,
+                    motionProfile,"EVENT","NO_LOCATION_CALLBACK_90S")
+            }
             // Distinguish missing callbacks from callbacks that contain unusable fixes.
             val goodAge=if(lastGoodFixElapsed>0L)elapsed-lastGoodFixElapsed else -1L
             if(goodAge>90000L && elapsed-lastNoFixLogElapsed>=120000L) {
@@ -229,14 +237,9 @@ class TrackingService:Service(),SensorEventListener {
     private val callback=object:LocationCallback() {
         override fun onLocationResult(result:LocationResult) {
             if(!running)return
-            result.locations.forEach {loc->
-                lastFixElapsed=SystemClock.elapsedRealtime()
-                stationaryRecoveryCount=0
-                if(lastRecoveryElapsed>0L && lastFixElapsed-lastRecoveryElapsed<90000L) {
-                    diagnostics.record(loc,-1L,0.0,0.0,fixConfidence,motionProfile,
-                        "EVENT","GPS_CALLBACK_AFTER_RECOVERY")
-                    lastRecoveryElapsed=0L
-                }
+            lastCallbackElapsed=SystemClock.elapsedRealtime()
+            // Batched fixes must be processed in measurement order, not arrival order.
+            result.locations.sortedBy { it.elapsedRealtimeNanos }.forEach {loc->
                 if(!loc.hasAccuracy() || !loc.latitude.isFinite() || !loc.longitude.isFinite()) {
                     diagnostics.record(loc,-1L,0.0,0.0,0,motionProfile,
                         "REJECTED","INVALID_FIX")
@@ -245,10 +248,23 @@ class TrackingService:Service(),SensorEventListener {
                 // Ignore stale batched/cached positions; a delayed old fix can appear
                 // as a wild GPS jump beside skyscrapers.
                 val fixAgeMs=(android.os.SystemClock.elapsedRealtimeNanos()-loc.elapsedRealtimeNanos)/1000000L
+                if(loc.elapsedRealtimeNanos<=lastMeasurementNanos) {
+                    diagnostics.record(loc,fixAgeMs,0.0,0.0,0,motionProfile,
+                        "REJECTED","DUPLICATE_OR_OUT_OF_ORDER")
+                    return@forEach
+                }
+                lastMeasurementNanos=loc.elapsedRealtimeNanos
                 if(fixAgeMs>25000L || fixAgeMs< -5000L) {
                     diagnostics.record(loc,fixAgeMs,0.0,0.0,0,motionProfile,
                         "REJECTED","STALE_FIX")
                     return@forEach
+                }
+                lastFixElapsed=SystemClock.elapsedRealtime()
+                stationaryRecoveryCount=0
+                if(lastRecoveryElapsed>0L && lastFixElapsed-lastRecoveryElapsed<90000L) {
+                    diagnostics.record(loc,fixAgeMs,0.0,0.0,fixConfidence,motionProfile,
+                        "EVENT","FRESH_GPS_AFTER_RECOVERY")
+                    lastRecoveryElapsed=0L
                 }
                 val prev=previous
                 val seconds=if(prev!=null)(loc.elapsedRealtimeNanos-prev.elapsedRealtimeNanos)/1e9 else 0.0
@@ -491,6 +507,8 @@ class TrackingService:Service(),SensorEventListener {
         running=true
         saveTrackingRequested(true)
         lastFixElapsed=SystemClock.elapsedRealtime()
+        lastCallbackElapsed=lastFixElapsed
+        lastMeasurementNanos=0L
         lastGapAlertElapsed=0L
         lastRecoveryElapsed=0L
         lastGoodFixElapsed=0L
