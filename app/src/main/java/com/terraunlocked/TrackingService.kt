@@ -526,6 +526,8 @@ class TrackingService:Service(),SensorEventListener {
         lastSmoothed=null
         lastRecordedTimestamp=0L
         motionAnchor=null
+        classifier.reset()
+        motionProfile="WALK"
         stationarySince=0L
         lastSwitch=0L
         val request=LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,5000L)

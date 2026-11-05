@@ -1,42 +1,62 @@
 package com.terraunlocked
 
-/** Stable movement profile from recent verified speed evidence.
- * A single slow/zero GPS sample must not turn a scooter ride into WALK. */
+/** Speed-based transport estimate. Classification never authorizes map discovery.
+ * Thresholds are approximate, not Google's proprietary algorithm.
+ */
 internal class MotionClassifier {
     private val speeds=ArrayDeque<Float>()
     private var profile="WALK"
-    private var pending="WALK"
-    private var pendingCount=0
+    private var candidateSince=0L
+    private var candidateProfile="WALK"
 
     fun update(speedMetersPerSecond:Float,accuracyMeters:Float):String {
         if(!speedMetersPerSecond.isFinite() || speedMetersPerSecond<0f ||
             !accuracyMeters.isFinite() || accuracyMeters>35f)return profile
+        // Use a short median to suppress one-off GPS speed spikes.
         speeds.addLast(speedMetersPerSecond.coerceAtMost(40f))
         while(speeds.size>5)speeds.removeFirst()
         val sorted=speeds.sorted()
-        val median=sorted[sorted.size/2]
-        val candidate=when {
-            median>=7.2f -> "CAR"
-            median>=2.15f -> "SCOOTER"
-            else -> "WALK"
+        val speed=sorted[sorted.size/2]
+        // Hysteresis prevents stoplights from turning a scooter ride into WALK.
+        val next=when(profile) {
+            "CAR" -> when {
+                speed>=5.5f -> "CAR"
+                speed>=1.6f -> "SCOOTER"
+                else -> "WALK"
+            }
+            "SCOOTER" -> when {
+                speed>=9.0f -> "CAR"
+                speed>=1.25f -> "SCOOTER"
+                else -> "WALK"
+            }
+            else -> when {
+                speed>=9.0f -> "CAR"
+                speed>=2.5f -> "SCOOTER"
+                else -> "WALK"
+            }
         }
-        if(candidate==profile) {
-            pending=profile;pendingCount=0
+        if(next==profile) {
+            candidateProfile=profile
+            candidateSince=0L
             return profile
         }
-        if(candidate!=pending) {
-            pending=candidate;pendingCount=1
-        } else pendingCount++
-        val required=when {
-            candidate=="WALK" -> 4
-            candidate=="CAR" -> 3
-            else -> 2
+        val now=android.os.SystemClock.elapsedRealtime()
+        if(next!=candidateProfile) {
+            candidateProfile=next
+            candidateSince=now
         }
-        if(pendingCount>=required) {
-            profile=candidate
-            pendingCount=0
+        val delay=if(next=="WALK")25000L else 6000L
+        if(now-candidateSince>=delay) {
+            profile=next
+            candidateSince=0L
         }
         return profile
     }
     fun current():String=profile
+    fun reset() {
+        speeds.clear()
+        profile="WALK"
+        candidateProfile="WALK"
+        candidateSince=0L
+    }
 }
