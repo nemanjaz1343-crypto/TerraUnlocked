@@ -60,6 +60,6 @@ internal class MotionClassifier {
         speeds.clear()
         profile="WALK"
         candidateProfile="WALK"
-        candidateSince=0L
+        candidateCount=0
     }
 }
