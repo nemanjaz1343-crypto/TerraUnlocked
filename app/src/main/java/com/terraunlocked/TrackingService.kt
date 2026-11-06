@@ -86,7 +86,7 @@ class TrackingService:Service(),SensorEventListener {
             "EVENT","GPS_RESTART_"+reason)
         try {
             val request=LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,5000L)
-                .setMinUpdateIntervalMillis(2500L).setMaxUpdateDelayMillis(10000L)
+                .setMinUpdateIntervalMillis(2500L).setMaxUpdateDelayMillis(0L)
                 .setMinUpdateDistanceMeters(0f).build()
             client.requestLocationUpdates(request,callback,mainLooper)
                 .addOnCompleteListener { task ->
@@ -207,11 +207,11 @@ class TrackingService:Service(),SensorEventListener {
         lastSwitch=now
         val request=if(eco) {
             LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,15000L)
-                .setMinUpdateIntervalMillis(5000L).setMaxUpdateDelayMillis(15000L)
+                .setMinUpdateIntervalMillis(5000L).setMaxUpdateDelayMillis(0L)
                 .setMinUpdateDistanceMeters(0f).build()
         } else {
             LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,5000L)
-                .setMinUpdateIntervalMillis(2500L).setMaxUpdateDelayMillis(10000L)
+                .setMinUpdateIntervalMillis(2500L).setMaxUpdateDelayMillis(0L)
                 .setMinUpdateDistanceMeters(5f).build()
         }
         if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED) {
@@ -235,6 +235,11 @@ class TrackingService:Service(),SensorEventListener {
             .setOngoing(true).build()
     }
     private val callback=object:LocationCallback() {
+        override fun onLocationAvailability(availability:LocationAvailability) {
+            if(!running)return
+            diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
+                "EVENT",if(availability.isLocationAvailable)"PROVIDER_AVAILABLE" else "PROVIDER_UNAVAILABLE")
+        }
         override fun onLocationResult(result:LocationResult) {
             if(!running)return
             lastCallbackElapsed=SystemClock.elapsedRealtime()
@@ -532,7 +537,7 @@ class TrackingService:Service(),SensorEventListener {
         lastSwitch=0L
         val request=LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,5000L)
             .setMinUpdateIntervalMillis(2500L)
-            .setMaxUpdateDelayMillis(10000L)
+            .setMaxUpdateDelayMillis(0L)
             .setMinUpdateDistanceMeters(0f).build()
         try {
             client.requestLocationUpdates(request,callback,mainLooper)
