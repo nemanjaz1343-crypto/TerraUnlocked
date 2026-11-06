@@ -6,7 +6,7 @@ package com.terraunlocked
 internal class MotionClassifier {
     private val speeds=ArrayDeque<Float>()
     private var profile="WALK"
-    private var candidateSince=0L
+    private var candidateCount=0
     private var candidateProfile="WALK"
 
     fun update(speedMetersPerSecond:Float,accuracyMeters:Float):String {
@@ -37,18 +37,21 @@ internal class MotionClassifier {
         }
         if(next==profile) {
             candidateProfile=profile
-            candidateSince=0L
+            candidateCount=0
             return profile
         }
-        val now=android.os.SystemClock.elapsedRealtime()
         if(next!=candidateProfile) {
             candidateProfile=next
-            candidateSince=now
+            candidateCount=1
+        } else candidateCount++
+        val required=when(next) {
+            "WALK" -> 5
+            "CAR" -> 3
+            else -> 2
         }
-        val delay=if(next=="WALK")25000L else 6000L
-        if(now-candidateSince>=delay) {
+        if(candidateCount>=required) {
             profile=next
-            candidateSince=0L
+            candidateCount=0
         }
         return profile
     }
