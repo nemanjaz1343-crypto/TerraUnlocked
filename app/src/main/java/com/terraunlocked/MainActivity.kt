@@ -911,7 +911,19 @@ class MainActivity : Activity(), SensorEventListener {
         })
         map.overlays.add(object : Overlay() {
             private var strokeLast: GeoPoint? = null
+            private var multitouchGesture = false
             override fun onTouchEvent(event: MotionEvent, mapView: MapView): Boolean {
+                if(mode=="PAINT" || mode=="ERASE") {
+                    if(event.actionMasked==MotionEvent.ACTION_POINTER_DOWN || event.pointerCount>1) {
+                        multitouchGesture=true
+                        strokeLast=null
+                        return false // Let osmdroid handle two-finger pan and pinch zoom.
+                    }
+                    if(multitouchGesture) {
+                        if(event.actionMasked==MotionEvent.ACTION_UP || event.actionMasked==MotionEvent.ACTION_CANCEL)multitouchGesture=false
+                        return false // Do not resume painting mid-gesture.
+                    }
+                } else multitouchGesture=false
                 if(mode=="VIEW")return false
                 if(mode=="LASSO") {
                     if(event.pointerCount>1)return true
@@ -982,7 +994,7 @@ class MainActivity : Activity(), SensorEventListener {
                 }
                 if (mode == "ERASE") {
                     val before = records.size + segments.size
-                    records.removeAll { it.manual && gap(GeoPoint(it.latitude, it.longitude), geo) < radius * 1.5f }
+                    records.removeAll { gap(GeoPoint(it.latitude, it.longitude), geo) < radius * 1.5f }
                     segments.removeAll {
                         gap(GeoPoint(it.aLat, it.aLon), geo) < radius * 1.5f ||
                         gap(GeoPoint(it.bLat, it.bLon), geo) < radius * 1.5f
@@ -1449,7 +1461,7 @@ class MainActivity : Activity(), SensorEventListener {
         eraseButton.setOnClickListener {
             if(mode!="ERASE"){
                 mode="ERASE";palette.visibility=View.GONE
-                controls.selected=3;status.text="ERASE / REMOVE MANUAL PAINT"
+                controls.selected=3;status.text="ERASE / REMOVE DISCOVERED AREA"
             }else{
                 mode="VIEW";controls.selected=-1;status.text="MAP READY"
             }
