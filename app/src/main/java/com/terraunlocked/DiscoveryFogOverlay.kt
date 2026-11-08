@@ -135,7 +135,9 @@ class DiscoveryFogOverlay(
         val pixels=IntArray(mw*mh)
         bitmap.getPixels(pixels,0,mw,0,0,mw,mh)
         val horizontal=IntArray(mw*mh)
-        val blurRadius=7
+        // Scale the liquid bridge with the map's physical radius, not fixed pixels.
+        val blurRadius=(radiusPx(map,center.latitude,center.longitude)*0.65f/4f)
+            .toInt().coerceIn(4,24)
         for(y in 0 until mh)for(x in 0 until mw) {
             var sum=0;var n=0
             for(dx in -blurRadius..blurRadius) {

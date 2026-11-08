@@ -758,7 +758,7 @@ class MainActivity : Activity(), SensorEventListener {
         })
         root.addView(statusRow,LinearLayout.LayoutParams(-1,dp(23)))
         map = MapView(this).apply {
-            setTileSource(TileSourceFactory.MAPNIK)
+            setTileSource(internationalMapSource)
             setMultiTouchControls(true)
             setBuiltInZoomControls(false)
             controller.setZoom(16.0)
@@ -2672,6 +2672,14 @@ class MainActivity : Activity(), SensorEventListener {
                 }
             }.setNegativeButton("CANCEL",null).show()
     }
+    // International-style raster map; label language still depends on provider data.
+    private val internationalMapSource by lazy {
+        XYTileSource("CARTO Voyager", 0, 20, 256, ".png",
+            arrayOf("https://a.basemaps.cartocdn.com/rastertiles/voyager/",
+                    "https://b.basemaps.cartocdn.com/rastertiles/voyager/",
+                    "https://c.basemaps.cartocdn.com/rastertiles/voyager/"),
+            "© OpenStreetMap contributors · © CARTO")
+    }
     private val scooterMapSource by lazy {
         XYTileSource("CyclOSM", 0, 20, 256, ".png",
             arrayOf("https://a.tile-cyclosm.openstreetmap.fr/cyclosm/",
@@ -2773,7 +2781,7 @@ class MainActivity : Activity(), SensorEventListener {
         }.start()
     }
     private fun chooseMapSource() {
-        val names=arrayOf("OpenStreetMap","OpenTopoMap","CyclOSM · BIKE / SCOOTER")
+        val names=arrayOf("International / Voyager","OpenTopoMap","CyclOSM · BIKE / SCOOTER","OpenStreetMap")
         val prefs=getSharedPreferences("terra_map_source",Context.MODE_PRIVATE)
         android.app.AlertDialog.Builder(this).setTitle("MAP SOURCE")
             .setSingleChoiceItems(names,prefs.getInt("selected",0)) {dialog,i->
@@ -2787,7 +2795,8 @@ class MainActivity : Activity(), SensorEventListener {
         map.setTileSource(when(index) {
             1 -> TileSourceFactory.OpenTopo
             2 -> scooterMapSource
-            else -> TileSourceFactory.MAPNIK
+            3 -> TileSourceFactory.MAPNIK
+            else -> internationalMapSource
         })
         map.invalidate()
     }
