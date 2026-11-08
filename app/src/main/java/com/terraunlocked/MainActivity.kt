@@ -602,7 +602,7 @@ class MainActivity : Activity(), SensorEventListener {
     private var lastSavedLocation:android.location.Location?=null
     private var simulating = false
     private var fogEnabled = true
-    private var radius = 20
+    private var radius = 40
     private var last: DiscoveryPoint? = null
     private var lastPaintTime = 0L
     private val handler = Handler(Looper.getMainLooper())

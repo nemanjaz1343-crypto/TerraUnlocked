@@ -18,7 +18,7 @@ class DiscoveryFogOverlay(
     private val demo: () -> List<DiscoveryPoint>,
     private val segments: () -> List<ManualSegment>,
     private val notes: () -> List<FieldNote>,
-    var radiusMeters: Double = 20.0
+    var radiusMeters: Double = 40.0
 ) : Overlay() {
     var fogVisible = true
     var opacity = 205
@@ -133,7 +133,7 @@ class DiscoveryFogOverlay(
         val pixels=IntArray(mw*mh)
         bitmap.getPixels(pixels,0,mw,0,0,mw,mh)
         val horizontal=IntArray(mw*mh)
-        val blurRadius=2
+        val blurRadius=3
         for(y in 0 until mh)for(x in 0 until mw) {
             var sum=0;var n=0
             for(dx in -blurRadius..blurRadius) {
@@ -148,7 +148,8 @@ class DiscoveryFogOverlay(
                 val yy=y+dy
                 if(yy in 0 until mh){sum+=horizontal[yy*mw+x];n++}
             }
-            val alpha=(sum/n).coerceIn(0,255)
+            // Stronger liquid merge at nearby edges; preserve a bounded feather.
+            val alpha=((sum/n)*1.5f).toInt().coerceIn(0,255)
             pixels[y*mw+x]=if(alpha<8)0 else (alpha shl 24) or 0x00FFFFFF
         }
         bitmap.setPixels(pixels,0,mw,0,0,mw,mh)
