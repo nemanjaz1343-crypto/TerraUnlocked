@@ -79,6 +79,10 @@ class DiscoveryFogOverlay(
     private var cachedOriginPixel:Point?=null
     private var cachedShiftX=0f
     private var cachedShiftY=0f
+    private var cachedZoom=Double.NaN
+    private var cachedScale=1f
+    private var lastZoomChange=0L
+    private var observedZoom=Double.NaN
     private val maskPaint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
         xfermode=android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT)
     }
@@ -91,24 +95,37 @@ class DiscoveryFogOverlay(
         val center=map.mapCenter
         val last=points.lastOrNull()
         val end=manualSegments.lastOrNull()
-        val key="$mw:$mh:${map.zoomLevelDouble}:${map.mapOrientation}:"+
+        val key="$mw:$mh:${map.mapOrientation}:"+
             "${points.size}:${last?.latitude}:${last?.longitude}:${last?.timestamp}:"+
             "${manualSegments.size}:${end?.aLat}:${end?.bLon}:$radiusMeters"
+        val now=android.os.SystemClock.uptimeMillis()
+        val zoom=map.zoomLevelDouble
+        if(zoom!=observedZoom) {
+            observedZoom=zoom
+            lastZoomChange=now
+        }
         organicMask?.let {cached->
             val origin=cachedOrigin
             val anchor=cachedOriginPixel
             if(key==maskKey && !cached.isRecycled && origin!=null && anchor!=null) {
                 val projected=map.projection.toPixels(origin,Point())
-                val dx=(projected.x-anchor.x).toFloat()
-                val dy=(projected.y-anchor.y).toFloat()
-                // Shift the cached fog layer for small pans; regenerate beyond the margin.
-                if(kotlin.math.abs(dx)<=pad*0.55f && kotlin.math.abs(dy)<=pad*0.55f) {
-                    cachedShiftX=dx;cachedShiftY=dy
+                val scale=Math.pow(2.0,zoom-cachedZoom).toFloat()
+                // Reuse the existing GPU-composited bitmap while pinch zoom is active.
+                // Rebuild only after zoom settles; avoid frame-by-frame CPU blurring.
+                val stillZooming=now-lastZoomChange<280L
+                val dx=projected.x-anchor.x*scale
+                val dy=projected.y-anchor.y*scale
+                if(stillZooming || (kotlin.math.abs(scale-1f)<0.001f &&
+                    kotlin.math.abs(dx)<pad*0.5f && kotlin.math.abs(dy)<pad*0.5f)) {
+                    cachedScale=scale
+                    cachedShiftX=dx
+                    cachedShiftY=dy
+                    if(stillZooming)map.postInvalidateDelayed(300L)
                     return cached
                 }
             }
         }
-        cachedShiftX=0f;cachedShiftY=0f
+        cachedShiftX=0f;cachedShiftY=0f;cachedScale=1f
         val bitmap=android.graphics.Bitmap.createBitmap(mw,mh,android.graphics.Bitmap.Config.ARGB_8888)
         val maskCanvas=Canvas(bitmap)
         val ink=Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -204,7 +221,7 @@ class DiscoveryFogOverlay(
         }
         bitmap.setPixels(pixels,0,mw,0,0,mw,mh)
         // Do not recycle the previous frame while the renderer may still reference it.
-        organicMask=bitmap;maskKey=key
+        organicMask=bitmap;maskKey=key;cachedZoom=zoom
         cachedOrigin=GeoPoint(center.latitude,center.longitude)
         cachedOriginPixel=map.projection.toPixels(cachedOrigin,Point())
         return bitmap
@@ -221,8 +238,9 @@ class DiscoveryFogOverlay(
             fogPaint.alpha=opacity.coerceIn(0,255)
             canvas.drawRect(0f,0f,canvas.width.toFloat(),canvas.height.toFloat(),fogPaint)
             canvas.drawBitmap(blended,null,
-                android.graphics.RectF(cachedShiftX-160f,cachedShiftY-160f,
-                    canvas.width.toFloat()+cachedShiftX+160f,canvas.height.toFloat()+cachedShiftY+160f),maskPaint)
+                android.graphics.RectF(cachedShiftX-160f*cachedScale,cachedShiftY-160f*cachedScale,
+                    cachedShiftX+(canvas.width+160f)*cachedScale,
+                    cachedShiftY+(canvas.height+160f)*cachedScale),maskPaint)
             canvas.restoreToCount(layer)
         }
         // Gentle expanding liquid edge, rendered above the revealed map.
