@@ -127,7 +127,7 @@ class DiscoveryFogOverlay(
             if(i>0 && canJoin(points,i)) {
                 val prev=points[i-1];val ab=pt(prev.latitude,prev.longitude)
                 ink.style=Paint.Style.STROKE;ink.strokeWidth=rr*2f
-                maskCanvas.drawLine((ab.x+pad)/4f,(ab.y+pad)/4f,xy.x/4f,xy.y/4f,ink)
+                maskCanvas.drawLine((ab.x+pad)/4f,(ab.y+pad)/4f,(xy.x+pad)/4f,(xy.y+pad)/4f,ink)
             }
         }
         // World-space metaball bridges between nearby visited discs.
