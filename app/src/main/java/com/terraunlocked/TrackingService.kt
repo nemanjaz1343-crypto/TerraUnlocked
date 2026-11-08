@@ -38,7 +38,10 @@ class TrackingService:Service(),SensorEventListener {
         accelerationEnergy=accelerationEnergy*.82+magnitude*.18
         val now=android.os.SystemClock.elapsedRealtime()
         lastSensorElapsed=now
-        if(accelerationEnergy>.48)lastMotionElapsed=now
+        if(accelerationEnergy>.48) {
+            lastMotionElapsed=now
+            lastActiveMovementElapsed=now
+        }
     }
     override fun onAccuracyChanged(sensor:Sensor?,accuracy:Int){}
     private fun startMotionSensors() {
@@ -71,6 +74,9 @@ class TrackingService:Service(),SensorEventListener {
     private var lastGoodFixElapsed=0L
     private var lastNoFixLogElapsed=0L
     private var stationaryRecoveryCount=0
+    private var lastActiveMovementElapsed=0L
+    private var lastProviderStatusElapsed=0L
+    private var lastProviderAvailable:Boolean?=null
     private var pendingRecoveryAt=0L
     private var recoveryPending=false
     private fun recoverGps(reason:String) {
@@ -134,13 +140,18 @@ class TrackingService:Service(),SensorEventListener {
                 (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
                     .notify(1801,makeNotification("GPS signal missing / "+(age/1000L)+"s"))
             }
-            // Avoid repeated high-power recovery when a stationary device has
-            // no GNSS reception. Keep occasional recovery for a moving device.
-            val recoveryInterval=if(stationaryRecoveryCount>=2)300000L else 90000L
+            // Back off during long stationary periods, but recover promptly on movement.
+            val movingRecently=elapsed-lastActiveMovementElapsed<90000L
+            val stationaryLong=elapsed-lastActiveMovementElapsed>180000L
+            val recoveryInterval=when {
+                stationaryLong -> 900000L
+                movingRecently -> 90000L
+                else -> 300000L
+            }
             if(age>=90000L && elapsed-lastRecoveryElapsed>=recoveryInterval && !recoveryPending) {
                 lastRecoveryElapsed=elapsed
                 stationaryRecoveryCount++
-                recoverGps("WATCHDOG_90S")
+                recoverGps(if(movingRecently)"MOVEMENT" else "WATCHDOG")
             }
             heartbeatHandler.postDelayed(this,30000L)
         }
@@ -237,8 +248,14 @@ class TrackingService:Service(),SensorEventListener {
     private val callback=object:LocationCallback() {
         override fun onLocationAvailability(availability:LocationAvailability) {
             if(!running)return
-            diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
-                "EVENT",if(availability.isLocationAvailable)"PROVIDER_AVAILABLE" else "PROVIDER_UNAVAILABLE")
+            val now=SystemClock.elapsedRealtime()
+            val available=availability.isLocationAvailable
+            if(lastProviderAvailable!=available && now-lastProviderStatusElapsed>=30000L) {
+                lastProviderAvailable=available
+                lastProviderStatusElapsed=now
+                diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
+                    "EVENT",if(available)"PROVIDER_AVAILABLE" else "PROVIDER_UNAVAILABLE")
+            }
         }
         override fun onLocationResult(result:LocationResult) {
             if(!running)return
@@ -266,6 +283,7 @@ class TrackingService:Service(),SensorEventListener {
                 }
                 lastFixElapsed=SystemClock.elapsedRealtime()
                 stationaryRecoveryCount=0
+                if(loc.hasSpeed() && loc.speed>=0.85f)lastActiveMovementElapsed=lastFixElapsed
                 if(lastRecoveryElapsed>0L && lastFixElapsed-lastRecoveryElapsed<90000L) {
                     diagnostics.record(loc,fixAgeMs,0.0,0.0,fixConfidence,motionProfile,
                         "EVENT","FRESH_GPS_AFTER_RECOVERY")
@@ -519,6 +537,9 @@ class TrackingService:Service(),SensorEventListener {
         lastGoodFixElapsed=0L
         lastNoFixLogElapsed=0L
         stationaryRecoveryCount=0
+        lastActiveMovementElapsed=SystemClock.elapsedRealtime()
+        lastProviderStatusElapsed=0L
+        lastProviderAvailable=null
         recoveryPending=false
         heartbeatHandler.removeCallbacks(heartbeat)
         heartbeatHandler.postDelayed(heartbeat,30000L)
