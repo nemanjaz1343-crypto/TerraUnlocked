@@ -90,8 +90,8 @@ class DiscoveryFogOverlay(
         points:List<DiscoveryPoint>,manualSegments:List<ManualSegment>):android.graphics.Bitmap {
         // Overscan prevents blur kernels and liquid bridges being clipped by screen edges.
         val pad=160
-        val mw=((width+2*pad)/4).coerceAtLeast(1)
-        val mh=((height+2*pad)/4).coerceAtLeast(1)
+        val mw=((width+2*pad)/6).coerceAtLeast(1)
+        val mh=((height+2*pad)/6).coerceAtLeast(1)
         val center=map.mapCenter
         val last=points.lastOrNull()
         val end=manualSegments.lastOrNull()
@@ -112,7 +112,7 @@ class DiscoveryFogOverlay(
                 val scale=Math.pow(2.0,zoom-cachedZoom).toFloat()
                 // Reuse the existing GPU-composited bitmap while pinch zoom is active.
                 // Rebuild only after zoom settles; avoid frame-by-frame CPU blurring.
-                val stillZooming=now-lastZoomChange<280L
+                val stillZooming=now-lastZoomChange<90L
                 val dx=projected.x-anchor.x*scale
                 val dy=projected.y-anchor.y*scale
                 if(stillZooming || (kotlin.math.abs(scale-1f)<0.001f &&
@@ -120,7 +120,7 @@ class DiscoveryFogOverlay(
                     cachedScale=scale
                     cachedShiftX=dx
                     cachedShiftY=dy
-                    if(stillZooming)map.postInvalidateDelayed(300L)
+                    if(stillZooming)map.postInvalidateDelayed(100L)
                     return cached
                 }
             }
@@ -134,17 +134,17 @@ class DiscoveryFogOverlay(
         }
         fun pt(lat:Double,lon:Double):android.graphics.Point =
             map.projection.toPixels(GeoPoint(lat,lon),android.graphics.Point())
-        fun r(lat:Double,lon:Double)=radiusPx(map,lat,lon)/4f
+        fun r(lat:Double,lon:Double)=radiusPx(map,lat,lon)/6f
         for(i in points.indices) {
             val p=points[i]
             val xy=pt(p.latitude,p.longitude)
             val rr=r(p.latitude,p.longitude).coerceAtLeast(.5f)
             ink.style=Paint.Style.FILL
-            maskCanvas.drawCircle((xy.x+pad)/4f,(xy.y+pad)/4f,rr,ink)
+            maskCanvas.drawCircle((xy.x+pad)/6f,(xy.y+pad)/6f,rr,ink)
             if(i>0 && canJoin(points,i)) {
                 val prev=points[i-1];val ab=pt(prev.latitude,prev.longitude)
                 ink.style=Paint.Style.STROKE;ink.strokeWidth=rr*2f
-                maskCanvas.drawLine((ab.x+pad)/4f,(ab.y+pad)/4f,(xy.x+pad)/4f,(xy.y+pad)/4f,ink)
+                maskCanvas.drawLine((ab.x+pad)/6f,(ab.y+pad)/6f,(xy.x+pad)/6f,(xy.y+pad)/6f,ink)
             }
         }
         // World-space metaball bridges between nearby visited discs.
@@ -158,13 +158,13 @@ class DiscoveryFogOverlay(
             strokeCap=Paint.Cap.ROUND
             strokeJoin=Paint.Join.ROUND
         }
-        val cellSize=(radiusPx(map,center.latitude,center.longitude)/4f*2.7f)
+        val cellSize=(radiusPx(map,center.latitude,center.longitude)/6f*2.7f)
             .coerceAtLeast(4f)
         val buckets=HashMap<Pair<Int,Int>,MutableList<Int>>()
         for(i in points.indices) {
             val pa=projected[i]
-            val cx=kotlin.math.floor(pa.x/4f/cellSize).toInt()
-            val cy=kotlin.math.floor(pa.y/4f/cellSize).toInt()
+            val cx=kotlin.math.floor(pa.x/6f/cellSize).toInt()
+            val cy=kotlin.math.floor(pa.y/6f/cellSize).toInt()
             val p=points[i]
             val r1=r(p.latitude,p.longitude)
             for(gx in cx-1..cx+1)for(gy in cy-1..cy+1) {
@@ -172,11 +172,11 @@ class DiscoveryFogOverlay(
                     val q=points[j]
                     val pb=projected[j]
                     val r2=r(q.latitude,q.longitude)
-                    val d=kotlin.math.hypot((pa.x-pb.x)/4f,(pa.y-pb.y)/4f)
+                    val d=kotlin.math.hypot((pa.x-pb.x)/6f,(pa.y-pb.y)/6f)
                     val rr=kotlin.math.min(r1,r2)
                     if(d>r1+r2 && d<=r1+r2+rr*0.65f) {
                         bridgePaint.strokeWidth=rr*1.65f
-                        maskCanvas.drawLine((pa.x+pad)/4f,(pa.y+pad)/4f,(pb.x+pad)/4f,(pb.y+pad)/4f,bridgePaint)
+                        maskCanvas.drawLine((pa.x+pad)/6f,(pa.y+pad)/6f,(pb.x+pad)/6f,(pb.y+pad)/6f,bridgePaint)
                     }
                 }
             }
@@ -186,10 +186,10 @@ class DiscoveryFogOverlay(
             val a=pt(seg.aLat,seg.aLon);val b=pt(seg.bLat,seg.bLon)
             ink.style=Paint.Style.STROKE
             ink.strokeWidth=r(seg.aLat,seg.aLon).coerceAtLeast(.5f)*2f
-            maskCanvas.drawLine((a.x+pad)/4f,(a.y+pad)/4f,(b.x+pad)/4f,(b.y+pad)/4f,ink)
+            maskCanvas.drawLine((a.x+pad)/6f,(a.y+pad)/6f,(b.x+pad)/6f,(b.y+pad)/6f,ink)
             ink.style=Paint.Style.FILL
-            maskCanvas.drawCircle((a.x+pad)/4f,(a.y+pad)/4f,ink.strokeWidth/2f,ink)
-            maskCanvas.drawCircle((b.x+pad)/4f,(b.y+pad)/4f,ink.strokeWidth/2f,ink)
+            maskCanvas.drawCircle((a.x+pad)/6f,(a.y+pad)/6f,ink.strokeWidth/2f,ink)
+            maskCanvas.drawCircle((b.x+pad)/6f,(b.y+pad)/6f,ink.strokeWidth/2f,ink)
         }
         // Metaball-like liquid mask: blur the union, then threshold to make
         // neighboring circles form thick, rounded necks instead of faint halos.
@@ -197,8 +197,8 @@ class DiscoveryFogOverlay(
         bitmap.getPixels(pixels,0,mw,0,0,mw,mh)
         val horizontal=IntArray(mw*mh)
         // Scale the liquid bridge with the map's physical radius, not fixed pixels.
-        val blurRadius=(radiusPx(map,center.latitude,center.longitude)*0.65f/4f)
-            .toInt().coerceIn(4,24)
+        val blurRadius=(radiusPx(map,center.latitude,center.longitude)*0.65f/6f)
+            .toInt().coerceIn(3,16)
         for(y in 0 until mh)for(x in 0 until mw) {
             var sum=0;var n=0
             for(dx in -blurRadius..blurRadius) {
