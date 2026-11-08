@@ -84,8 +84,10 @@ class DiscoveryFogOverlay(
     }
     private fun organicMaskFor(map:MapView,width:Int,height:Int,
         points:List<DiscoveryPoint>,manualSegments:List<ManualSegment>):android.graphics.Bitmap {
-        val mw=(width/4).coerceAtLeast(1)
-        val mh=(height/4).coerceAtLeast(1)
+        // Overscan prevents blur kernels and liquid bridges being clipped by screen edges.
+        val pad=160
+        val mw=((width+2*pad)/4).coerceAtLeast(1)
+        val mh=((height+2*pad)/4).coerceAtLeast(1)
         val center=map.mapCenter
         val last=points.lastOrNull()
         val end=manualSegments.lastOrNull()
@@ -100,7 +102,7 @@ class DiscoveryFogOverlay(
                 val dx=(projected.x-anchor.x).toFloat()
                 val dy=(projected.y-anchor.y).toFloat()
                 // Shift the cached fog layer for small pans; regenerate beyond the margin.
-                if(kotlin.math.abs(dx)<=20f && kotlin.math.abs(dy)<=20f) {
+                if(kotlin.math.abs(dx)<=pad*0.55f && kotlin.math.abs(dy)<=pad*0.55f) {
                     cachedShiftX=dx;cachedShiftY=dy
                     return cached
                 }
@@ -121,11 +123,11 @@ class DiscoveryFogOverlay(
             val xy=pt(p.latitude,p.longitude)
             val rr=r(p.latitude,p.longitude).coerceAtLeast(.5f)
             ink.style=Paint.Style.FILL
-            maskCanvas.drawCircle(xy.x/4f,xy.y/4f,rr,ink)
+            maskCanvas.drawCircle((xy.x+pad)/4f,(xy.y+pad)/4f,rr,ink)
             if(i>0 && canJoin(points,i)) {
                 val prev=points[i-1];val ab=pt(prev.latitude,prev.longitude)
                 ink.style=Paint.Style.STROKE;ink.strokeWidth=rr*2f
-                maskCanvas.drawLine(ab.x/4f,ab.y/4f,xy.x/4f,xy.y/4f,ink)
+                maskCanvas.drawLine((ab.x+pad)/4f,(ab.y+pad)/4f,xy.x/4f,xy.y/4f,ink)
             }
         }
         // World-space metaball bridges between nearby visited discs.
@@ -157,7 +159,7 @@ class DiscoveryFogOverlay(
                     val rr=kotlin.math.min(r1,r2)
                     if(d>r1+r2 && d<=r1+r2+rr*0.65f) {
                         bridgePaint.strokeWidth=rr*1.65f
-                        maskCanvas.drawLine(pa.x/4f,pa.y/4f,pb.x/4f,pb.y/4f,bridgePaint)
+                        maskCanvas.drawLine((pa.x+pad)/4f,(pa.y+pad)/4f,(pb.x+pad)/4f,(pb.y+pad)/4f,bridgePaint)
                     }
                 }
             }
@@ -167,10 +169,10 @@ class DiscoveryFogOverlay(
             val a=pt(seg.aLat,seg.aLon);val b=pt(seg.bLat,seg.bLon)
             ink.style=Paint.Style.STROKE
             ink.strokeWidth=r(seg.aLat,seg.aLon).coerceAtLeast(.5f)*2f
-            maskCanvas.drawLine(a.x/4f,a.y/4f,b.x/4f,b.y/4f,ink)
+            maskCanvas.drawLine((a.x+pad)/4f,(a.y+pad)/4f,(b.x+pad)/4f,(b.y+pad)/4f,ink)
             ink.style=Paint.Style.FILL
-            maskCanvas.drawCircle(a.x/4f,a.y/4f,ink.strokeWidth/2f,ink)
-            maskCanvas.drawCircle(b.x/4f,b.y/4f,ink.strokeWidth/2f,ink)
+            maskCanvas.drawCircle((a.x+pad)/4f,(a.y+pad)/4f,ink.strokeWidth/2f,ink)
+            maskCanvas.drawCircle((b.x+pad)/4f,(b.y+pad)/4f,ink.strokeWidth/2f,ink)
         }
         // Metaball-like liquid mask: blur the union, then threshold to make
         // neighboring circles form thick, rounded necks instead of faint halos.
@@ -201,7 +203,7 @@ class DiscoveryFogOverlay(
             pixels[y*mw+x]=if(alpha<10)0 else (alpha shl 24) or 0x00FFFFFF
         }
         bitmap.setPixels(pixels,0,mw,0,0,mw,mh)
-        organicMask?.recycle()
+        // Do not recycle the previous frame while the renderer may still reference it.
         organicMask=bitmap;maskKey=key
         cachedOrigin=GeoPoint(center.latitude,center.longitude)
         cachedOriginPixel=map.projection.toPixels(cachedOrigin,Point())
@@ -219,8 +221,8 @@ class DiscoveryFogOverlay(
             fogPaint.alpha=opacity.coerceIn(0,255)
             canvas.drawRect(0f,0f,canvas.width.toFloat(),canvas.height.toFloat(),fogPaint)
             canvas.drawBitmap(blended,null,
-                android.graphics.RectF(cachedShiftX,cachedShiftY,
-                    canvas.width.toFloat()+cachedShiftX,canvas.height.toFloat()+cachedShiftY),maskPaint)
+                android.graphics.RectF(cachedShiftX-160f,cachedShiftY-160f,
+                    canvas.width.toFloat()+cachedShiftX+160f,canvas.height.toFloat()+cachedShiftY+160f),maskPaint)
             canvas.restoreToCount(layer)
         }
         // Gentle expanding liquid edge, rendered above the revealed map.
