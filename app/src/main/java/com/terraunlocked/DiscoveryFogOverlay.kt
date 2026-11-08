@@ -139,24 +139,29 @@ class DiscoveryFogOverlay(
             strokeCap=Paint.Cap.ROUND
             strokeJoin=Paint.Join.ROUND
         }
+        val cellSize=(radiusPx(map,center.latitude,center.longitude)/4f*2.7f)
+            .coerceAtLeast(4f)
+        val buckets=HashMap<Pair<Int,Int>,MutableList<Int>>()
         for(i in points.indices) {
-            val p=points[i]
             val pa=projected[i]
+            val cx=kotlin.math.floor(pa.x/4f/cellSize).toInt()
+            val cy=kotlin.math.floor(pa.y/4f/cellSize).toInt()
+            val p=points[i]
             val r1=r(p.latitude,p.longitude)
-            for(j in i+1 until points.size) {
-                val q=points[j]
-                val pb=projected[j]
-                val r2=r(q.latitude,q.longitude)
-                val dx=(pa.x-pb.x)/4f
-                val dy=(pa.y-pb.y)/4f
-                val d=kotlin.math.hypot(dx,dy)
-                val rr=kotlin.math.min(r1,r2)
-                // Bridge gaps up to ~0.65 radius beyond two discovered discs.
-                if(d>r1+r2 && d<=r1+r2+rr*0.65f) {
-                    bridgePaint.strokeWidth=rr*1.65f
-                    maskCanvas.drawLine(pa.x/4f,pa.y/4f,pb.x/4f,pb.y/4f,bridgePaint)
+            for(gx in cx-1..cx+1)for(gy in cy-1..cy+1) {
+                for(j in buckets[Pair(gx,gy)].orEmpty()) {
+                    val q=points[j]
+                    val pb=projected[j]
+                    val r2=r(q.latitude,q.longitude)
+                    val d=kotlin.math.hypot((pa.x-pb.x)/4f,(pa.y-pb.y)/4f)
+                    val rr=kotlin.math.min(r1,r2)
+                    if(d>r1+r2 && d<=r1+r2+rr*0.65f) {
+                        bridgePaint.strokeWidth=rr*1.65f
+                        maskCanvas.drawLine(pa.x/4f,pa.y/4f,pb.x/4f,pb.y/4f,bridgePaint)
+                    }
                 }
             }
+            buckets.getOrPut(Pair(cx,cy)){mutableListOf()}.add(i)
         }
         for(seg in manualSegments) {
             val a=pt(seg.aLat,seg.aLon);val b=pt(seg.bLat,seg.bLon)
