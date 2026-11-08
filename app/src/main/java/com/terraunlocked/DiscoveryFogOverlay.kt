@@ -128,6 +128,36 @@ class DiscoveryFogOverlay(
                 maskCanvas.drawLine(ab.x/4f,ab.y/4f,xy.x/4f,xy.y/4f,ink)
             }
         }
+        // World-space metaball bridges between nearby visited discs.
+        // Only join short gaps; never connect distant GPS jumps.
+        // The distance is measured in screen space using the same map projection,
+        // so bridge geometry remains consistent while zooming.
+        val projected=points.map { p -> pt(p.latitude,p.longitude) }
+        val bridgePaint=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color=Color.WHITE
+            style=Paint.Style.STROKE
+            strokeCap=Paint.Cap.ROUND
+            strokeJoin=Paint.Join.ROUND
+        }
+        for(i in points.indices) {
+            val p=points[i]
+            val pa=projected[i]
+            val r1=r(p.latitude,p.longitude)
+            for(j in i+1 until points.size) {
+                val q=points[j]
+                val pb=projected[j]
+                val r2=r(q.latitude,q.longitude)
+                val dx=(pa.x-pb.x)/4f
+                val dy=(pa.y-pb.y)/4f
+                val d=kotlin.math.hypot(dx,dy)
+                val rr=kotlin.math.min(r1,r2)
+                // Bridge gaps up to ~0.65 radius beyond two discovered discs.
+                if(d>r1+r2 && d<=r1+r2+rr*0.65f) {
+                    bridgePaint.strokeWidth=rr*1.65f
+                    maskCanvas.drawLine(pa.x/4f,pa.y/4f,pb.x/4f,pb.y/4f,bridgePaint)
+                }
+            }
+        }
         for(seg in manualSegments) {
             val a=pt(seg.aLat,seg.aLon);val b=pt(seg.bLat,seg.bLon)
             ink.style=Paint.Style.STROKE
