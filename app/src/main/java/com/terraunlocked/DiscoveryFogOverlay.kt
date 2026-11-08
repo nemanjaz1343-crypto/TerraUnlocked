@@ -20,6 +20,13 @@ class DiscoveryFogOverlay(
     private val notes: () -> List<FieldNote>,
     var radiusMeters: Double = 40.0
 ) : Overlay() {
+    private data class RevealPulse(val lat:Double,val lon:Double,val start:Long)
+    private val pulses=ArrayDeque<RevealPulse>()
+    fun pulseReveal(lat:Double,lon:Double) {
+        val now=android.os.SystemClock.uptimeMillis()
+        pulses.addLast(RevealPulse(lat,lon,now))
+        while(pulses.size>6)pulses.removeFirst()
+    }
     var fogVisible = true
     var opacity = 205
     var showRoute = false
@@ -181,6 +188,21 @@ class DiscoveryFogOverlay(
                     canvas.width.toFloat()+cachedShiftX,canvas.height.toFloat()+cachedShiftY),maskPaint)
             canvas.restoreToCount(layer)
         }
+        // Gentle expanding liquid edge, rendered above the revealed map.
+        val now=android.os.SystemClock.uptimeMillis()
+        while(pulses.isNotEmpty() && now-pulses.first().start>1100L)pulses.removeFirst()
+        val pulsePaint=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style=Paint.Style.STROKE;strokeWidth=3f
+        }
+        for(pulse in pulses) {
+            val progress=((now-pulse.start)/1100f).coerceIn(0f,1f)
+            val xy=toPoint(mapView,pulse.lat,pulse.lon)
+            val base=radiusPx(mapView,pulse.lat,pulse.lon)
+            pulsePaint.color=Color.argb(((1f-progress)*(1f-progress)*105f).toInt(),228,242,208)
+            pulsePaint.strokeWidth=1.5f+3f*(1f-progress)
+            canvas.drawCircle(xy.x.toFloat(),xy.y.toFloat(),base*(0.45f+0.62f*progress),pulsePaint)
+        }
+        if(pulses.isNotEmpty())mapView.postInvalidateDelayed(45L)
         if (showRoute) {
             for (i in 1 until points.size) {
                 val a = points[i-1]; val b = points[i]

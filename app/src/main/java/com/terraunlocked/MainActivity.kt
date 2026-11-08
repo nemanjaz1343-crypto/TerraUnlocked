@@ -392,10 +392,13 @@ class MainActivity : Activity(), SensorEventListener {
             if(revealed) {
                 // Service has already saved the fix; avoid loading all historical JSON.
                 val t=intent.getLongExtra("timestamp",System.currentTimeMillis())
-                if(records.lastOrNull()?.timestamp!=t)
-                    records.add(DiscoveryPoint(intent.getDoubleExtra("rawLat",lat),
-                        intent.getDoubleExtra("rawLon",lon),false,t,
+                if(records.lastOrNull()?.timestamp!=t) {
+                    val rawLat=intent.getDoubleExtra("rawLat",lat)
+                    val rawLon=intent.getDoubleExtra("rawLon",lon)
+                    records.add(DiscoveryPoint(rawLat,rawLon,false,t,
                         accuracy,intent.getFloatExtra("speed",Float.NaN),confidence))
+                    if(System.currentTimeMillis()-t<12000L)fogOverlay.pulseReveal(rawLat,rawLon)
+                }
                 if(!offline && records.size%35==0)handler.post{maybeRecoverPaths()}
             }
             if(!weak) {
