@@ -130,10 +130,12 @@ class DiscoveryFogOverlay(
             maskCanvas.drawCircle(a.x/4f,a.y/4f,ink.strokeWidth/2f,ink)
             maskCanvas.drawCircle(b.x/4f,b.y/4f,ink.strokeWidth/2f,ink)
         }
+        // Metaball-like liquid mask: blur the union, then threshold to make
+        // neighboring circles form thick, rounded necks instead of faint halos.
         val pixels=IntArray(mw*mh)
         bitmap.getPixels(pixels,0,mw,0,0,mw,mh)
         val horizontal=IntArray(mw*mh)
-        val blurRadius=3
+        val blurRadius=7
         for(y in 0 until mh)for(x in 0 until mw) {
             var sum=0;var n=0
             for(dx in -blurRadius..blurRadius) {
@@ -148,9 +150,11 @@ class DiscoveryFogOverlay(
                 val yy=y+dy
                 if(yy in 0 until mh){sum+=horizontal[yy*mw+x];n++}
             }
-            // Stronger liquid merge at nearby edges; preserve a bounded feather.
-            val alpha=((sum/n)*1.5f).toInt().coerceIn(0,255)
-            pixels[y*mw+x]=if(alpha<8)0 else (alpha shl 24) or 0x00FFFFFF
+            // Steep alpha ramp produces a glossy-looking, coherent liquid body.
+            // Limit expansion to the existing blur field, not distant GPS gaps.
+            val field=sum.toFloat()/n
+            val alpha=((field-35f)*4.6f).toInt().coerceIn(0,255)
+            pixels[y*mw+x]=if(alpha<10)0 else (alpha shl 24) or 0x00FFFFFF
         }
         bitmap.setPixels(pixels,0,mw,0,0,mw,mh)
         organicMask?.recycle()
