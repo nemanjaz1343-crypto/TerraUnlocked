@@ -199,25 +199,36 @@ class DiscoveryFogOverlay(
         // Scale the liquid bridge with the map's physical radius, not fixed pixels.
         val blurRadius=(radiusPx(map,center.latitude,center.longitude)*0.65f/6f)
             .toInt().coerceIn(3,16)
-        for(y in 0 until mh)for(x in 0 until mw) {
-            var sum=0;var n=0
-            for(dx in -blurRadius..blurRadius) {
-                val xx=x+dx
-                if(xx in 0 until mw){sum+=pixels[y*mw+xx] ushr 24;n++}
+        // Sliding-window box blur: O(width * height), independent of blur radius.
+        // The previous nested kernels cost O(width * height * radius) per pass.
+        for(y in 0 until mh) {
+            val row=y*mw
+            var sum=0
+            for(x in 0..kotlin.math.min(blurRadius,mw-1))sum+=pixels[row+x] ushr 24
+            for(x in 0 until mw) {
+                val count=kotlin.math.min(mw-1,x+blurRadius)-
+                    kotlin.math.max(0,x-blurRadius)+1
+                horizontal[row+x]=sum/count
+                val leaving=x-blurRadius
+                val entering=x+blurRadius+1
+                if(leaving>=0)sum-=pixels[row+leaving] ushr 24
+                if(entering<mw)sum+=pixels[row+entering] ushr 24
             }
-            horizontal[y*mw+x]=sum/n
         }
-        for(y in 0 until mh)for(x in 0 until mw) {
-            var sum=0;var n=0
-            for(dy in -blurRadius..blurRadius) {
-                val yy=y+dy
-                if(yy in 0 until mh){sum+=horizontal[yy*mw+x];n++}
+        for(x in 0 until mw) {
+            var sum=0
+            for(y in 0..kotlin.math.min(blurRadius,mh-1))sum+=horizontal[y*mw+x]
+            for(y in 0 until mh) {
+                val count=kotlin.math.min(mh-1,y+blurRadius)-
+                    kotlin.math.max(0,y-blurRadius)+1
+                val field=sum.toFloat()/count
+                val alpha=((field-35f)*4.6f).toInt().coerceIn(0,255)
+                pixels[y*mw+x]=if(alpha<10)0 else (alpha shl 24) or 0x00FFFFFF
+                val leaving=y-blurRadius
+                val entering=y+blurRadius+1
+                if(leaving>=0)sum-=horizontal[leaving*mw+x]
+                if(entering<mh)sum+=horizontal[entering*mw+x]
             }
-            // Steep alpha ramp produces a glossy-looking, coherent liquid body.
-            // Limit expansion to the existing blur field, not distant GPS gaps.
-            val field=sum.toFloat()/n
-            val alpha=((field-35f)*4.6f).toInt().coerceIn(0,255)
-            pixels[y*mw+x]=if(alpha<10)0 else (alpha shl 24) or 0x00FFFFFF
         }
         bitmap.setPixels(pixels,0,mw,0,0,mw,mh)
         // Do not recycle the previous frame while the renderer may still reference it.
