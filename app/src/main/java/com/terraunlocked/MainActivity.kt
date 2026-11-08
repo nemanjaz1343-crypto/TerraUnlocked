@@ -887,7 +887,7 @@ class MainActivity : Activity(), SensorEventListener {
             override fun onTouchEvent(event:MotionEvent,mapView:MapView):Boolean {
                 if(mode=="VIEW" && event.actionMasked==MotionEvent.ACTION_MOVE && event.pointerCount==1 && followUser) {
                     followUser=false
-                    if(::followButton.isInitialized) followButton.text="FOLLOW ○"
+                    if(::followButton.isInitialized) followButton.text="LOCATE ○"
                 }
                 return false
             }
@@ -1398,7 +1398,7 @@ class MainActivity : Activity(), SensorEventListener {
         root.addView(mapArea,LinearLayout.LayoutParams(-1,0,1f))
         // Hidden adapter buttons preserve existing activity actions; visual chrome is Canvas based.
         trackButton=action("TRACK")
-        followButton=action("FOLLOW")
+        followButton=action("LOCATE")
         val markButton=action("MARK")
         val eraseButton=action("ERASE")
         val viewButton=action("VIEW")
@@ -1465,9 +1465,9 @@ class MainActivity : Activity(), SensorEventListener {
                 val next=(map.zoomLevelDouble+0.5849625).coerceAtMost(map.maxZoomLevel.toDouble())
                 map.controller.setZoom(next)
                 map.controller.animateTo(it)
-                status.text="FOLLOW / ZOOM 150%"
+                status.text="LOCATE / ZOOM 150%"
             }
-                ?:run{status.text="FOLLOW / WAITING FOR GPS"}
+                ?:run{status.text="LOCATE / WAITING FOR GPS"}
         }
         markButton.setOnClickListener {
             val opening=palette.visibility!=View.VISIBLE
@@ -1967,7 +1967,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
     private fun showFoundLocation(name:String,lat:Double,lon:Double) {
         previewLocation=GeoPoint(lat,lon);previewLabel=name
-        followUser=false;followButton.text="FOCUS ○"
+        followUser=false;followButton.text="LOCATE ○"
         map.controller.setZoom(18.0)
         map.controller.animateTo(previewLocation)
         previewBar?.visibility=View.VISIBLE

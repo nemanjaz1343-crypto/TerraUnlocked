@@ -174,8 +174,8 @@ class DiscoveryFogOverlay(
                     val r2=r(q.latitude,q.longitude)
                     val d=kotlin.math.hypot((pa.x-pb.x)/6f,(pa.y-pb.y)/6f)
                     val rr=kotlin.math.min(r1,r2)
-                    if(d>r1+r2 && d<=r1+r2+rr*0.65f) {
-                        bridgePaint.strokeWidth=rr*1.65f
+                    if(d>r1+r2 && d<=r1+r2+rr*0.8f) {
+                        bridgePaint.strokeWidth=rr*1.85f
                         maskCanvas.drawLine((pa.x+pad)/6f,(pa.y+pad)/6f,(pb.x+pad)/6f,(pb.y+pad)/6f,bridgePaint)
                     }
                 }
@@ -222,7 +222,7 @@ class DiscoveryFogOverlay(
                 val count=kotlin.math.min(mh-1,y+blurRadius)-
                     kotlin.math.max(0,y-blurRadius)+1
                 val field=sum.toFloat()/count
-                val alpha=((field-35f)*4.6f).toInt().coerceIn(0,255)
+                val alpha=((field-30f)*4.6f).toInt().coerceIn(0,255)
                 pixels[y*mw+x]=if(alpha<10)0 else (alpha shl 24) or 0x00FFFFFF
                 val leaving=y-blurRadius
                 val entering=y+blurRadius+1

@@ -57,7 +57,7 @@ internal object ExpeditionArt {
     }
     fun icon(c:Canvas,name:String,x:Float,y:Float,size:Float,col:Int=light) {
         c.save();c.translate(x,y);c.scale(size/24f,size/24f)
-        p.style=Paint.Style.STROKE;p.strokeWidth=1.9f;p.strokeCap=Paint.Cap.ROUND
+        p.style=Paint.Style.STROKE;p.strokeWidth=1.45f;p.strokeCap=Paint.Cap.ROUND
         p.strokeJoin=Paint.Join.ROUND;p.color=col
         fun line(x1:Float,y1:Float,x2:Float,y2:Float){c.drawLine(x1,y1,x2,y2,p)}
         fun path(vararg coords:Float) {
@@ -67,9 +67,14 @@ internal object ExpeditionArt {
         }
         when(name) {
             "track" -> {
-                c.drawCircle(0f,0f,8f,p);c.drawCircle(0f,0f,3f,p)
-                line(-12f,0f,-5f,0f);line(5f,0f,12f,0f)
-                line(0f,-12f,0f,-5f);line(0f,5f,0f,12f)
+                // Satellite silhouette, not a target/crosshair.
+                c.save();c.rotate(-35f)
+                c.drawRoundRect(-3.5f,-6f,3.5f,6f,1.8f,1.8f,p)
+                c.drawRect(-11f,-5f,-5f,5f,p)
+                c.drawRect(5f,-5f,11f,5f,p)
+                line(-5f,0f,-3.5f,0f);line(3.5f,0f,5f,0f)
+                c.restore()
+                c.drawArc(-8f,5f,8f,18f,202f,136f,false,p)
             }
             "follow" -> {
                 p.style=Paint.Style.FILL
@@ -248,7 +253,7 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
     override fun onDetachedFromWindow(){radar.cancel();super.onDetachedFromWindow()}
     private var pressedIndex=-1
     private val d=resources.displayMetrics.density
-    private val labels=arrayOf("TRACK","FOLLOW","MARK","ERASE","KIT")
+    private val labels=arrayOf("TRACK","LOCATE","MARK","ERASE","KIT")
     private val icons=arrayOf("track","follow","mark","erase","kit")
     override fun onDraw(c:Canvas) {
         val w=width.toFloat();val h=height.toFloat()
@@ -259,11 +264,11 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
             val x=3*d+(i+.5f)*step
             if(i==selected || i==pressedIndex || (i==0 && trackingActive)){
                 ExpeditionArt.panel(c,RectF(3*d+i*step,3*d,3*d+(i+1)*step,h-3*d),true,7*d)
-                ExpeditionArt.rule(c,x-step*.27f,h-8*d,x+step*.27f,h-8*d,ExpeditionArt.light,2*d)
+                ExpeditionArt.rule(c,x-step*.22f,h-8*d,x+step*.22f,h-8*d,ExpeditionArt.light,1*d)
             }
             if(i>0 && i!=selected && i-1!=selected)
                 ExpeditionArt.rule(c,3*d+i*step,11*d,3*d+i*step,h-10*d,ExpeditionArt.muted,.75f*d)
-            ExpeditionArt.icon(c,icons[i],x,17*d,21*d,ExpeditionArt.light)
+            ExpeditionArt.icon(c,icons[i],x,17*d,18*d,if(i==selected || (i==0 && trackingActive))ExpeditionArt.light else Color.rgb(183,178,150))
             if(i==0 && gpsSearching){
                 // Two widening radar rings show that Android has not delivered its first fix.
                 val ring=Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -274,7 +279,7 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
                 ring.alpha=((scanPhase)*135).toInt()
                 c.drawCircle(x,17*d,(10f+10f*((scanPhase+0.5f)%1f))*d,ring)
             }
-            ExpeditionArt.label(c,if(i==0 && gpsSearching)"SEARCH" else if(i==0 && trackingActive)"STOP" else labels[i],x,h-8*d,10.5f*d,ExpeditionArt.light,false,.4f*d)
+            ExpeditionArt.label(c,if(i==0 && gpsSearching)"SEARCH" else if(i==0 && trackingActive)"STOP" else labels[i],x,h-8*d,9.5f*d,if(i==selected)ExpeditionArt.light else Color.rgb(183,178,150),false,.2f*d)
             if(i==0 && trackingActive){
                 ExpeditionArt.p.style=Paint.Style.FILL
                 ExpeditionArt.p.color=Color.rgb(181,216,132)
