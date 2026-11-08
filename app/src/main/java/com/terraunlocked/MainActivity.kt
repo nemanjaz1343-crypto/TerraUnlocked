@@ -912,11 +912,15 @@ class MainActivity : Activity(), SensorEventListener {
         map.overlays.add(object : Overlay() {
             private var strokeLast: GeoPoint? = null
             private var multitouchGesture = false
+            private var paintStart: GeoPoint? = null
+            private var paintStarted = false
             override fun onTouchEvent(event: MotionEvent, mapView: MapView): Boolean {
                 if(mode=="PAINT" || mode=="ERASE") {
                     if(event.actionMasked==MotionEvent.ACTION_POINTER_DOWN || event.pointerCount>1) {
                         multitouchGesture=true
                         strokeLast=null
+                        paintStart=null
+                        paintStarted=false
                         return false // Let osmdroid handle two-finger pan and pinch zoom.
                     }
                     if(multitouchGesture) {
@@ -960,7 +964,13 @@ class MainActivity : Activity(), SensorEventListener {
                     return true
                 }
                 if(event.actionMasked==MotionEvent.ACTION_UP || event.actionMasked==MotionEvent.ACTION_CANCEL) {
-                    strokeLast=null
+                    if(mode=="PAINT" && event.actionMasked==MotionEvent.ACTION_UP && !paintStarted && paintStart!=null) {
+                        pushMark()
+                        val at=paintStart!!
+                        val p=DiscoveryPoint(at.latitude,at.longitude,true,System.currentTimeMillis())
+                        records.add(p);store.add(p);refresh()
+                    }
+                    paintStart=null;paintStarted=false;strokeLast=null
                     return true
                 }
                 if(event.actionMasked!=MotionEvent.ACTION_DOWN && event.actionMasked!=MotionEvent.ACTION_MOVE)return false
@@ -976,6 +986,18 @@ class MainActivity : Activity(), SensorEventListener {
                     return true
                 }
                 if (mode == "PAINT") {
+                    if(event.actionMasked==MotionEvent.ACTION_DOWN) {
+                        paintStart=geo;paintStarted=false;strokeLast=null
+                        return true
+                    }
+                    if(!paintStarted && paintStart!=null) {
+                        val start=paintStart!!
+                        if(gap(start,geo)<3f)return true
+                        pushMark()
+                        val p=DiscoveryPoint(start.latitude,start.longitude,true,System.currentTimeMillis())
+                        records.add(p);store.add(p)
+                        strokeLast=start;paintStarted=true
+                    }
                     val current = GeoPoint(geo.latitude, geo.longitude)
                     val previous = strokeLast
                     if (previous == null || gap(previous, current) > radius * 0.30f) {
@@ -1032,6 +1054,10 @@ class MainActivity : Activity(), SensorEventListener {
                             painter.edge(canvas,cx+dx*factor,cy+dy*factor,kotlin.math.atan2(dy.toDouble(),dx.toDouble()),true)
                         }
                     } else {
+                        // At city-scale zoom show only the active objective; avoid icon clutter.
+                        if(mapView.zoomLevelDouble<12.0 && !selected)return@forEach
+                        val spacing=if(mapView.zoomLevelDouble<15.0)dp(66) else dp(43)
+                        if(!selected && occupied.any{kotlin.math.hypot((it.first-x).toDouble(),(it.second-y).toDouble())<spacing})return@forEach
                         val distance=user?.let {
                             val m=FloatArray(1)
                             android.location.Location.distanceBetween(it.latitude,it.longitude,o.latitude,o.longitude,m)
@@ -1040,7 +1066,7 @@ class MainActivity : Activity(), SensorEventListener {
                         val overlap=occupied.any{kotlin.math.hypot((it.first-x).toDouble(),(it.second-y).toDouble())<dp(43)}
                         val showDistance=selected || (distance!=null && !overlap && mapView.zoomLevelDouble>=15.5)
                         painter.draw(canvas,x,y,o.category,selected,objectiveStore.completed(o.id),false,if(showDistance)distance else null)
-                        if(showDistance)occupied.add(x to y)
+                        occupied.add(x to y)
                     }
                 }
             }
@@ -1409,7 +1435,7 @@ class MainActivity : Activity(), SensorEventListener {
                 0->markUndoAction()
                 1->markRedoAction()
                 2->chooseMark("PATH")
-                3->chooseMark("PAINT")
+                3->if(mode=="PAINT")chooseMark("VIEW") else chooseMark("PAINT")
                 4->chooseMark("LASSO")
             }
             palette.canUndo=markUndo.isNotEmpty()
