@@ -145,10 +145,10 @@ class TrackingService:Service(),SensorEventListener {
             val stationaryLong=elapsed-lastActiveMovementElapsed>180000L
             val recoveryInterval=when {
                 stationaryLong -> 900000L
-                movingRecently -> 90000L
+                movingRecently -> 60000L
                 else -> 300000L
             }
-            if(age>=90000L && elapsed-lastRecoveryElapsed>=recoveryInterval && !recoveryPending) {
+            if(age>=60000L && elapsed-lastRecoveryElapsed>=recoveryInterval && !recoveryPending) {
                 lastRecoveryElapsed=elapsed
                 stationaryRecoveryCount++
                 recoverGps(if(movingRecently)"MOVEMENT" else "WATCHDOG")
@@ -446,8 +446,12 @@ class TrackingService:Service(),SensorEventListener {
                             maxOf(8.0,speedMps*2.0+3.0)
                         else -> 6.0
                     }
+                // Record trustworthy intermediate fixes more frequently while moving.
+                // Avoid excessive stationary samples and retain jump protection.
+                val movingSpacing=if(speedMps.isFinite() && speedMps>=0.85f &&
+                    loc.accuracy<=25f)kotlin.math.min(spacing,18f) else spacing
                 val moved=plausible && (saved==null ||
-                    (secondsSinceSaved>0.0 && step>=spacing))
+                    (secondsSinceSaved>0.0 && step>=movingSpacing))
                 if(moved) {
                     // Use the measurement timestamp, NOT the shared callback time.
                     // Batched fixes arriving together must remain ordered and joinable.
