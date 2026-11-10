@@ -45,7 +45,9 @@ internal class MotionClassifier {
             candidateCount=1
         } else candidateCount++
         val required=when(next) {
-            "WALK" -> 5
+            // Wait for sustained reliable slow fixes before dropping SCOOTER.
+            // An urban GPS blackout must not look like a walk/stop.
+            "WALK" -> if(profile=="SCOOTER")10 else 5
             "CAR" -> 3
             else -> 2
         }

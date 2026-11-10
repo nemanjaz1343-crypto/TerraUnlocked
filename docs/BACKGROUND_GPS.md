@@ -1,4 +1,4 @@
-# TerraUnlocked v0.4.41 — Background tracking and GPS diagnostics
+# TerraUnlocked v0.4.65 — Background tracking and GPS diagnostics
 
 ## Tracking lifecycle
 
@@ -32,3 +32,12 @@ Unit tests include movement profile transitions and a synthetic 4 km scooter rid
 ## Update fallback
 
 If the GitHub API check fails, Terra displays the error and provides **OPEN RELEASES** to continue in the browser.
+
+## November 2026 locked-screen scooter fix
+
+- ACTIVE GNSS requests are 3 seconds (minimum 1.5 seconds); ECO remains slower only after a confident extended stop. Android may still batch or lose fixes under interference.
+- The watchdog now monitors **verified** fixes separately from any location callback. A stream of poor-quality GPS results cannot keep it from attempting recovery every 90 seconds when active.
+- Scooter profile switches to WALK only after sustained reliable low-speed readings; missing speed does not count as proof of walking.
+- Positional-speed inference accepts well-separated, reasonably accurate verified points up to 90 seconds apart (previously 25 seconds), but only for motion classification/sampling, **never** as invented route coordinates. Long/ambiguous gaps remain covered by fog.
+- New diagnostic events: `GPS_RESTART_NO_CALLBACK`, `GPS_RESTART_NO_VERIFIED_FIX`, `VERIFIED_GPS_AFTER_RECOVERY`, `MODE_WALK_TO_SCOOTER`, etc.
+- Battery optimization must still be disabled manually on Samsung; nothing here bypasses platform restrictions or guarantees a fix beside high-rise buildings.

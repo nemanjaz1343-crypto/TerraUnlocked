@@ -22,6 +22,15 @@ class MotionClassifierTest {
         repeat(20){c.update(0f,85f)}
         assertEquals("SCOOTER",c.current())
     }
+    @Test fun unknownSpeedsDoNotEraseScooterProfile() {
+        val c=MotionClassifier()
+        repeat(8){c.update(5.5f,12f)}
+        repeat(30){c.update(Float.NaN,35f)}
+        assertEquals("SCOOTER",c.current())
+        repeat(6){c.update(0.1f,8f)}
+        assertEquals("SCOOTER",c.current())
+    }
+
     @Test fun eventuallyReturnsToWalk() {
         val c=MotionClassifier()
         repeat(8){c.update(4f,10f)}

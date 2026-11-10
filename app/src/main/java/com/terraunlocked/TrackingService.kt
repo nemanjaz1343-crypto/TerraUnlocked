@@ -72,6 +72,7 @@ class TrackingService:Service(),SensorEventListener {
     private var lastGapAlertElapsed=0L
     private var lastRecoveryElapsed=0L
     private var lastGoodFixElapsed=0L
+    private var lastVerifiedFixElapsed=0L
     private var lastNoFixLogElapsed=0L
     private var stationaryRecoveryCount=0
     private var lastActiveMovementElapsed=0L
@@ -79,6 +80,14 @@ class TrackingService:Service(),SensorEventListener {
     private var lastProviderAvailable:Boolean?=null
     private var pendingRecoveryAt=0L
     private var recoveryPending=false
+    // Keep active GNSS frequent while the screen is locked. Android still controls
+    // actual provider availability and may deliver fewer updates in urban canyons.
+    private fun activeRequest():LocationRequest =
+        LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,3000L)
+            .setMinUpdateIntervalMillis(1500L)
+            .setMaxUpdateDelayMillis(0L)
+            .setMinUpdateDistanceMeters(0f).build()
+
     private fun recoverGps(reason:String) {
         if(!running || recoveryPending)return
         if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED) {
@@ -91,10 +100,7 @@ class TrackingService:Service(),SensorEventListener {
         diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
             "EVENT","GPS_RESTART_"+reason)
         try {
-            val request=LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,5000L)
-                .setMinUpdateIntervalMillis(2500L).setMaxUpdateDelayMillis(0L)
-                .setMinUpdateDistanceMeters(0f).build()
-            client.requestLocationUpdates(request,callback,mainLooper)
+            client.requestLocationUpdates(activeRequest(),callback,mainLooper)
                 .addOnCompleteListener { task ->
                     recoveryPending=false
                     diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
@@ -140,18 +146,32 @@ class TrackingService:Service(),SensorEventListener {
                 (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
                     .notify(1801,makeNotification("GPS signal missing / "+(age/1000L)+"s"))
             }
-            // Back off during long stationary periods, but recover promptly on movement.
+            // A stream of inaccurate fixes is not a healthy tracking session:
+            // restart the provider when no verified fix arrives for 90 seconds.
+            // Do not let a stationary back-off delay recovery of a missing callback.
             val movingRecently=elapsed-lastActiveMovementElapsed<90000L
             val stationaryLong=elapsed-lastActiveMovementElapsed>180000L
+            val callbackMissing=callbackAge>=60000L
+            val verifiedAge=if(lastVerifiedFixElapsed>0L)
+                elapsed-lastVerifiedFixElapsed else 0L
+            val verifiedMissing=verifiedAge>=90000L && !ecoMode
             val recoveryInterval=when {
-                stationaryLong -> 900000L
+                callbackMissing -> 60000L
+                verifiedMissing -> 90000L
                 movingRecently -> 60000L
-                else -> 300000L
+                stationaryLong -> 300000L
+                else -> 180000L
             }
-            if(age>=60000L && elapsed-lastRecoveryElapsed>=recoveryInterval && !recoveryPending) {
+            if((age>=60000L || callbackMissing || verifiedMissing) &&
+                elapsed-lastRecoveryElapsed>=recoveryInterval && !recoveryPending) {
                 lastRecoveryElapsed=elapsed
                 stationaryRecoveryCount++
-                recoverGps(if(movingRecently)"MOVEMENT" else "WATCHDOG")
+                recoverGps(when {
+                    callbackMissing -> "NO_CALLBACK"
+                    verifiedMissing -> "NO_VERIFIED_FIX"
+                    movingRecently -> "MOVEMENT"
+                    else -> "WATCHDOG"
+                })
             }
             heartbeatHandler.postDelayed(this,30000L)
         }
@@ -217,14 +237,10 @@ class TrackingService:Service(),SensorEventListener {
         ecoMode=eco
         lastSwitch=now
         val request=if(eco) {
-            LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,15000L)
-                .setMinUpdateIntervalMillis(5000L).setMaxUpdateDelayMillis(0L)
+            LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,12000L)
+                .setMinUpdateIntervalMillis(4000L).setMaxUpdateDelayMillis(0L)
                 .setMinUpdateDistanceMeters(0f).build()
-        } else {
-            LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,2000L)
-                .setMinUpdateIntervalMillis(1000L).setMaxUpdateDelayMillis(0L)
-                .setMinUpdateDistanceMeters(0f).build()
-        }
+        } else activeRequest()
         if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED) {
             client.requestLocationUpdates(request,callback,mainLooper)
         }
@@ -284,11 +300,8 @@ class TrackingService:Service(),SensorEventListener {
                 lastFixElapsed=SystemClock.elapsedRealtime()
                 stationaryRecoveryCount=0
                 if(loc.hasSpeed() && loc.speed>=0.85f)lastActiveMovementElapsed=lastFixElapsed
-                if(lastRecoveryElapsed>0L && lastFixElapsed-lastRecoveryElapsed<90000L) {
-                    diagnostics.record(loc,fixAgeMs,0.0,0.0,fixConfidence,motionProfile,
-                        "EVENT","FRESH_GPS_AFTER_RECOVERY")
-                    lastRecoveryElapsed=0L
-                }
+                // Recovery remains rate-limited until a trustworthy fix arrives;
+                // inaccurate callbacks must not reset the watchdog cooldown.
                 val prev=previous
                 val seconds=if(prev!=null)(loc.elapsedRealtimeNanos-prev.elapsedRealtimeNanos)/1e9 else 0.0
                 val jump=prev!=null && seconds>0.5 &&
@@ -420,20 +433,23 @@ class TrackingService:Service(),SensorEventListener {
                     else Float.NaN
                 // A zero or absent speed is common after urban GNSS interruptions.
                 // Derive speed only from sufficiently accurate, recent verified fixes.
-                val positionalSpeed=if(saved!=null &&
-                    secondsSinceSaved in 2.0..25.0 && loc.accuracy<=20f &&
-                    saved.accuracy<=20f &&
-                    step>=maxOf(10f,loc.accuracy*1.5f))
-                    (step/secondsSinceSaved).toFloat().coerceAtMost(35f)
+                val positionalSpeed=if(saved!=null)
+                    SpeedEvidence.infer(step,secondsSinceSaved,
+                        loc.accuracy,saved.accuracy)
                     else Float.NaN
-                val speedMps=when {
-                    positionalSpeed.isFinite() &&
-                        (!rawSpeed.isFinite() || rawSpeed<0.4f) -> positionalSpeed
-                    rawSpeed.isFinite() -> rawSpeed
-                    inertialMoving() && secondsSinceSaved>0.0 && step>5f -> 1.25f
-                    else -> Float.NaN
+                val speedMps=SpeedEvidence.combine(
+                    rawSpeed,positionalSpeed,secondsSinceSaved,step,
+                    loc.accuracy,saved?.accuracy ?: Float.NaN)
+                if(speedMps.isFinite() && speedMps>=1.8f && loc.accuracy<=35f)
+                    lastActiveMovementElapsed=nowElapsed
+                val nextProfile=classifier.update(speedMps,loc.accuracy)
+                if(nextProfile!=motionProfile) {
+                    diagnostics.record(loc,fixAgeMs,secondsSinceSaved,
+                        if(step.isFinite())step.toDouble() else 0.0,
+                        fixConfidence,nextProfile,"EVENT",
+                        "MODE_"+motionProfile+"_TO_"+nextProfile)
                 }
-                motionProfile=classifier.update(speedMps,loc.accuracy)
+                motionProfile=nextProfile
                 val spacing=TraceReconstruction.sampleSpacing(loc.accuracy,speedMps)
                 // A single erroneous 'good accuracy' result should not draw a
                 // false isolated discovery 100m away from a walking trajectory.
@@ -447,6 +463,17 @@ class TrackingService:Service(),SensorEventListener {
                             maxOf(8.0,speedMps*2.0+3.0)
                         else -> 6.0
                     }
+                if(plausible) {
+                    // Only coherent verified fixes reset the no-verified-fix watchdog.
+                    if(lastVerifiedFixElapsed<lastRecoveryElapsed &&
+                        lastRecoveryElapsed>0L) {
+                        diagnostics.record(loc,fixAgeMs,secondsSinceSaved,
+                            if(step.isFinite())step.toDouble() else 0.0,
+                            fixConfidence,motionProfile,"EVENT",
+                            "VERIFIED_GPS_AFTER_RECOVERY")
+                    }
+                    lastVerifiedFixElapsed=nowElapsed
+                }
                 // Record trustworthy intermediate fixes more frequently while moving.
                 // Avoid excessive stationary samples and retain jump protection.
                 val movingSpacing=if(speedMps.isFinite() && speedMps>=0.85f &&
@@ -540,6 +567,7 @@ class TrackingService:Service(),SensorEventListener {
         lastGapAlertElapsed=0L
         lastRecoveryElapsed=0L
         lastGoodFixElapsed=0L
+        lastVerifiedFixElapsed=lastFixElapsed
         lastNoFixLogElapsed=0L
         stationaryRecoveryCount=0
         lastActiveMovementElapsed=SystemClock.elapsedRealtime()
@@ -561,10 +589,7 @@ class TrackingService:Service(),SensorEventListener {
         motionProfile="WALK"
         stationarySince=0L
         lastSwitch=0L
-        val request=LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,5000L)
-            .setMinUpdateIntervalMillis(2500L)
-            .setMaxUpdateDelayMillis(0L)
-            .setMinUpdateDistanceMeters(0f).build()
+        val request=activeRequest()
         try {
             client.requestLocationUpdates(request,callback,mainLooper)
                 .addOnFailureListener {
