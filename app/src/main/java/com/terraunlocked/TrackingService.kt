@@ -221,9 +221,9 @@ class TrackingService:Service(),SensorEventListener {
                 .setMinUpdateIntervalMillis(5000L).setMaxUpdateDelayMillis(0L)
                 .setMinUpdateDistanceMeters(0f).build()
         } else {
-            LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,5000L)
-                .setMinUpdateIntervalMillis(2500L).setMaxUpdateDelayMillis(0L)
-                .setMinUpdateDistanceMeters(5f).build()
+            LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,2000L)
+                .setMinUpdateIntervalMillis(1000L).setMaxUpdateDelayMillis(0L)
+                .setMinUpdateDistanceMeters(0f).build()
         }
         if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED) {
             client.requestLocationUpdates(request,callback,mainLooper)
@@ -345,6 +345,7 @@ class TrackingService:Service(),SensorEventListener {
                         stationarySince=nowElapsed
                         if(ecoMode)switchMode(false)
                     } else if(!ecoMode && loc.accuracy<=20f &&
+                        nowElapsed-lastActiveMovementElapsed>=180000L &&
                         nowElapsed-stationarySince>=180000L) {
                         // Enter battery saver only after a confident 3-minute stop.
                         switchMode(true)
