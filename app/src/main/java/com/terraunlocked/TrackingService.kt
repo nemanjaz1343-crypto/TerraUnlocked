@@ -189,7 +189,7 @@ class TrackingService:Service(),SensorEventListener {
     private var stationarySince=0L
     private var lastSwitch=0L
     private var ecoMode=false
-    private var motionProfile="WALK"
+    private var motionProfile="AUTO"
     private var lastSmoothed:Location?=null
     private var lastRecordedTimestamp=0L
     private var fixConfidence=0
@@ -231,21 +231,13 @@ class TrackingService:Service(),SensorEventListener {
     }
 
 
+    // TRACK always uses one high-accuracy request, regardless of transport.
+    // No automatic ECO switching while the user is recording a route.
     private fun switchMode(eco:Boolean) {
-        val now=android.os.SystemClock.elapsedRealtime()
-        if(!running || ecoMode==eco || now-lastSwitch<20000L)return
-        ecoMode=eco
-        lastSwitch=now
-        val request=if(eco) {
-            LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,12000L)
-                .setMinUpdateIntervalMillis(4000L).setMaxUpdateDelayMillis(0L)
-                .setMinUpdateDistanceMeters(0f).build()
-        } else activeRequest()
-        if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED) {
-            client.requestLocationUpdates(request,callback,mainLooper)
-        }
-        val text=if(eco)"Stationary / battery saver" else "Moving / high accuracy"
-        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(1801,makeNotification(text))
+        if(!running || !ecoMode)return
+        ecoMode=false
+        if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED)
+            client.requestLocationUpdates(activeRequest(),callback,mainLooper)
     }
 
     private fun makeNotification(message:String):Notification {
@@ -357,19 +349,13 @@ class TrackingService:Service(),SensorEventListener {
                         motionAnchor=loc
                         stationarySince=nowElapsed
                         if(ecoMode)switchMode(false)
-                    } else if(!ecoMode && loc.accuracy<=20f &&
-                        nowElapsed-lastActiveMovementElapsed>=180000L &&
-                        nowElapsed-stationarySince>=180000L) {
-                        // Enter battery saver only after a confident 3-minute stop.
-                        switchMode(true)
                     }
                 }
                 val now=System.currentTimeMillis()
                 val velocity=if(loc.hasSpeed())loc.speed else Float.NaN
                 val distance=if(prev!=null)prev.distanceTo(loc).toDouble() else 0.0
                 val evidence=PathIntelligence.assess(loc.accuracy,fixAgeMs,
-                    if(velocity.isFinite() && velocity>=0.4f)velocity
-                    else if(motionProfile=="SCOOTER")5f else Float.NaN,
+                    if(velocity.isFinite() && velocity>=0.4f)velocity else Float.NaN,
                     distance,seconds,inertialMoving())
                 fixConfidence=evidence.score
                 // Weak estimates are preview-only. They cannot unlock fog.
@@ -442,15 +428,9 @@ class TrackingService:Service(),SensorEventListener {
                     loc.accuracy,saved?.accuracy ?: Float.NaN)
                 if(speedMps.isFinite() && speedMps>=1.8f && loc.accuracy<=35f)
                     lastActiveMovementElapsed=nowElapsed
-                val nextProfile=classifier.update(speedMps,loc.accuracy)
-                if(nextProfile!=motionProfile) {
-                    diagnostics.record(loc,fixAgeMs,secondsSinceSaved,
-                        if(step.isFinite())step.toDouble() else 0.0,
-                        fixConfidence,nextProfile,"EVENT",
-                        "MODE_"+motionProfile+"_TO_"+nextProfile)
-                }
-                motionProfile=nextProfile
-                val spacing=TraceReconstruction.sampleSpacing(loc.accuracy,speedMps)
+                // Universal sampling: accuracy and measured motion, never WALK/CAR/SCOOTER.
+                motionProfile="AUTO"
+                val spacing=if(loc.accuracy<=25f)12f else 20f
                 // A single erroneous 'good accuracy' result should not draw a
                 // false isolated discovery 100m away from a walking trajectory.
                 val estimatedTravelSpeed=if(secondsSinceSaved>0.0 && saved!=null)
