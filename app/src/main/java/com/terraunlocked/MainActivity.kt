@@ -3542,15 +3542,24 @@ class MainActivity : Activity(), SensorEventListener {
         scheduleTaxiStandsRefresh()
         handler.postDelayed(solarTick,60000L)
         tracking=TrackingService.running
-        if(!tracking && getSharedPreferences("terra_tracking_state",Context.MODE_PRIVATE)
-                .getBoolean("requested",false)) {
-            status.text="TRACK INTERRUPTED / TAP TRACK TO RESUME"
-        }
+        val interrupted=!tracking &&
+            getSharedPreferences("terra_tracking_state",Context.MODE_PRIVATE)
+                .getBoolean("requested",false)
         expeditionBottom?.trackingActive=tracking
         val hasCachedFix=restoreLastKnownFix()
-        expeditionBottom?.gpsSearching=tracking && !hasCachedFix
-        if(hasCachedFix)status.text=lastKnownLabel()+
-            (if(tracking)" / REFRESHING GPS" else " / TRACK STOPPED")
+        val fixAge=if(hasCachedFix)
+            (System.currentTimeMillis()-lastKnownFixTime).coerceAtLeast(0L)
+            else Long.MAX_VALUE
+        expeditionBottom?.gpsSearching=tracking && fixAge>25000L
+        status.text=when {
+            interrupted -> "TRACK INTERRUPTED / TAP TRACK TO RESUME"
+            !hasCachedFix && tracking -> "GPS SEARCHING / AWAITING FIRST FIX"
+            hasCachedFix && tracking && fixAge<=25000L ->
+                "GPS RECENT / ${fixAge/1000L}s AGO / ±${fogOverlay.positionAccuracy.toInt()}m"
+            hasCachedFix && tracking -> lastKnownLabel()+" / AWAITING FRESH GPS"
+            hasCachedFix -> lastKnownLabel()+" / TRACK STOPPED"
+            else -> "TRACK STOPPED"
+        }
         if(::trackButton.isInitialized)trackButton.text=if(tracking)"STOP GPS" else "TRACK"
         if(::store.isInitialized) {
             records.clear();records.addAll(store.load())

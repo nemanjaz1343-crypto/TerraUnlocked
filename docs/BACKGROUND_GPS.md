@@ -41,3 +41,10 @@ If the GitHub API check fails, Terra displays the error and provides **OPEN RELE
 - Positional-speed inference accepts well-separated, reasonably accurate verified points up to 90 seconds apart (previously 25 seconds), but only for motion classification/sampling, **never** as invented route coordinates. Long/ambiguous gaps remain covered by fog.
 - New diagnostic events: `GPS_RESTART_NO_CALLBACK`, `GPS_RESTART_NO_VERIFIED_FIX`, `VERIFIED_GPS_AFTER_RECOVERY`, `MODE_WALK_TO_SCOOTER`, etc.
 - Battery optimization must still be disabled manually on Samsung; nothing here bypasses platform restrictions or guarantees a fix beside high-rise buildings.
+
+## v0.4.66: Accurate resumed-screen status
+
+- Reopening Terra with a recent (<25-second) verified cached location now displays **GPS RECENT / age / accuracy**, not the misleading **REFRESHING GPS** message. The next foreground update replaces it with the live verification status.
+- Older cached positions show **AWAITING FRESH GPS** and do not imply the provider is live.
+- If Android has interrupted tracking but the user previously requested it, the interruption warning takes priority over the cached-position label.
+- This is a UI correctness fix only: genuine missing GNSS callbacks and long, unverified travel gaps cannot be solved by connecting unknown geography.
