@@ -13,13 +13,25 @@ internal object TraceReconstruction {
         val accuracy: Float = Float.NaN, val speed: Float = Float.NaN
     )
 
-    fun sampleSpacing(accuracyMeters: Float, speedMetersPerSecond: Float): Float {
-        val accuracy=accuracyMeters.coerceIn(0f,35f)
-        val minimum=if(accuracy<=12f)6.5f else if(accuracy<=22f)8f else 11f
-        val stride=max(minimum,(accuracy*.45f).coerceAtMost(14f))
-        // Avoid isolated fog reveals when a stationary GPS wanders around.
-        return if(speedMetersPerSecond.isFinite() && speedMetersPerSecond in 0f..0.35f)
-            max(19f,accuracy*1.2f) else stride
+    fun sampleSpacing(
+        accuracyMeters:Float,speedMetersPerSecond:Float,inertialActive:Boolean=false
+    ):Float {
+        val accuracy=if(accuracyMeters.isFinite() && accuracyMeters>0f)
+            accuracyMeters else 65f
+        val moving=(speedMetersPerSecond.isFinite() && speedMetersPerSecond>=0.85f) ||
+            inertialActive
+        // At rest, a 3m threshold would convert urban GPS jitter into fake visits.
+        if(!moving && speedMetersPerSecond.isFinite() &&
+            speedMetersPerSecond in 0f..0.35f)
+            return max(28f,accuracy*1.2f)
+        if(moving)return when {
+            accuracy<=10f -> 3f
+            accuracy<=18f -> 5f
+            accuracy<=25f -> 7f
+            else -> 10f
+        }
+        // When movement is not demonstrated, avoid treating random drift as travel.
+        return max(10f,accuracy*.8f)
     }
 
     private fun metres(a:Fix,b:Fix): Double {
