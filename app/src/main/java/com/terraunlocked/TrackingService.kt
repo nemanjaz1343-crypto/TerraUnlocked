@@ -83,8 +83,8 @@ class TrackingService:Service(),SensorEventListener {
     // Keep active GNSS frequent while the screen is locked. Android still controls
     // actual provider availability and may deliver fewer updates in urban canyons.
     private fun activeRequest():LocationRequest =
-        LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,3000L)
-            .setMinUpdateIntervalMillis(1500L)
+        LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY,1500L)
+            .setMinUpdateIntervalMillis(750L)
             .setMaxUpdateDelayMillis(0L)
             .setMinUpdateDistanceMeters(0f).build()
 
@@ -99,16 +99,31 @@ class TrackingService:Service(),SensorEventListener {
         pendingRecoveryAt=SystemClock.elapsedRealtime()
         diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
             "EVENT","GPS_RESTART_"+reason)
+        // Merely re-registering the same callback does not reset a stalled
+        // Fused stream. Unsubscribe first, then create a fresh high-accuracy request.
         try {
-            client.requestLocationUpdates(activeRequest(),callback,mainLooper)
-                .addOnCompleteListener { task ->
+            client.removeLocationUpdates(callback).addOnCompleteListener {
+                if(!running) {
                     recoveryPending=false
-                    diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
-                        "EVENT",if(task.isSuccessful)"GPS_RESTART_OK" else "GPS_RESTART_FAILED")
-                    if(!task.isSuccessful)
-                        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
-                            .notify(1801,makeNotification("GPS unavailable / check location"))
+                } else {
+                    try {
+                        client.requestLocationUpdates(activeRequest(),callback,mainLooper)
+                            .addOnCompleteListener { task ->
+                                recoveryPending=false
+                                diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
+                                    "EVENT",if(task.isSuccessful)"GPS_RESUBSCRIBE_OK"
+                                        else "GPS_RESUBSCRIBE_FAILED")
+                                if(!task.isSuccessful)
+                                    (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                                        .notify(1801,makeNotification("GPS unavailable / check location"))
+                            }
+                    } catch(error:Exception) {
+                        recoveryPending=false
+                        diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
+                            "EVENT","GPS_RESUBSCRIBE_EXCEPTION")
+                    }
                 }
+            }
         } catch(error:Exception) {
             recoveryPending=false
             diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
@@ -181,6 +196,7 @@ class TrackingService:Service(),SensorEventListener {
     }
     private val client by lazy {LocationServices.getFusedLocationProviderClient(this)}
     private val store by lazy {DiscoveryStore(this)}
+    private val gpsHistory by lazy {GpsHistoryStore(this)}
     private val fieldNotes by lazy {FieldNotes(this)}
     private var lastVisitCheck=0L
     private var previous:Location?=null
@@ -275,9 +291,10 @@ class TrackingService:Service(),SensorEventListener {
                         "REJECTED","INVALID_FIX")
                     return@forEach
                 }
-                // Ignore stale batched/cached positions; a delayed old fix can appear
-                // as a wild GPS jump beside skyscrapers.
+                // Keep raw received fixes independently of trusted discoveries.
+                // Ignore stale batched/cached positions for the discovery layer.
                 val fixAgeMs=(android.os.SystemClock.elapsedRealtimeNanos()-loc.elapsedRealtimeNanos)/1000000L
+                gpsHistory.recordRaw(loc,fixAgeMs)
                 if(loc.elapsedRealtimeNanos<=lastMeasurementNanos) {
                     diagnostics.record(loc,fixAgeMs,0.0,0.0,0,motionProfile,
                         "REJECTED","DUPLICATE_OR_OUT_OF_ORDER")
@@ -430,7 +447,8 @@ class TrackingService:Service(),SensorEventListener {
                     lastActiveMovementElapsed=nowElapsed
                 // Universal sampling: accuracy and measured motion, never WALK/CAR/SCOOTER.
                 motionProfile="AUTO"
-                val spacing=if(loc.accuracy<=25f)12f else 20f
+                val spacing=TraceReconstruction.sampleSpacing(
+                    loc.accuracy,speedMps,inertialMoving())
                 // A single erroneous 'good accuracy' result should not draw a
                 // false isolated discovery 100m away from a walking trajectory.
                 val estimatedTravelSpeed=if(secondsSinceSaved>0.0 && saved!=null)
@@ -456,10 +474,8 @@ class TrackingService:Service(),SensorEventListener {
                 }
                 // Record trustworthy intermediate fixes more frequently while moving.
                 // Avoid excessive stationary samples and retain jump protection.
-                val movingSpacing=if(speedMps.isFinite() && speedMps>=0.85f &&
-                    loc.accuracy<=25f)kotlin.math.min(spacing,18f) else spacing
                 val moved=plausible && (saved==null ||
-                    (secondsSinceSaved>0.0 && step>=movingSpacing))
+                    (secondsSinceSaved>0.0 && step>=spacing))
                 if(moved) {
                     // Use the measurement timestamp, NOT the shared callback time.
                     // Batched fixes arriving together must remain ordered and joinable.
@@ -471,6 +487,8 @@ class TrackingService:Service(),SensorEventListener {
                         if(speedMps.isFinite())speedMps else Float.NaN,
                         fixConfidence))
                     lastSaved=Location(smooth)
+                    gpsHistory.recordVerified(smooth,measuredAt,
+                        if(speedMps.isFinite())speedMps else Float.NaN)
                     diagnostics.record(loc,fixAgeMs,secondsSinceSaved,
                         if(saved!=null && step.isFinite())step.toDouble() else 0.0,
                         fixConfidence,motionProfile,"SAVED","VERIFIED")
@@ -509,6 +527,8 @@ class TrackingService:Service(),SensorEventListener {
             client.removeLocationUpdates(callback)
             store.replaceAll(emptyList())
             PathStore(this).save(emptyList())
+            gpsHistory.clear()
+            diagnostics.clear()
             sendBroadcast(Intent(ACTION_RESET_COMPLETE).setPackage(packageName))
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
