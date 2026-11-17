@@ -24,6 +24,16 @@ class TerraArchive(private val context:Context) {
                 zip.write(value.toByteArray(Charsets.UTF_8))
                 zip.closeEntry()
             }
+            // GPS evidence is kept separate from discoveries and drawn paths.
+            // Export only on explicit user request; older archives remain valid.
+            for(name in listOf("terra_gps_raw.csv","terra_gps_trace.csv",
+                    "terra_gps_diagnostics.csv")) {
+                val file=File(context.filesDir,name)
+                if(!file.isFile)continue
+                zip.putNextEntry(ZipEntry(name))
+                file.inputStream().use {it.copyTo(zip)}
+                zip.closeEntry()
+            }
             // Persist user anchors and non-list preferences as a separate backwards-compatible entry.
             val anchorPrefs=context.getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE)
             val anchors=JSONObject()
@@ -47,6 +57,7 @@ class TerraArchive(private val context:Context) {
     fun importFrom(input:InputStream) {
         val fields=mutableMapOf<String,String>()
         val media=mutableMapOf<String,ByteArray>()
+        val gpsFiles=mutableMapOf<String,ByteArray>()
         var anchors:JSONObject?=null
         ZipInputStream(input).use {zip->
             while(true) {
@@ -62,6 +73,17 @@ class TerraArchive(private val context:Context) {
                     val value=data.toString(Charsets.UTF_8)
                     org.json.JSONArray(value)
                     fields[name]=value
+                } else if(name in listOf("terra_gps_raw.csv","terra_gps_trace.csv",
+                        "terra_gps_diagnostics.csv")) {
+                    val out=java.io.ByteArrayOutputStream()
+                    val buffer=ByteArray(8192)
+                    while(true) {
+                        val count=zip.read(buffer)
+                        if(count<0)break
+                        require(out.size()+count<=10_000_000) {"GPS archive too large"}
+                        out.write(buffer,0,count)
+                    }
+                    gpsFiles[name]=out.toByteArray()
                 } else if(name.startsWith("media/")) {
                     val filename=name.removePrefix("media/")
                     if(filename.isNotBlank() && !filename.contains("/") && !filename.contains("\\") && !filename.startsWith(".")) {
@@ -82,6 +104,7 @@ class TerraArchive(private val context:Context) {
         require(fields.keys.containsAll(keys.take(3).map {it.first})) {"Incomplete TerraUnlocked archive"}
         // Archive is validated before replacing local data.
         for((name,bytes) in media) File(context.filesDir,name).writeBytes(bytes)
+        for((name,bytes) in gpsFiles) File(context.filesDir,name).writeBytes(bytes)
         anchors?.let {j->
             val edit=context.getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE).edit()
             j.keys().forEach {k->edit.putString(k,j.optString(k))}

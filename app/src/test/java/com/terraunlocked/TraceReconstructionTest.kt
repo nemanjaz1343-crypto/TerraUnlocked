@@ -17,6 +17,16 @@ class TraceReconstructionTest {
         assertTrue(TraceReconstruction.sampleSpacing(25f,0.1f)>25f)
     }
 
+    @Test fun minimumMovingSpacingRequiresGoodPositionEvidence() {
+        assertEquals(3f,TraceReconstruction.sampleSpacing(6f,1.4f),0.01f)
+        assertEquals(5f,TraceReconstruction.sampleSpacing(17f,1.2f),0.01f)
+        assertEquals(7f,TraceReconstruction.sampleSpacing(24f,2f),0.01f)
+        assertEquals(10f,TraceReconstruction.sampleSpacing(32f,3f),0.01f)
+        assertEquals(3f,TraceReconstruction.sampleSpacing(8f,Float.NaN,true),0.01f)
+        assertTrue(TraceReconstruction.sampleSpacing(8f,Float.NaN)>=10f)
+        assertTrue(TraceReconstruction.sampleSpacing(8f,0.1f)>=28f)
+    }
+
     @Test fun shortUrbanWalkingOutageConnects() {
         assertTrue(TraceReconstruction.shouldJoin(
             point(0.0,0.0,1000),point(32.0,0.0,18000),

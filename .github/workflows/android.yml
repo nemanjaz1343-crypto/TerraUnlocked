@@ -2,6 +2,8 @@ name: TerraUnlocked Android APK
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 jobs:
   build:
@@ -26,6 +28,7 @@ jobs:
           name: TerraUnlocked-development-debug
           path: app/build/outputs/apk/debug/app-debug.apk
       - name: Check stable signing is configured
+        if: github.event_name != 'pull_request'
         id: signing
         env:
           KEYSTORE_B64: ${{ secrets.TERRA_KEYSTORE_BASE64 }}
@@ -40,7 +43,7 @@ jobs:
             echo "::notice::Stable signing secrets not configured; only development debug APK produced."
           fi
       - name: Build consistently signed release APK
-        if: steps.signing.outputs.ready == 'true'
+        if: steps.signing.outputs.ready == 'true' && github.event_name != 'pull_request'
         env:
           TERRA_KEYSTORE_BASE64: ${{ secrets.TERRA_KEYSTORE_BASE64 }}
           TERRA_KEYSTORE_PASSWORD: ${{ secrets.TERRA_KEYSTORE_PASSWORD }}
@@ -53,13 +56,13 @@ jobs:
           gradle :app:assembleRelease --stacktrace
           rm -f "$RUNNER_TEMP/terra-release.jks"
       - uses: actions/upload-artifact@v4
-        if: steps.signing.outputs.ready == 'true'
+        if: steps.signing.outputs.ready == 'true' && github.event_name != 'pull_request'
         with:
           name: TerraUnlocked-signed-release
           path: app/build/outputs/apk/release/app-release.apk
 
       - name: Publish signed APK as latest GitHub Release
-        if: steps.signing.outputs.ready == 'true'
+        if: steps.signing.outputs.ready == 'true' && github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
