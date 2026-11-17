@@ -48,3 +48,13 @@ If the GitHub API check fails, Terra displays the error and provides **OPEN RELE
 - Older cached positions show **AWAITING FRESH GPS** and do not imply the provider is live.
 - If Android has interrupted tracking but the user previously requested it, the interruption warning takes priority over the cached-position label.
 - This is a UI correctness fix only: genuine missing GNSS callbacks and long, unverified travel gaps cannot be solved by connecting unknown geography.
+
+## v0.4.67: Minimum GPS spacing and durable tracks
+
+- Active Fused Location Provider request is 1.5 seconds (minimum 0.75 seconds). Actual delivery remains subject to Android hardware, power policies and urban signal quality.
+- The watchdog now **removes then re-registers** its Fused callback on a missing callback/verified-fix interval. Re-register success is not evidence of a fresh fix; diagnostics now distinguish `GPS_RESUBSCRIBE_OK` from `VERIFIED_GPS_AFTER_RECOVERY`.
+- Walking/moving samples use **3 m at <=10 m reported accuracy**, **5 m at <=18 m**, **7 m at <=25 m**, and **10 m otherwise**. Unproven movement and stationary fixes retain larger spacing; inaccurate and implausible positions still cannot permanently reveal fog.
+- `terra_gps_raw.csv` stores recent raw received coordinates. `terra_gps_trace.csv` stores verified fixes grouped into separate plausible trace segments. Both are private and exported with the voluntary Terra backup, along with `terra_gps_diagnostics.csv`.
+- Route overlay now defaults to visible; only verified, physically plausible short segments connect. Long gaps are not silently invented.
+- RESET EXPLORATION deletes raw/trace histories and diagnostics too, because they also contain precise past coordinates.
+- Real-world comparison with Google Maps on the same route is still necessary. Resubscribing cannot manufacture GPS fixes when the provider is unavailable or the sky view is obstructed.
