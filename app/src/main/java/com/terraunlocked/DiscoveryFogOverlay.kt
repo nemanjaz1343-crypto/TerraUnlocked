@@ -29,7 +29,7 @@ class DiscoveryFogOverlay(
     }
     var fogVisible = true
     var opacity = 205
-    var showRoute = false
+    var showRoute = true
     var showCheckpoints = true
     var backtrack = false
     var currentPosition: GeoPoint? = null
