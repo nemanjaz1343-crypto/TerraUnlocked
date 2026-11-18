@@ -58,3 +58,14 @@ If the GitHub API check fails, Terra displays the error and provides **OPEN RELE
 - Route overlay now defaults to visible; only verified, physically plausible short segments connect. Long gaps are not silently invented.
 - RESET EXPLORATION deletes raw/trace histories and diagnostics too, because they also contain precise past coordinates.
 - Real-world comparison with Google Maps on the same route is still necessary. Resubscribing cannot manufacture GPS fixes when the provider is unavailable or the sky view is obstructed.
+
+## v0.4.68: Multi-source GNSS and urban canyon continuity
+
+- While TRACK is active, the foreground service subscribes to three Android location streams: Google Play Services `FusedLocationProviderClient`, Android `LocationManager.GPS_PROVIDER` (direct hardware GNSS) and `LocationManager.NETWORK_PROVIDER` (Wi-Fi/cell estimates).
+- `GPS_PROVIDER` can use any satellite constellation supported and enabled by the **phone's hardware and firmware**, including GPS, Galileo, GLONASS and BeiDou. The app cannot manually connect to unrelated orbital satellites or overcome blocked sky view.
+- Direct GNSS and Fused candidates share **one** chronological, confidence/accuracy-filtered discovery pipeline. Rejected or older fixes cannot reset its verified-fix anchor; duplicate provider outputs cannot independently unlock the same location.
+- Network fixes are **preview-only** when GNSS/Fused verified fixes are stale and network estimates are recent with reported horizontal accuracy <=120 m. They never remove fog or become confirmed route segments.
+- Diagnostics and exported raw/verified GPS CSV histories label the receiving source (`FUSED`, `GNSS`, `NETWORK`). The optional GNSS status callback periodically logs visible satellites, satellites used in a fix and supported constellation labels.
+- The watchdog checks Fused and direct GNSS streams separately; it can re-subscribe a stalled GNSS listener. Fused resubscribe remains rate-limited. The check runs every 15 seconds.
+- The map status line labels the location source. Network hints remain visibly `GPS ESTIMATE` instead of `GPS VERIFIED`.
+- This increases GPS and CPU activity and may raise battery consumption. It **does not** guarantee fixes beside skyscrapers; compare locked-screen walks and diagnostic CSV with v0.4.67 before attributing improvement.
