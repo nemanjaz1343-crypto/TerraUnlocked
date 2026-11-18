@@ -68,6 +68,11 @@ class TrackingService:Service(),SensorEventListener {
     private val heartbeatHandler=Handler(Looper.getMainLooper())
     private var lastFixElapsed=0L
     private var lastCallbackElapsed=0L
+    private var lastFusedCallbackElapsed=0L
+    private var lastGnssCallbackElapsed=0L
+    private var lastNetworkCallbackElapsed=0L
+    private var lastNetworkLogElapsed=0L
+    private var lastDirectRecoveryElapsed=0L
     private var lastMeasurementNanos=0L
     private var lastGapAlertElapsed=0L
     private var lastRecoveryElapsed=0L
@@ -136,6 +141,8 @@ class TrackingService:Service(),SensorEventListener {
             val elapsed=SystemClock.elapsedRealtime()
             val age=elapsed-lastFixElapsed
             val callbackAge=elapsed-lastCallbackElapsed
+            val fusedAge=elapsed-lastFusedCallbackElapsed
+            val gnssAge=elapsed-lastGnssCallbackElapsed
             // A callback containing only cached measurements is not fresh GPS.
             if(callbackAge>90000L && elapsed-lastNoFixLogElapsed>=120000L) {
                 diagnostics.record(null,callbackAge,0.0,0.0,fixConfidence,
@@ -166,7 +173,8 @@ class TrackingService:Service(),SensorEventListener {
             // Do not let a stationary back-off delay recovery of a missing callback.
             val movingRecently=elapsed-lastActiveMovementElapsed<90000L
             val stationaryLong=elapsed-lastActiveMovementElapsed>180000L
-            val callbackMissing=callbackAge>=60000L
+            val callbackMissing=callbackAge>=45000L
+            val fusedMissing=fusedAge>=60000L
             val verifiedAge=if(lastVerifiedFixElapsed>0L)
                 elapsed-lastVerifiedFixElapsed else 0L
             val verifiedMissing=verifiedAge>=90000L && !ecoMode
@@ -177,18 +185,25 @@ class TrackingService:Service(),SensorEventListener {
                 stationaryLong -> 300000L
                 else -> 180000L
             }
-            if((age>=60000L || callbackMissing || verifiedMissing) &&
+            if((age>=60000L || callbackMissing || fusedMissing || verifiedMissing) &&
                 elapsed-lastRecoveryElapsed>=recoveryInterval && !recoveryPending) {
                 lastRecoveryElapsed=elapsed
                 stationaryRecoveryCount++
                 recoverGps(when {
                     callbackMissing -> "NO_CALLBACK"
+                    fusedMissing -> "NO_FUSED_CALLBACK"
                     verifiedMissing -> "NO_VERIFIED_FIX"
                     movingRecently -> "MOVEMENT"
                     else -> "WATCHDOG"
                 })
             }
-            heartbeatHandler.postDelayed(this,30000L)
+            if(gnssAge>=60000L && elapsed-lastDirectRecoveryElapsed>=120000L) {
+                lastDirectRecoveryElapsed=elapsed
+                diagnostics.record(null,gnssAge,0.0,0.0,fixConfidence,
+                    motionProfile,"EVENT","GNSS_CALLBACK_MISSING")
+                platformSources.recoverGps()
+            }
+            heartbeatHandler.postDelayed(this,15000L)
         }
     }
     private fun saveTrackingRequested(active:Boolean) {
@@ -198,6 +213,42 @@ class TrackingService:Service(),SensorEventListener {
     private val store by lazy {DiscoveryStore(this)}
     private val gpsHistory by lazy {GpsHistoryStore(this)}
     private val fieldNotes by lazy {FieldNotes(this)}
+    private val platformSources by lazy {
+        PlatformLocationSources(this,
+            onLocation={loc,source -> onPlatformLocation(loc,source)},
+            onEvent={reason ->
+                diagnostics.record(null,-1L,0.0,0.0,fixConfidence,
+                    motionProfile,"EVENT",reason)
+            })
+    }
+    private fun onPlatformLocation(loc:Location,source:String) {
+        if(!running)return
+        val now=SystemClock.elapsedRealtime()
+        if(source=="GNSS") {
+            lastGnssCallbackElapsed=now
+            lastCallbackElapsed=now
+            processLocation(loc,source)
+            return
+        }
+        if(source!="NETWORK")return
+        lastNetworkCallbackElapsed=now
+        if(!loc.hasAccuracy() || !loc.latitude.isFinite() || !loc.longitude.isFinite())
+            return
+        val age=(SystemClock.elapsedRealtimeNanos()-loc.elapsedRealtimeNanos)/1000000L
+        gpsHistory.recordRaw(loc,age,"NETWORK")
+        // Network fixes can be street-ambiguous. Show estimates only: never reveal fog.
+        if(now-lastNetworkLogElapsed>=30000L) {
+            lastNetworkLogElapsed=now
+            diagnostics.record(loc,age,0.0,0.0,0,"AUTO/NETWORK",
+                "ESTIMATE","NETWORK_PREVIEW_ONLY")
+        }
+        if(age in 0..15000L && loc.accuracy<=120f &&
+            now-lastVerifiedFixElapsed>=12000L &&
+            System.currentTimeMillis()-lastBroadcast>=12000L) {
+            lastBroadcast=System.currentTimeMillis()
+            broadcastFix(loc,false,ecoMode,weak=true)
+        }
+    }
     private var lastVisitCheck=0L
     private var previous:Location?=null
     private var lastSaved:Location?=null
@@ -283,237 +334,242 @@ class TrackingService:Service(),SensorEventListener {
         }
         override fun onLocationResult(result:LocationResult) {
             if(!running)return
-            lastCallbackElapsed=SystemClock.elapsedRealtime()
-            // Batched fixes must be processed in measurement order, not arrival order.
-            result.locations.sortedBy { it.elapsedRealtimeNanos }.forEach {loc->
-                if(!loc.hasAccuracy() || !loc.latitude.isFinite() || !loc.longitude.isFinite()) {
-                    diagnostics.record(loc,-1L,0.0,0.0,0,motionProfile,
-                        "REJECTED","INVALID_FIX")
-                    return@forEach
-                }
-                // Keep raw received fixes independently of trusted discoveries.
-                // Ignore stale batched/cached positions for the discovery layer.
-                val fixAgeMs=(android.os.SystemClock.elapsedRealtimeNanos()-loc.elapsedRealtimeNanos)/1000000L
-                gpsHistory.recordRaw(loc,fixAgeMs)
-                if(loc.elapsedRealtimeNanos<=lastMeasurementNanos) {
-                    diagnostics.record(loc,fixAgeMs,0.0,0.0,0,motionProfile,
-                        "REJECTED","DUPLICATE_OR_OUT_OF_ORDER")
-                    return@forEach
-                }
-                lastMeasurementNanos=loc.elapsedRealtimeNanos
-                if(fixAgeMs>25000L || fixAgeMs< -5000L) {
-                    diagnostics.record(loc,fixAgeMs,0.0,0.0,0,motionProfile,
-                        "REJECTED","STALE_FIX")
-                    return@forEach
-                }
-                lastFixElapsed=SystemClock.elapsedRealtime()
-                stationaryRecoveryCount=0
-                if(loc.hasSpeed() && loc.speed>=0.85f)lastActiveMovementElapsed=lastFixElapsed
-                // Recovery remains rate-limited until a trustworthy fix arrives;
-                // inaccurate callbacks must not reset the watchdog cooldown.
-                val prev=previous
-                val seconds=if(prev!=null)(loc.elapsedRealtimeNanos-prev.elapsedRealtimeNanos)/1e9 else 0.0
-                val jump=prev!=null && seconds>0.5 &&
-                    prev.distanceTo(loc)>maxOf(45f,2f*maxOf(prev.accuracy,loc.accuracy)) &&
-                    prev.distanceTo(loc)/seconds>55.0
-                // Re-enter active mode from movement, even with temporarily weak accuracy.
-                // Do this before rejecting locations to prevent a stuck ECO mode in cars.
-                val anchorBeforeFilter=motionAnchor
-                if(ecoMode && anchorBeforeFilter!=null) {
-                    val traveled=anchorBeforeFilter.distanceTo(loc)
-                    // Walking at 1.3m/s previously could not exit ECO while GPS
-                    // reported a 40-100m uncertainty. Wake high-accuracy updates
-                    // even on weak movement, without accepting weak discoveries.
-                    if(loc.accuracy>35f ||
-                       (loc.hasSpeed() && loc.speed>=0.85f) ||
-                       (loc.accuracy<=25f &&
-                           traveled>maxOf(13f,1.25f*loc.accuracy))) {
-                        switchMode(false)
-                        motionAnchor=loc
-                        stationarySince=android.os.SystemClock.elapsedRealtime()
-                    }
-                }
-                if(loc.accuracy>65f || jump) {
-                    fixConfidence=PathIntelligence.assess(
-                        loc.accuracy,fixAgeMs,
-                        if(loc.hasSpeed())loc.speed else Float.NaN,
-                        if(prev!=null)prev.distanceTo(loc).toDouble() else 0.0,
-                        seconds,inertialMoving()).score
-                    diagnostics.record(loc,fixAgeMs,seconds,
-                        if(prev!=null)prev.distanceTo(loc).toDouble() else 0.0,
-                        fixConfidence,motionProfile,"REJECTED",
-                        if(jump)"GPS_JUMP" else "POOR_ACCURACY")
-                    if(prev!=null && seconds>45.0)previous=null
-                    // Report the uncertainty without recording inaccurate exploration.
-                    val now=System.currentTimeMillis()
-                    if(now-lastBroadcast>12000L && loc.accuracy<=120f) {
-                        lastBroadcast=now
-                        broadcastFix(loc,false,ecoMode,weak=true,sampleTime=now)
-                    }
-                    return@forEach
-                }
-                lastGoodFixElapsed=SystemClock.elapsedRealtime()
-                val nowElapsed=android.os.SystemClock.elapsedRealtime()
-                val anchor=motionAnchor
-                if(anchor==null) {
-                    motionAnchor=loc
-                    stationarySince=nowElapsed
-                } else {
-                    val threshold=maxOf(14f,1.25f*maxOf(anchor.accuracy,loc.accuracy))
-                    val moving=(loc.hasSpeed() && loc.speed>=0.85f) ||
-                        (loc.accuracy<=25f && anchor.distanceTo(loc)>threshold)
-                    if(moving) {
-                        motionAnchor=loc
-                        stationarySince=nowElapsed
-                        if(ecoMode)switchMode(false)
-                    }
-                }
-                val now=System.currentTimeMillis()
-                val velocity=if(loc.hasSpeed())loc.speed else Float.NaN
-                val distance=if(prev!=null)prev.distanceTo(loc).toDouble() else 0.0
-                val evidence=PathIntelligence.assess(loc.accuracy,fixAgeMs,
-                    if(velocity.isFinite() && velocity>=0.4f)velocity else Float.NaN,
-                    distance,seconds,inertialMoving())
-                fixConfidence=evidence.score
-                // Weak estimates are preview-only. They cannot unlock fog.
-                if(!evidence.accepted) {
-                    diagnostics.record(loc,fixAgeMs,seconds,distance,
-                        fixConfidence,motionProfile,"REJECTED","LOW_CONFIDENCE")
-                    if(now-lastBroadcast>=12000L) {
-                        lastBroadcast=now
-                        broadcastFix(loc,false,ecoMode,weak=true,sampleTime=now)
-                    }
-                    return@forEach
-                }
-                if(now-lastVisitCheck>60000L && loc.accuracy<=30f) {
-                    lastVisitCheck=now
-                    val entries=fieldNotes.load()
-                    var changed=false
-                    val updated=entries.map { note ->
-                        val d=FloatArray(1)
-                        Location.distanceBetween(loc.latitude,loc.longitude,note.latitude,note.longitude,d)
-                        val lastVisit=note.visits.lastOrNull() ?: 0L
-                        if(d[0]<=35f && now-lastVisit>21600000L) {
-                            changed=true;note.copy(visits=note.visits+now)
-                        } else note
-                    }
-                    if(changed)fieldNotes.save(updated)
-                }
-                // Reject a very fast positional jump when Android itself reports
-                // walking speed. We do not use this jump to anchor the next sample.
-                val priorStable=lastSmoothed
-                val rawDelta=if(priorStable!=null)
-                    (loc.elapsedRealtimeNanos-priorStable.elapsedRealtimeNanos)/1e9 else 0.0
-                if(priorStable!=null && rawDelta in 0.2..20.0 &&
-                    loc.hasSpeed() && loc.speed<3f &&
-                    priorStable.distanceTo(loc)>maxOf(45f,
-                        (4.0*rawDelta).toFloat()+loc.accuracy)) {
-                    diagnostics.record(loc,fixAgeMs,rawDelta,
-                        priorStable.distanceTo(loc).toDouble(),
-                        fixConfidence,motionProfile,"REJECTED","SPEED_CONFLICT")
-                    return@forEach
-                }
-
-                val smooth=Location(loc)
-                if(priorStable!=null && rawDelta in 0.2..12.0 &&
-                    loc.accuracy>12f && (!loc.hasSpeed() || loc.speed<4f) &&
-                    priorStable.distanceTo(loc)<=maxOf(35f,
-                        (3.5*rawDelta).toFloat()+loc.accuracy)) {
-                    // Accuracy-weighted short-range smoothing reduces reflected
-                    // skyscraper signals without dragging the trail over long gaps.
-                    val weight=if(loc.accuracy<=22f)0.65 else 0.48
-                    smooth.latitude=priorStable.latitude*(1.0-weight)+loc.latitude*weight
-                    smooth.longitude=priorStable.longitude*(1.0-weight)+loc.longitude*weight
-                }
-                lastSmoothed=smooth
-                previous=loc
-
-                val saved=lastSaved
-                val step=saved?.distanceTo(smooth) ?: Float.MAX_VALUE
-                val secondsSinceSaved=if(saved!=null)
-                    (loc.elapsedRealtimeNanos-saved.elapsedRealtimeNanos)/1e9 else 0.0
-                val rawSpeed=if(loc.hasSpeed() && loc.speed>=0f)loc.speed
-                    else Float.NaN
-                // A zero or absent speed is common after urban GNSS interruptions.
-                // Derive speed only from sufficiently accurate, recent verified fixes.
-                val positionalSpeed=if(saved!=null)
-                    SpeedEvidence.infer(step,secondsSinceSaved,
-                        loc.accuracy,saved.accuracy)
-                    else Float.NaN
-                val speedMps=SpeedEvidence.combine(
-                    rawSpeed,positionalSpeed,secondsSinceSaved,step,
-                    loc.accuracy,saved?.accuracy ?: Float.NaN)
-                if(speedMps.isFinite() && speedMps>=1.8f && loc.accuracy<=35f)
-                    lastActiveMovementElapsed=nowElapsed
-                // Universal sampling: accuracy and measured motion, never WALK/CAR/SCOOTER.
-                motionProfile="AUTO"
-                val spacing=TraceReconstruction.sampleSpacing(
-                    loc.accuracy,speedMps,inertialMoving())
-                // A single erroneous 'good accuracy' result should not draw a
-                // false isolated discovery 100m away from a walking trajectory.
-                val estimatedTravelSpeed=if(secondsSinceSaved>0.0 && saved!=null)
-                    step/secondsSinceSaved else 0.0
-                val plausible= saved==null || secondsSinceSaved>20.0 ||
-                    estimatedTravelSpeed<=when {
-                        speedMps.isFinite() && speedMps>=7f ->
-                            maxOf(20.0,speedMps*2.0+5.0)
-                        speedMps.isFinite() && speedMps>=2f ->
-                            maxOf(8.0,speedMps*2.0+3.0)
-                        else -> 6.0
-                    }
-                if(plausible) {
-                    // Only coherent verified fixes reset the no-verified-fix watchdog.
-                    if(lastVerifiedFixElapsed<lastRecoveryElapsed &&
-                        lastRecoveryElapsed>0L) {
-                        diagnostics.record(loc,fixAgeMs,secondsSinceSaved,
-                            if(step.isFinite())step.toDouble() else 0.0,
-                            fixConfidence,motionProfile,"EVENT",
-                            "VERIFIED_GPS_AFTER_RECOVERY")
-                    }
-                    lastVerifiedFixElapsed=nowElapsed
-                }
-                // Record trustworthy intermediate fixes more frequently while moving.
-                // Avoid excessive stationary samples and retain jump protection.
-                val moved=plausible && (saved==null ||
-                    (secondsSinceSaved>0.0 && step>=spacing))
-                if(moved) {
-                    // Use the measurement timestamp, NOT the shared callback time.
-                    // Batched fixes arriving together must remain ordered and joinable.
-                    val measuredAt=(now-fixAgeMs.coerceAtLeast(0L))
-                        .coerceAtLeast(lastRecordedTimestamp+1L)
-                    lastRecordedTimestamp=measuredAt
-                    store.add(DiscoveryPoint(smooth.latitude,smooth.longitude,
-                        false,measuredAt,loc.accuracy,
-                        if(speedMps.isFinite())speedMps else Float.NaN,
-                        fixConfidence))
-                    lastSaved=Location(smooth)
-                    gpsHistory.recordVerified(smooth,measuredAt,
-                        if(speedMps.isFinite())speedMps else Float.NaN)
-                    diagnostics.record(loc,fixAgeMs,secondsSinceSaved,
-                        if(saved!=null && step.isFinite())step.toDouble() else 0.0,
-                        fixConfidence,motionProfile,"SAVED","VERIFIED")
-                    if(now-lastBroadcast>=1000L) {
-                        lastBroadcast=now
-                        broadcastFix(loc,true,ecoMode,sampleTime=measuredAt,
-                            discoveryPosition=smooth)
-                    } else {
-                        // Preserve UI sync even if several batched GPS fixes
-                        // are stored in the same callback.
-                        broadcastFix(loc,true,ecoMode,sampleTime=measuredAt,
-                            discoveryPosition=smooth)
-                    }
-                } else {
-                    diagnostics.record(loc,fixAgeMs,secondsSinceSaved,
-                        if(saved!=null && step.isFinite())step.toDouble() else 0.0,
-                        fixConfidence,motionProfile,"SKIPPED",
-                        if(!plausible)"IMPLAUSIBLE_STEP" else "BELOW_SPACING")
-                    if(now-lastBroadcast>=15000L) {
-                    lastBroadcast=now
-                    broadcastFix(loc,false,ecoMode,sampleTime=now)
-                    }
-                }
+            lastFusedCallbackElapsed=SystemClock.elapsedRealtime()
+            lastCallbackElapsed=lastFusedCallbackElapsed
+            result.locations.sortedBy { it.elapsedRealtimeNanos }.forEach { loc ->
+                processLocation(loc,"FUSED")
             }
         }
+    }
+    private fun processLocation(loc:Location,source:String) {
+        if(!running)return
+            if(!loc.hasAccuracy() || !loc.latitude.isFinite() || !loc.longitude.isFinite()) {
+                diagnostics.record(loc,-1L,0.0,0.0,0,"$motionProfile/$source",
+                    "REJECTED","INVALID_FIX")
+                return
+            }
+            // Keep raw received fixes independently of trusted discoveries.
+            // Ignore stale batched/cached positions for the discovery layer.
+            val fixAgeMs=(android.os.SystemClock.elapsedRealtimeNanos()-loc.elapsedRealtimeNanos)/1000000L
+            gpsHistory.recordRaw(loc,fixAgeMs,source)
+            if(loc.elapsedRealtimeNanos<=lastMeasurementNanos) {
+                diagnostics.record(loc,fixAgeMs,0.0,0.0,0,"$motionProfile/$source",
+                    "REJECTED","DUPLICATE_OR_OUT_OF_ORDER")
+                return
+            }
+            if(fixAgeMs>25000L || fixAgeMs< -5000L) {
+                diagnostics.record(loc,fixAgeMs,0.0,0.0,0,"$motionProfile/$source",
+                    "REJECTED","STALE_FIX")
+                return
+            }
+            lastFixElapsed=SystemClock.elapsedRealtime()
+            stationaryRecoveryCount=0
+            if(loc.hasSpeed() && loc.speed>=0.85f)lastActiveMovementElapsed=lastFixElapsed
+            // Recovery remains rate-limited until a trustworthy fix arrives;
+            // inaccurate callbacks must not reset the watchdog cooldown.
+            val prev=previous
+            val seconds=if(prev!=null)(loc.elapsedRealtimeNanos-prev.elapsedRealtimeNanos)/1e9 else 0.0
+            val jump=prev!=null && seconds>0.5 &&
+                prev.distanceTo(loc)>maxOf(45f,2f*maxOf(prev.accuracy,loc.accuracy)) &&
+                prev.distanceTo(loc)/seconds>55.0
+            // Re-enter active mode from movement, even with temporarily weak accuracy.
+            // Do this before rejecting locations to prevent a stuck ECO mode in cars.
+            val anchorBeforeFilter=motionAnchor
+            if(ecoMode && anchorBeforeFilter!=null) {
+                val traveled=anchorBeforeFilter.distanceTo(loc)
+                // Walking at 1.3m/s previously could not exit ECO while GPS
+                // reported a 40-100m uncertainty. Wake high-accuracy updates
+                // even on weak movement, without accepting weak discoveries.
+                if(loc.accuracy>35f ||
+                   (loc.hasSpeed() && loc.speed>=0.85f) ||
+                   (loc.accuracy<=25f &&
+                       traveled>maxOf(13f,1.25f*loc.accuracy))) {
+                    switchMode(false)
+                    motionAnchor=loc
+                    stationarySince=android.os.SystemClock.elapsedRealtime()
+                }
+            }
+            if(loc.accuracy>65f || jump) {
+                fixConfidence=PathIntelligence.assess(
+                    loc.accuracy,fixAgeMs,
+                    if(loc.hasSpeed())loc.speed else Float.NaN,
+                    if(prev!=null)prev.distanceTo(loc).toDouble() else 0.0,
+                    seconds,inertialMoving()).score
+                diagnostics.record(loc,fixAgeMs,seconds,
+                    if(prev!=null)prev.distanceTo(loc).toDouble() else 0.0,
+                    fixConfidence,"$motionProfile/$source","REJECTED",
+                    if(jump)"GPS_JUMP" else "POOR_ACCURACY")
+                if(prev!=null && seconds>45.0)previous=null
+                // Report the uncertainty without recording inaccurate exploration.
+                val now=System.currentTimeMillis()
+                if(now-lastBroadcast>12000L && loc.accuracy<=120f) {
+                    lastBroadcast=now
+                    broadcastFix(loc,false,ecoMode,weak=true,sampleTime=now)
+                }
+                return
+            }
+            lastGoodFixElapsed=SystemClock.elapsedRealtime()
+            val nowElapsed=android.os.SystemClock.elapsedRealtime()
+            val anchor=motionAnchor
+            if(anchor==null) {
+                motionAnchor=loc
+                stationarySince=nowElapsed
+            } else {
+                val threshold=maxOf(14f,1.25f*maxOf(anchor.accuracy,loc.accuracy))
+                val moving=(loc.hasSpeed() && loc.speed>=0.85f) ||
+                    (loc.accuracy<=25f && anchor.distanceTo(loc)>threshold)
+                if(moving) {
+                    motionAnchor=loc
+                    stationarySince=nowElapsed
+                    if(ecoMode)switchMode(false)
+                }
+            }
+            val now=System.currentTimeMillis()
+            val velocity=if(loc.hasSpeed())loc.speed else Float.NaN
+            val distance=if(prev!=null)prev.distanceTo(loc).toDouble() else 0.0
+            val evidence=PathIntelligence.assess(loc.accuracy,fixAgeMs,
+                if(velocity.isFinite() && velocity>=0.4f)velocity else Float.NaN,
+                distance,seconds,inertialMoving())
+            fixConfidence=evidence.score
+            // Weak estimates are preview-only. They cannot unlock fog.
+            if(!evidence.accepted) {
+                diagnostics.record(loc,fixAgeMs,seconds,distance,
+                    fixConfidence,"$motionProfile/$source","REJECTED","LOW_CONFIDENCE")
+                if(now-lastBroadcast>=12000L) {
+                    lastBroadcast=now
+                    broadcastFix(loc,false,ecoMode,weak=true,sampleTime=now)
+                }
+                return
+            }
+            if(now-lastVisitCheck>60000L && loc.accuracy<=30f) {
+                lastVisitCheck=now
+                val entries=fieldNotes.load()
+                var changed=false
+                val updated=entries.map { note ->
+                    val d=FloatArray(1)
+                    Location.distanceBetween(loc.latitude,loc.longitude,note.latitude,note.longitude,d)
+                    val lastVisit=note.visits.lastOrNull() ?: 0L
+                    if(d[0]<=35f && now-lastVisit>21600000L) {
+                        changed=true;note.copy(visits=note.visits+now)
+                    } else note
+                }
+                if(changed)fieldNotes.save(updated)
+            }
+            // Reject a very fast positional jump when Android itself reports
+            // walking speed. We do not use this jump to anchor the next sample.
+            val priorStable=lastSmoothed
+            val rawDelta=if(priorStable!=null)
+                (loc.elapsedRealtimeNanos-priorStable.elapsedRealtimeNanos)/1e9 else 0.0
+            if(priorStable!=null && rawDelta in 0.2..20.0 &&
+                loc.hasSpeed() && loc.speed<3f &&
+                priorStable.distanceTo(loc)>maxOf(45f,
+                    (4.0*rawDelta).toFloat()+loc.accuracy)) {
+                diagnostics.record(loc,fixAgeMs,rawDelta,
+                    priorStable.distanceTo(loc).toDouble(),
+                    fixConfidence,"$motionProfile/$source","REJECTED","SPEED_CONFLICT")
+                return
+            }
+
+            val smooth=Location(loc)
+            if(priorStable!=null && rawDelta in 0.2..12.0 &&
+                loc.accuracy>12f && (!loc.hasSpeed() || loc.speed<4f) &&
+                priorStable.distanceTo(loc)<=maxOf(35f,
+                    (3.5*rawDelta).toFloat()+loc.accuracy)) {
+                // Accuracy-weighted short-range smoothing reduces reflected
+                // skyscraper signals without dragging the trail over long gaps.
+                val weight=if(loc.accuracy<=22f)0.65 else 0.48
+                smooth.latitude=priorStable.latitude*(1.0-weight)+loc.latitude*weight
+                smooth.longitude=priorStable.longitude*(1.0-weight)+loc.longitude*weight
+            }
+            lastSmoothed=smooth
+            lastMeasurementNanos=loc.elapsedRealtimeNanos
+            previous=loc
+
+            val saved=lastSaved
+            val step=saved?.distanceTo(smooth) ?: Float.MAX_VALUE
+            val secondsSinceSaved=if(saved!=null)
+                (loc.elapsedRealtimeNanos-saved.elapsedRealtimeNanos)/1e9 else 0.0
+            val rawSpeed=if(loc.hasSpeed() && loc.speed>=0f)loc.speed
+                else Float.NaN
+            // A zero or absent speed is common after urban GNSS interruptions.
+            // Derive speed only from sufficiently accurate, recent verified fixes.
+            val positionalSpeed=if(saved!=null)
+                SpeedEvidence.infer(step,secondsSinceSaved,
+                    loc.accuracy,saved.accuracy)
+                else Float.NaN
+            val speedMps=SpeedEvidence.combine(
+                rawSpeed,positionalSpeed,secondsSinceSaved,step,
+                loc.accuracy,saved?.accuracy ?: Float.NaN)
+            if(speedMps.isFinite() && speedMps>=1.8f && loc.accuracy<=35f)
+                lastActiveMovementElapsed=nowElapsed
+            // Universal sampling: accuracy and measured motion, never WALK/CAR/SCOOTER.
+            motionProfile="AUTO"
+            val spacing=TraceReconstruction.sampleSpacing(
+                loc.accuracy,speedMps,inertialMoving())
+            // A single erroneous 'good accuracy' result should not draw a
+            // false isolated discovery 100m away from a walking trajectory.
+            val estimatedTravelSpeed=if(secondsSinceSaved>0.0 && saved!=null)
+                step/secondsSinceSaved else 0.0
+            val plausible= saved==null || secondsSinceSaved>20.0 ||
+                estimatedTravelSpeed<=when {
+                    speedMps.isFinite() && speedMps>=7f ->
+                        maxOf(20.0,speedMps*2.0+5.0)
+                    speedMps.isFinite() && speedMps>=2f ->
+                        maxOf(8.0,speedMps*2.0+3.0)
+                    else -> 6.0
+                }
+            if(plausible) {
+                // Only coherent verified fixes reset the no-verified-fix watchdog.
+                if(lastVerifiedFixElapsed<lastRecoveryElapsed &&
+                    lastRecoveryElapsed>0L) {
+                    diagnostics.record(loc,fixAgeMs,secondsSinceSaved,
+                        if(step.isFinite())step.toDouble() else 0.0,
+                        fixConfidence,"$motionProfile/$source","EVENT",
+                        "VERIFIED_GPS_AFTER_RECOVERY")
+                }
+                lastVerifiedFixElapsed=nowElapsed
+            }
+            // Record trustworthy intermediate fixes more frequently while moving.
+            // Avoid excessive stationary samples and retain jump protection.
+            val moved=plausible && (saved==null ||
+                (secondsSinceSaved>0.0 && step>=spacing))
+            if(moved) {
+                // Use the measurement timestamp, NOT the shared callback time.
+                // Batched fixes arriving together must remain ordered and joinable.
+                val measuredAt=(now-fixAgeMs.coerceAtLeast(0L))
+                    .coerceAtLeast(lastRecordedTimestamp+1L)
+                lastRecordedTimestamp=measuredAt
+                store.add(DiscoveryPoint(smooth.latitude,smooth.longitude,
+                    false,measuredAt,loc.accuracy,
+                    if(speedMps.isFinite())speedMps else Float.NaN,
+                    fixConfidence))
+                lastSaved=Location(smooth)
+                gpsHistory.recordVerified(smooth,measuredAt,
+                    if(speedMps.isFinite())speedMps else Float.NaN,source)
+                diagnostics.record(loc,fixAgeMs,secondsSinceSaved,
+                    if(saved!=null && step.isFinite())step.toDouble() else 0.0,
+                    fixConfidence,"$motionProfile/$source","SAVED","VERIFIED")
+                if(now-lastBroadcast>=1000L) {
+                    lastBroadcast=now
+                    broadcastFix(loc,true,ecoMode,sampleTime=measuredAt,
+                        discoveryPosition=smooth)
+                } else {
+                    // Preserve UI sync even if several batched GPS fixes
+                    // are stored in the same callback.
+                    broadcastFix(loc,true,ecoMode,sampleTime=measuredAt,
+                        discoveryPosition=smooth)
+                }
+            } else {
+                diagnostics.record(loc,fixAgeMs,secondsSinceSaved,
+                    if(saved!=null && step.isFinite())step.toDouble() else 0.0,
+                    fixConfidence,"$motionProfile/$source","SKIPPED",
+                    if(!plausible)"IMPLAUSIBLE_STEP" else "BELOW_SPACING")
+                if(now-lastBroadcast>=15000L) {
+                lastBroadcast=now
+                broadcastFix(loc,false,ecoMode,sampleTime=now)
+                }
+            }
+
     }
     override fun onBind(intent:Intent?):IBinder?=null
     override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int {
@@ -525,6 +581,7 @@ class TrackingService:Service(),SensorEventListener {
             heartbeatHandler.removeCallbacks(heartbeat)
             stopMotionSensors()
             client.removeLocationUpdates(callback)
+            platformSources.stop()
             store.replaceAll(emptyList())
             PathStore(this).save(emptyList())
             gpsHistory.clear()
@@ -563,6 +620,11 @@ class TrackingService:Service(),SensorEventListener {
         saveTrackingRequested(true)
         lastFixElapsed=SystemClock.elapsedRealtime()
         lastCallbackElapsed=lastFixElapsed
+        lastFusedCallbackElapsed=lastFixElapsed
+        lastGnssCallbackElapsed=lastFixElapsed
+        lastNetworkCallbackElapsed=lastFixElapsed
+        lastDirectRecoveryElapsed=lastFixElapsed
+        lastNetworkLogElapsed=0L
         lastMeasurementNanos=0L
         lastGapAlertElapsed=0L
         lastRecoveryElapsed=0L
@@ -575,7 +637,7 @@ class TrackingService:Service(),SensorEventListener {
         lastProviderAvailable=null
         recoveryPending=false
         heartbeatHandler.removeCallbacks(heartbeat)
-        heartbeatHandler.postDelayed(heartbeat,30000L)
+        heartbeatHandler.postDelayed(heartbeat,15000L)
         startMotionSensors()
         sendBroadcast(Intent(ACTION_STATE).setPackage(packageName).putExtra("running",true))
         ecoMode=false
@@ -589,6 +651,8 @@ class TrackingService:Service(),SensorEventListener {
         motionProfile="WALK"
         stationarySince=0L
         lastSwitch=0L
+        // The platform GNSS and network channels are independent of Google Play Services.
+        platformSources.start()
         val request=activeRequest()
         try {
             client.requestLocationUpdates(request,callback,mainLooper)
@@ -612,6 +676,7 @@ class TrackingService:Service(),SensorEventListener {
         heartbeatHandler.removeCallbacks(heartbeat)
         stopMotionSensors()
         client.removeLocationUpdates(callback)
+        platformSources.stop()
         sendBroadcast(Intent(ACTION_STATE).setPackage(packageName).putExtra("running",false))
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -629,6 +694,7 @@ class TrackingService:Service(),SensorEventListener {
         heartbeatHandler.removeCallbacks(heartbeat)
         stopMotionSensors()
         client.removeLocationUpdates(callback)
+        platformSources.stop()
         super.onDestroy()
     }
 }
