@@ -242,11 +242,11 @@ class TrackingService:Service(),SensorEventListener {
             diagnostics.record(loc,age,0.0,0.0,0,"AUTO/NETWORK",
                 "ESTIMATE","NETWORK_PREVIEW_ONLY")
         }
-        if(age in 0..15000L && loc.accuracy<=120f &&
-            now-lastVerifiedFixElapsed>=12000L &&
+        if(NetworkEstimatePolicy.showEstimate(
+                loc.accuracy,age,now-lastVerifiedFixElapsed) &&
             System.currentTimeMillis()-lastBroadcast>=12000L) {
             lastBroadcast=System.currentTimeMillis()
-            broadcastFix(loc,false,ecoMode,weak=true)
+            broadcastFix(loc,false,ecoMode,weak=true,source="NETWORK")
         }
     }
     private var lastVisitCheck=0L
@@ -263,7 +263,8 @@ class TrackingService:Service(),SensorEventListener {
     private var lastBroadcast=0L
     private var lastVisual:Location?=null
     private fun broadcastFix(loc:Location,revealed:Boolean,eco:Boolean,weak:Boolean=false,
-        sampleTime:Long=System.currentTimeMillis(),discoveryPosition:Location?=null) {
+        sampleTime:Long=System.currentTimeMillis(),discoveryPosition:Location?=null,
+        source:String="FUSED") {
         val previous=lastVisual
         // Filter mild stationary wander for the on-screen marker only, never recorded GPS.
         val stationary=!loc.hasSpeed() || loc.speed<1.5f
@@ -292,6 +293,7 @@ class TrackingService:Service(),SensorEventListener {
             putExtra("inertialActive",inertialMoving())
             putExtra("eco",eco);putExtra("weak",weak)
             putExtra("motionProfile",motionProfile)
+            putExtra("source",source)
             putExtra("timestamp",sampleTime)
             putExtra("speed",if(loc.hasSpeed())loc.speed else -1f)
         })
@@ -404,7 +406,7 @@ class TrackingService:Service(),SensorEventListener {
                 val now=System.currentTimeMillis()
                 if(now-lastBroadcast>12000L && loc.accuracy<=120f) {
                     lastBroadcast=now
-                    broadcastFix(loc,false,ecoMode,weak=true,sampleTime=now)
+                    broadcastFix(loc,false,ecoMode,weak=true,sampleTime=now,source=source)
                 }
                 return
             }
@@ -437,7 +439,7 @@ class TrackingService:Service(),SensorEventListener {
                     fixConfidence,"$motionProfile/$source","REJECTED","LOW_CONFIDENCE")
                 if(now-lastBroadcast>=12000L) {
                     lastBroadcast=now
-                    broadcastFix(loc,false,ecoMode,weak=true,sampleTime=now)
+                    broadcastFix(loc,false,ecoMode,weak=true,sampleTime=now,source=source)
                 }
                 return
             }
@@ -552,12 +554,12 @@ class TrackingService:Service(),SensorEventListener {
                 if(now-lastBroadcast>=1000L) {
                     lastBroadcast=now
                     broadcastFix(loc,true,ecoMode,sampleTime=measuredAt,
-                        discoveryPosition=smooth)
+                        discoveryPosition=smooth,source=source)
                 } else {
                     // Preserve UI sync even if several batched GPS fixes
                     // are stored in the same callback.
                     broadcastFix(loc,true,ecoMode,sampleTime=measuredAt,
-                        discoveryPosition=smooth)
+                        discoveryPosition=smooth,source=source)
                 }
             } else {
                 diagnostics.record(loc,fixAgeMs,secondsSinceSaved,
@@ -566,7 +568,7 @@ class TrackingService:Service(),SensorEventListener {
                     if(!plausible)"IMPLAUSIBLE_STEP" else "BELOW_SPACING")
                 if(now-lastBroadcast>=15000L) {
                 lastBroadcast=now
-                broadcastFix(loc,false,ecoMode,sampleTime=now)
+                broadcastFix(loc,false,ecoMode,sampleTime=now,source=source)
                 }
             }
 
