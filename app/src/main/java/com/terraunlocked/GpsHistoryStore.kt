@@ -16,8 +16,24 @@ import java.util.Locale
 internal class GpsHistoryStore(context:Context) {
     private val raw=File(context.filesDir,"terra_gps_raw.csv")
     private val trace=File(context.filesDir,"terra_gps_trace.csv")
-    private val rawHeader="fix_utc_ms,lat,lon,accuracy_m,speed_mps,age_ms\n"
-    private val traceHeader="segment,fix_utc_ms,lat,lon,accuracy_m,speed_mps\n"
+    private val rawHeader="fix_utc_ms,lat,lon,accuracy_m,speed_mps,age_ms,source\n"
+    private val traceHeader="segment,fix_utc_ms,lat,lon,accuracy_m,speed_mps,source\n"
+    init {
+        // Older 0.4.67 backups contained no source column; migrate locally.
+        fun upgrade(file:File,header:String) {
+            if(!file.exists())return
+            runCatching {
+                val old=file.readLines()
+                if(old.isEmpty() || old.first()==header.trim())return@runCatching
+                if(old.first().split(",").size!=header.trim().split(",").size-1)
+                    return@runCatching
+                file.writeText(header+old.drop(1).filter{it.isNotBlank()}
+                    .joinToString("\n",postfix=if(old.size>1)"\n" else ""){it+",LEGACY"})
+            }
+        }
+        upgrade(raw,rawHeader)
+        upgrade(trace,traceHeader)
+    }
     private var previous:TraceReconstruction.Fix?=null
     private var segmentId=runCatching {
         trace.useLines { lines ->
@@ -42,17 +58,19 @@ internal class GpsHistoryStore(context:Context) {
         }
     }
 
-    @Synchronized fun recordRaw(loc:Location,ageMs:Long) {
+    @Synchronized fun recordRaw(loc:Location,ageMs:Long,source:String="FUSED") {
         if(!loc.latitude.isFinite() || !loc.longitude.isFinite())return
         val speed=if(loc.hasSpeed())loc.speed.toDouble() else Double.NaN
         append(raw,rawHeader,listOf(
             loc.time.toString(),number(loc.latitude,7),number(loc.longitude,7),
             if(loc.hasAccuracy())number(loc.accuracy.toDouble(),1) else "",
-            number(speed,2),ageMs.toString()
+            number(speed,2),ageMs.toString(),source
         ).joinToString(",")+"\n",2_000_000L,10000)
     }
 
-    @Synchronized fun recordVerified(loc:Location,measuredAt:Long,speed:Float) {
+    @Synchronized fun recordVerified(
+        loc:Location,measuredAt:Long,speed:Float,source:String="FUSED"
+    ) {
         if(!loc.latitude.isFinite() || !loc.longitude.isFinite())return
         val current=TraceReconstruction.Fix(
             loc.latitude,loc.longitude,measuredAt,loc.accuracy,speed
@@ -62,7 +80,7 @@ internal class GpsHistoryStore(context:Context) {
         append(trace,traceHeader,listOf(
             segmentId.toString(),measuredAt.toString(),
             number(loc.latitude,7),number(loc.longitude,7),
-            number(loc.accuracy.toDouble(),1),number(speed.toDouble(),2)
+            number(loc.accuracy.toDouble(),1),number(speed.toDouble(),2),source
         ).joinToString(",")+"\n",8_000_000L,70000)
         previous=current
     }

@@ -408,6 +408,7 @@ class MainActivity : Activity(), SensorEventListener {
             status.text=(if(weak)"GPS ESTIMATE" else
                 if(intent.getBooleanExtra("eco",false))"GPS ECO" else "GPS VERIFIED")+
                 " / "+(intent.getStringExtra("motionProfile") ?: "WALK")+
+                " / "+(intent.getStringExtra("source") ?: "FUSED")+
                 " / C "+confidence+"/100"+
                 " / ±"+fogOverlay.positionAccuracy.toInt()+"m"
             val now=System.currentTimeMillis()
