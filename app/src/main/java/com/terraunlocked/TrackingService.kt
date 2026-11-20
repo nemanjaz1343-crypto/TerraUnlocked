@@ -72,7 +72,7 @@ class TrackingService:Service(),SensorEventListener {
     private var lastGnssCallbackElapsed=0L
     private var lastNetworkCallbackElapsed=0L
     private var lastNetworkLogElapsed=0L
-    private var lastDirectRecoveryElapsed=0L
+    private var lastGnssSearchingLogElapsed=0L
     private var lastMeasurementNanos=0L
     private var lastGapAlertElapsed=0L
     private var lastRecoveryElapsed=0L
@@ -168,41 +168,23 @@ class TrackingService:Service(),SensorEventListener {
                 (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
                     .notify(1801,makeNotification("GPS signal missing / "+(age/1000L)+"s"))
             }
-            // A stream of inaccurate fixes is not a healthy tracking session:
-            // restart the provider when no verified fix arrives for 90 seconds.
-            // Do not let a stationary back-off delay recovery of a missing callback.
-            val movingRecently=elapsed-lastActiveMovementElapsed<90000L
-            val stationaryLong=elapsed-lastActiveMovementElapsed>180000L
-            val callbackMissing=callbackAge>=45000L
-            val fusedMissing=fusedAge>=60000L
-            val verifiedAge=if(lastVerifiedFixElapsed>0L)
-                elapsed-lastVerifiedFixElapsed else 0L
-            val verifiedMissing=verifiedAge>=90000L && !ecoMode
-            val recoveryInterval=when {
-                callbackMissing -> 60000L
-                verifiedMissing -> 90000L
-                movingRecently -> 60000L
-                stationaryLong -> 300000L
-                else -> 180000L
-            }
-            if((age>=60000L || callbackMissing || fusedMissing || verifiedMissing) &&
-                elapsed-lastRecoveryElapsed>=recoveryInterval && !recoveryPending) {
+            // Do not repeatedly unsubscribe a healthy but inaccurate stream:
+            // in dense streets the Fused provider may have no satellite fix yet
+            // while it is still actively processing fresh location samples.
+            if(GpsRecoveryPolicy.recoverFused(
+                    fusedAge,elapsed-lastRecoveryElapsed,recoveryPending)) {
                 lastRecoveryElapsed=elapsed
-                stationaryRecoveryCount++
-                recoverGps(when {
-                    callbackMissing -> "NO_CALLBACK"
-                    fusedMissing -> "NO_FUSED_CALLBACK"
-                    verifiedMissing -> "NO_VERIFIED_FIX"
-                    movingRecently -> "MOVEMENT"
-                    else -> "WATCHDOG"
-                })
+                recoverGps("NO_FUSED_CALLBACK")
             }
-            if(gnssAge>=60000L && elapsed-lastDirectRecoveryElapsed>=120000L) {
-                lastDirectRecoveryElapsed=elapsed
+            if(gnssAge>=120000L &&
+                elapsed-lastGnssSearchingLogElapsed>=300000L) {
+                lastGnssSearchingLogElapsed=elapsed
                 diagnostics.record(null,gnssAge,0.0,0.0,fixConfidence,
-                    motionProfile,"EVENT","GNSS_CALLBACK_MISSING")
-                platformSources.recoverGps()
+                    motionProfile,"EVENT","GNSS_SEARCHING_NO_DIRECT_FIX")
             }
+            // Only restart direct GNSS if both fixes AND engine status fall
+            // silent for a prolonged period; otherwise allow acquisition.
+            platformSources.recoverIfSilent(gnssAge)
             heartbeatHandler.postDelayed(this,15000L)
         }
     }
@@ -625,11 +607,11 @@ class TrackingService:Service(),SensorEventListener {
         lastFusedCallbackElapsed=lastFixElapsed
         lastGnssCallbackElapsed=lastFixElapsed
         lastNetworkCallbackElapsed=lastFixElapsed
-        lastDirectRecoveryElapsed=lastFixElapsed
+        lastGnssSearchingLogElapsed=lastFixElapsed
         lastNetworkLogElapsed=0L
         lastMeasurementNanos=0L
         lastGapAlertElapsed=0L
-        lastRecoveryElapsed=0L
+        lastRecoveryElapsed=lastFixElapsed
         lastGoodFixElapsed=0L
         lastVerifiedFixElapsed=lastFixElapsed
         lastNoFixLogElapsed=0L
