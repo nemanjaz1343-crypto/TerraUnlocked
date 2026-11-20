@@ -69,3 +69,12 @@ If the GitHub API check fails, Terra displays the error and provides **OPEN RELE
 - The watchdog checks Fused and direct GNSS streams separately; it can re-subscribe a stalled GNSS listener. Fused resubscribe remains rate-limited. The check runs every 15 seconds.
 - The map status line labels the location source. Network hints remain visibly `GPS ESTIMATE` instead of `GPS VERIFIED`.
 - This increases GPS and CPU activity and may raise battery consumption. It **does not** guarantee fixes beside skyscrapers; compare locked-screen walks and diagnostic CSV with v0.4.67 before attributing improvement.
+
+## v0.4.69: Continuous GNSS acquisition instead of repeated restart
+
+- The exported November 20, 2026 diagnosis included 303 direct-GNSS resets and no direct GNSS coordinate fixes on that date. Satellite-status samples repeatedly reported 1 visible, 0 used. Fused continued providing coordinate callbacks while direct GNSS did not.
+- Keep direct Android GNSS subscribed while GNSS satellite-status callbacks show an active search, even with zero satellites used for a fix. Recover the direct listener only after 5 minutes without either GNSS fixes or satellite-status activity, and at least 10 minutes since the previous attempt.
+- Keep the Google Fused listener subscribed if fresh callbacks arrive but accuracy is poor. Re-subscribe only after a genuine 60-second callback outage, with a 3-minute minimum cooldown.
+- The 15-second heartbeat remains; diagnostic `GNSS_SEARCHING_NO_DIRECT_FIX` is now rate-limited to 5 minutes. Real GNSS signal blockage is reported rather than papered over with fabricated coordinates.
+- Conservative discovery thresholds, 3-m minimum moving spacing, and protection against unverified fog removal remain unchanged.
+- This change is a hypothesis-driven recovery fix, not proof that the physical GNSS chipset will acquire a satellite fix beside skyscrapers. Test under clear sky and inside JLT and compare satellite counts, accepted fixes and gap durations.
