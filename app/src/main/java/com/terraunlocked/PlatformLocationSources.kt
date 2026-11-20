@@ -33,6 +33,8 @@ internal class PlatformLocationSources(
     private var networkRegistered=false
     private var statusRegistered=false
     private var lastSatelliteLogElapsed=0L
+    private var lastSatelliteActivityElapsed=0L
+    private var lastRecoveryAttemptElapsed=0L
 
     private val gpsListener=object:LocationListener {
         override fun onLocationChanged(location:Location) {
@@ -49,13 +51,22 @@ internal class PlatformLocationSources(
         override fun onProviderDisabled(provider:String) {onEvent("NETWORK_PROVIDER_DISABLED")}
     }
     private val statusCallback=object:GnssStatus.Callback() {
-        override fun onStarted() {onEvent("GNSS_ENGINE_STARTED")}
-        override fun onStopped() {onEvent("GNSS_ENGINE_STOPPED")}
+        override fun onStarted() {
+            lastSatelliteActivityElapsed=SystemClock.elapsedRealtime()
+            onEvent("GNSS_ENGINE_STARTED")
+        }
+        override fun onStopped() {
+            lastSatelliteActivityElapsed=SystemClock.elapsedRealtime()
+            onEvent("GNSS_ENGINE_STOPPED")
+        }
         override fun onFirstFix(ttffMillis:Int) {
             onEvent("GNSS_FIRST_FIX_${ttffMillis}MS")
         }
         override fun onSatelliteStatusChanged(status:GnssStatus) {
             val now=SystemClock.elapsedRealtime()
+            // Every status callback proves the GNSS engine is active, even if it
+            // cannot yet compute a position from obstructed satellites.
+            lastSatelliteActivityElapsed=now
             if(now-lastSatelliteLogElapsed<45000L)return
             lastSatelliteLogElapsed=now
             val families=linkedSetOf<String>()
@@ -121,6 +132,9 @@ internal class PlatformLocationSources(
     @Suppress("MissingPermission")
     fun start() {
         if(!permissionGranted())return
+        val now=SystemClock.elapsedRealtime()
+        lastSatelliteActivityElapsed=now
+        lastRecoveryAttemptElapsed=now
         registerGps()
         registerNetwork()
         try {
@@ -132,13 +146,21 @@ internal class PlatformLocationSources(
         }
     }
 
-    /** A fresh listener subscription can recover a stalled platform callback. */
-    fun recoverGps() {
+    /**
+     * Never reset GNSS while satellite-status callbacks continue to arrive:
+     * searching with poor sky visibility is not the same as a dead listener.
+     */
+    fun recoverIfSilent(gnssFixAgeMs:Long) {
         if(!permissionGranted())return
-        if(gpsRegistered)runCatching { manager.removeUpdates(gpsListener) }
+        val now=SystemClock.elapsedRealtime()
+        if(!GpsRecoveryPolicy.recoverGnss(
+                gnssFixAgeMs,now-lastSatelliteActivityElapsed,
+                now-lastRecoveryAttemptElapsed))return
+        lastRecoveryAttemptElapsed=now
+        if(gpsRegistered)runCatching {manager.removeUpdates(gpsListener)}
         gpsRegistered=false
         registerGps()
-        onEvent("GNSS_PROVIDER_RESTARTED")
+        onEvent("GNSS_RESUBSCRIBE_AFTER_STATUS_SILENCE")
     }
 
     fun stop() {
