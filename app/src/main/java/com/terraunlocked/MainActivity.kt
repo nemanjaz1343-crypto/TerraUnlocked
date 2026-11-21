@@ -1389,6 +1389,10 @@ class MainActivity : Activity(), SensorEventListener {
             applyExpeditionStyle(this)
             setOnClickListener{slideJournal(false);showExpeditionJournal()}
         },LinearLayout.LayoutParams(-1,dp(46)))
+        drawerPanel.addView(action("⌖  KNOWN LOCATIONS").apply {
+            applyExpeditionStyle(this)
+            setOnClickListener{slideJournal(false);showKnownLocations()}
+        },LinearLayout.LayoutParams(-1,dp(46)))
         drawerPanel.addView(action("◈  FIELD STATISTICS").apply {
             applyExpeditionStyle(this)
             setOnClickListener{slideJournal(false);showExplorationStats()}
@@ -1398,15 +1402,21 @@ class MainActivity : Activity(), SensorEventListener {
             setOnClickListener{slideJournal(false)}
         },LinearLayout.LayoutParams(-1,dp(42)))
         journalDrawer.addView(drawerPanel,FrameLayout.LayoutParams(journalWidth,-2,Gravity.END or Gravity.CENTER_VERTICAL))
-        val journalTab=ExpeditionJournalTab(this) {
-            val opening=journalDrawer.translationX>journalWidth/2f
-            slideJournal(opening)
-        }
+        val journalTab=ExpeditionJournalTab(this,
+            onToggle={
+                val opening=journalDrawer.translationX>journalWidth/2f
+                slideJournal(opening)
+            },
+            onLongPress={
+                slideJournal(false)
+                showKnownLocations()
+            }
+        )
         journalTabRef=journalTab
         journalDrawer.addView(journalTab,FrameLayout.LayoutParams(journalTabWidth,dp(90),Gravity.START or Gravity.CENTER_VERTICAL))
         journalDrawer.translationX=journalWidth.toFloat()
         mapArea.addView(journalDrawer,FrameLayout.LayoutParams(
-            journalWidth+journalTabWidth,dp(213),Gravity.END or Gravity.CENTER_VERTICAL))
+            journalWidth+journalTabWidth,dp(272),Gravity.END or Gravity.CENTER_VERTICAL))
         root.addView(mapArea,LinearLayout.LayoutParams(-1,0,1f))
         // Hidden adapter buttons preserve existing activity actions; visual chrome is Canvas based.
         trackButton=action("TRACK")
@@ -2863,6 +2873,70 @@ class MainActivity : Activity(), SensorEventListener {
         pinMoveReticle?.invalidate()
         status.text="MOVE PIN / TOUCH OR DRAG TARGET, THEN CONFIRM"
     }
+    /**
+     * Long-press Journal or choose Known Locations in its drawer.
+     * Stage 1 chooses HOME or OFFICE; stage 2 offers clear, non-destructive
+     * actions on that specific saved destination.
+     */
+    private fun showKnownLocations() {
+        val prefs=getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE)
+        val names=arrayOf("HOME","OFFICE")
+        val choices=names.map { name ->
+            val saved=prefs.getString(name+"_lat",null)?.toDoubleOrNull()!=null &&
+                prefs.getString(name+"_lon",null)?.toDoubleOrNull()!=null
+            (if(name=="HOME")"⌂  " else "▣  ")+name+
+                (if(saved)"  /  SAVED" else "  /  NOT SET")
+        }.toTypedArray()
+        android.app.AlertDialog.Builder(this)
+            .setTitle("EXPEDITION / KNOWN LOCATIONS")
+            .setItems(choices) {_,index-> showKnownLocationActions(names[index]) }
+            .setNegativeButton("CLOSE",null).show()
+    }
+    private fun showKnownLocationActions(name:String) {
+        val prefs=getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE)
+        val lat=prefs.getString(name+"_lat",null)?.toDoubleOrNull()
+        val lon=prefs.getString(name+"_lon",null)?.toDoubleOrNull()
+        val current=fogOverlay.currentPosition
+        val options=arrayOf(
+            "⌖  GO TO $name",
+            "◎  SAVE GPS POSITION AS $name",
+            "▣  SAVE MAP CENTER AS $name",
+            "×  REMOVE $name"
+        )
+        android.app.AlertDialog.Builder(this)
+            .setTitle("$name / LOCATION")
+            .setItems(options) {_,chosen->
+                when(chosen) {
+                    0 -> {
+                        if(lat!=null && lon!=null) {
+                            followUser=false
+                            map.controller.animateTo(GeoPoint(lat,lon))
+                            status.text="$name / TARGET"
+                        } else {
+                            status.text="$name / NOT YET SET"
+                            showKnownLocationActions(name)
+                        }
+                    }
+                    1 -> {
+                        if(current!=null) {
+                            prefs.edit().putString(name+"_lat",current.latitude.toString())
+                                .putString(name+"_lon",current.longitude.toString()).apply()
+                            status.text="$name / GPS POSITION SAVED";refresh()
+                        } else status.text="$name / NO CURRENT GPS"
+                    }
+                    2 -> anchor(name,true)
+                    3 -> android.app.AlertDialog.Builder(this)
+                        .setTitle("REMOVE $name?")
+                        .setMessage("Only the saved HOME/OFFICE marker will be removed. Notes and discovered map remain unchanged.")
+                        .setNegativeButton("KEEP",null)
+                        .setPositiveButton("REMOVE") {_,_->
+                            prefs.edit().remove(name+"_lat").remove(name+"_lon").apply()
+                            status.text="$name / REMOVED";refresh()
+                        }.show()
+                }
+            }.setNegativeButton("BACK") {_,_->showKnownLocations()}.show()
+    }
+
     private fun anchor(name:String,save:Boolean) {
         val prefs=getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE)
         if(save) {
