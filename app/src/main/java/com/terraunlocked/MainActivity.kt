@@ -2244,9 +2244,25 @@ class MainActivity : Activity(), SensorEventListener {
                 setColor(Color.argb(126,31,44,36))
             }
         }
-        panel.addView(label("◎ RECON OBJECTIVES",14,sand))
+        panel.addView(label("◎ "+terms.plural+" / "+ExpeditionThemes.current.label.uppercase(),14,sand))
+        val journeyInfo=label("",11,sage)
+        panel.addView(journeyInfo)
+        val planActions=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
+        planActions.addView(action("◈ "+terms.journey).apply {
+            applyExpeditionStyle(this,journeyStore.enabled)
+            setOnClickListener {showJourneyPlanner()}
+        },LinearLayout.LayoutParams(0,dp(42),1f).apply{
+            setMargins(dp(1),dp(4),dp(2),dp(4))
+        })
+        planActions.addView(action("⌖ NEXT STOP").apply {
+            applyExpeditionStyle(this)
+            setOnClickListener {focusNextJourneyStop()}
+        },LinearLayout.LayoutParams(0,dp(42),1f).apply{
+            setMargins(dp(2),dp(4),dp(1),dp(4))
+        })
+        panel.addView(planActions)
         val search=EditText(this).apply {
-            hint="⌕ Search objectives";setSingleLine(true)
+            hint="⌕ Search "+terms.plural.lowercase(java.util.Locale.US);setSingleLine(true)
             setTextColor(sand);setHintTextColor(sage);textSize=13f
         }
         panel.addView(search)
@@ -2255,12 +2271,22 @@ class MainActivity : Activity(), SensorEventListener {
         panel.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
         fun populate(query:String) {
             list.removeAllViews()
+            val (completed,total)=journeyStore.progress{objectiveStore.completed(it)}
+            journeyInfo.text=if(total==0) "NO "+terms.journey+" / BUILD A MULTI-STOP PLAN"
+                else terms.journey+" / "+completed+"/"+total+
+                    " COMPLETE / "+(if(journeyStore.enabled)"ACTIVE" else "PAUSED")
             (ReconObjectives.all+objectiveStore.customPlaces())
                 .filterNot {objectiveStore.isHidden(it.id)}
                 .filter {it.name.contains(query,true)||it.category.contains(query,true)}
                 .sortedWith(compareBy<ReconObjective> {if(objectiveStore.completed(it.id))2 else if(objectiveStore.active==it.id)0 else 1}.thenBy{it.name})
                 .forEach {o ->
-                    val state=if(objectiveStore.completed(o.id))"✓ DONE" else if(objectiveStore.active==o.id)"● ACTIVE" else "◇ NEW"
+                    val state=when {
+                        objectiveStore.completed(o.id)->"✓ DONE"
+                        journeyStore.enabled && o.id in journeyStore.ids()->
+                            "◈ STOP "+(journeyStore.ids().indexOf(o.id)+1)
+                        objectiveStore.active==o.id->"● ACTIVE"
+                        else->"◇ NEW"
+                    }
                     list.addView(action(state+"  "+o.name+" / "+o.category).apply {
                         gravity=Gravity.CENTER_VERTICAL or Gravity.START
                         setPadding(dp(8),0,dp(5),0)
