@@ -859,14 +859,59 @@ class MainActivity : Activity(), SensorEventListener {
                 return false
             }
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
-                if(shadow || measurePoints.isEmpty()) return
-                val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.argb(190,250,210,130);strokeWidth=3f}
+                if(shadow || measurePoints.isEmpty())return
                 val a=mapView.projection.toPixels(measurePoints[0],Point())
-                canvas.drawCircle(a.x.toFloat(),a.y.toFloat(),5f,paint)
+                val x=a.x.toFloat();val y=a.y.toFloat()
+                val outline=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    style=Paint.Style.STROKE
+                    color=Color.argb(245,12,18,18)
+                    strokeCap=Paint.Cap.ROUND
+                    strokeWidth=dp(8).toFloat()
+                    setShadowLayer(dp(3).toFloat(),0f,dp(1).toFloat(),Color.BLACK)
+                }
+                val luminous=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color=ExpeditionThemes.current.gold
+                    strokeWidth=dp(4).toFloat()
+                    strokeCap=Paint.Cap.ROUND
+                    style=Paint.Style.STROKE
+                }
+                canvas.drawCircle(x,y,dp(6).toFloat(),outline)
+                canvas.drawCircle(x,y,dp(5).toFloat(),luminous)
                 if(measurePoints.size==2) {
                     val b=mapView.projection.toPixels(measurePoints[1],Point())
-                    canvas.drawLine(a.x.toFloat(),a.y.toFloat(),b.x.toFloat(),b.y.toFloat(),paint)
-                    canvas.drawCircle(b.x.toFloat(),b.y.toFloat(),5f,paint)
+                    val bx=b.x.toFloat();val by=b.y.toFloat()
+                    canvas.drawLine(x,y,bx,by,outline)
+                    canvas.drawLine(x,y,bx,by,luminous)
+                    canvas.drawCircle(bx,by,dp(6).toFloat(),outline)
+                    canvas.drawCircle(bx,by,dp(5).toFloat(),luminous)
+                    val metres=gap(measurePoints[0],measurePoints[1])
+                    val caption=if(metres>=1000f)
+                        "%.2f km".format(java.util.Locale.US,metres/1000f)
+                        else "%.0f m".format(java.util.Locale.US,metres)
+                    val ink=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        style=Paint.Style.FILL
+                        color=ExpeditionThemes.current.light
+                        textSize=dp(14).toFloat()
+                        textAlign=Paint.Align.CENTER
+                        typeface=Typeface.create("sans-serif-condensed",Typeface.BOLD)
+                    }
+                    val midX=(x+bx)/2f
+                    val midY=(y+by)/2f-dp(15)
+                    val tw=ink.measureText(caption)
+                    val rect=android.graphics.RectF(
+                        midX-tw/2f-dp(12),midY-dp(20),
+                        midX+tw/2f+dp(12),midY+dp(7))
+                    val back=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color=ExpeditionThemes.current.dark
+                        setShadowLayer(dp(3).toFloat(),0f,dp(2).toFloat(),Color.BLACK)
+                    }
+                    canvas.drawRoundRect(rect,dp(8).toFloat(),dp(8).toFloat(),back)
+                    back.clearShadowLayer()
+                    back.style=Paint.Style.STROKE
+                    back.strokeWidth=dp(1).toFloat()
+                    back.color=ExpeditionThemes.current.gold
+                    canvas.drawRoundRect(rect,dp(8).toFloat(),dp(8).toFloat(),back)
+                    canvas.drawText(caption,midX,midY,ink)
                 }
             }
         })
