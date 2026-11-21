@@ -39,8 +39,10 @@ visual style never changes the requirements to verify a destination.
   current plan. Hiding/deleting an objective also removes it from the plan.
 - Journey is an optional JSON list of stable objective IDs plus an enabled
   flag. It is backed up in optional **journey.json** and restored after
-  places.json, with invalid/deleted IDs ignored. Legacy ZIP archives without
-  journey.json remain compatible.
+  places.json, with invalid/deleted IDs ignored. The optional
+  **objective_state.json** also preserves completed and hidden mission flags
+  plus the last active objective, so journey progress survives backup/restore.
+  Legacy ZIP archives without these entries remain compatible.
 
 ## User location above all map markers
 
