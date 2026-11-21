@@ -2382,6 +2382,8 @@ class MainActivity : Activity(), SensorEventListener {
             .setNegativeButton("CANCEL",null)
             .setPositiveButton("DELETE") {_,_->
                 if(objectiveStore.deleteCustom(o.id)) {
+                    journeyStore.save(journeyStore.ids().filterNot{it==o.id},
+                        validObjectiveIds(),journeyStore.enabled)
                     if(movingObjectiveId==o.id)cancelPinMove()
                     if(pendingObjective?.id==o.id)clearMapPreview()
                     objectiveBubble?.dismiss()
@@ -2408,7 +2410,7 @@ class MainActivity : Activity(), SensorEventListener {
                 setStroke(dp(1),Color.rgb(195,160,93))
             }
         }
-        body.addView(label("FIELD OBJECTIVE / "+o.category,10,sage))
+        body.addView(label(terms.single+" / "+o.category,10,sage))
         body.addView(label("CHECK-IN / WITHIN 100m + 1 CAMERA PHOTO",10,sage))
         body.addView(label(o.name,16,sand).apply{
             setTypeface(Typeface.SERIF,Typeface.BOLD)
@@ -2475,12 +2477,27 @@ class MainActivity : Activity(), SensorEventListener {
                 val remove=objectiveStore.active==o.id
                 objectiveStore.active=if(remove)null else o.id
                 refresh()
-                status.text=if(remove)"MISSION DEACTIVATED / "+o.name.take(30)
-                    else "MISSION ACTIVE / "+o.name.take(30)
+                status.text=if(remove)terms.single+" DEACTIVATED / "+o.name.take(30)
+                    else terms.single+" ACTIVE / "+o.name.take(30)
             },
             (if(objectiveStore.completed(o.id))"✓ COMPLETED" else "▣ PHOTO + COMPLETE") to {
                 popup.dismiss()
                 requestObjectiveProofPhoto(o)
+            }
+        )
+        actionRow(
+            (if(o.id in journeyStore.ids())"✓ IN "+terms.journey
+                else "＋ ADD TO "+terms.journey) to {
+                val added=journeyStore.addOrRemove(o.id,validObjectiveIds())
+                status.text=if(added)terms.journey+" / STOP ADDED"
+                    else terms.journey+" / STOP REMOVED"
+                refresh()
+                popup.dismiss()
+                showObjective(o)
+            },
+            "◈ PLAN "+terms.journey to {
+                popup.dismiss()
+                showJourneyPlanner()
             }
         )
         actionRow(
@@ -2491,6 +2508,9 @@ class MainActivity : Activity(), SensorEventListener {
                 } else {
                     objectiveStore.hide(o.id)
                     if(objectiveStore.active==o.id)objectiveStore.active=null
+                    if(o.id in journeyStore.ids())
+                        journeyStore.save(journeyStore.ids().filterNot{it==o.id},
+                            validObjectiveIds(),journeyStore.enabled)
                     refresh()
                     popup.dismiss()
                 }
