@@ -1682,19 +1682,17 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
     private fun showNoteEditor(where:GeoPoint,kind:String="POI") {
+        val ink=Color.rgb(67,48,28)
+        val sepia=Color.rgb(118,84,53)
         val layout=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
             setPadding(dp(17),dp(16),dp(17),dp(15))
-            background=GradientDrawable().apply {
-                cornerRadius=dp(19).toFloat()
-                setColor(Color.argb(126,31,44,36))
-                setStroke(dp(1),Color.rgb(119,139,106))
-            }
+            background=ExpeditionParchment()
         }
-        layout.addView(label("FIELD ENTRY  /  "+kind,13,sand).apply {
+        layout.addView(label("FIELD ENTRY  /  "+kind,13,ink).apply {
             setTypeface(null,Typeface.BOLD)
         })
-        val preview=label("◆  SELECT MARKER",14,sage)
+        val preview=label("◆  SELECT MARKER",14,sepia)
         layout.addView(preview)
         val iconBar=LinearLayout(this).apply {gravity=Gravity.CENTER;orientation=LinearLayout.HORIZONTAL}
         val icons=listOf("◆","⚑","★","✎","▲","●","⌖","▣")
@@ -1709,12 +1707,12 @@ class MainActivity : Activity(), SensorEventListener {
         layout.addView(iconBar)
         updatePreview()
         val title=EditText(this).apply {
-            hint="Name / callsign";setTextColor(sand);setHintTextColor(sage)
+            hint="Name / callsign";setTextColor(ink);setHintTextColor(sepia)
             textSize=15f;setSingleLine(true)
         }
         val detail=EditText(this).apply {
             hint="Add a note (optional)";minLines=2;maxLines=4
-            setTextColor(sand);setHintTextColor(sage);textSize=14f
+            setTextColor(ink);setHintTextColor(sepia);textSize=14f
         }
         layout.addView(title);layout.addView(detail)
         val dialog=android.app.AlertDialog.Builder(this)
@@ -2384,33 +2382,33 @@ class MainActivity : Activity(), SensorEventListener {
     }
     private fun showExisting(note:FieldNote) {
         val current=notes.find { it.time==note.time } ?: return
+        val ink=Color.rgb(67,48,28)
+        val sepia=Color.rgb(118,84,53)
         val panel=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
-            setPadding(dp(12),dp(10),dp(12),dp(10))
-            background=GradientDrawable().apply {
-                cornerRadius=dp(18).toFloat()
-                setColor(Color.argb(126,32,45,37))
-                setStroke(dp(1),Color.rgb(115,137,103))
-            }
+            setPadding(dp(16),dp(16),dp(16),dp(15))
+            background=ExpeditionParchment()
         }
-        panel.addView(label("FIELD JOURNAL / PIN DETAILS",12,sand))
-        panel.addView(label("RECORDED / "+java.text.SimpleDateFormat("dd MMM yyyy HH:mm",java.util.Locale.getDefault()).format(java.util.Date(current.time))+" / "+current.visits.size+" VISITS",11,sage))
+        panel.addView(label("FIELD JOURNAL / PIN DETAILS",14,ink).apply {
+            setTypeface(Typeface.SERIF,Typeface.BOLD)
+        })
+        panel.addView(label("RECORDED / "+java.text.SimpleDateFormat("dd MMM yyyy HH:mm",java.util.Locale.getDefault()).format(java.util.Date(current.time))+" / "+current.visits.size+" VISITS",11,sepia))
 
         fogOverlay.currentPosition?.let {position->
             val out=FloatArray(1)
             android.location.Location.distanceBetween(position.latitude,position.longitude,current.latitude,current.longitude,out)
-            panel.addView(label("DISTANCE / "+(if(out[0]>=1000f)"%.1f km".format(java.util.Locale.US,out[0]/1000f) else "${out[0].toInt()} m"),12,sage))
+            panel.addView(label("DISTANCE / "+(if(out[0]>=1000f)"%.1f km".format(java.util.Locale.US,out[0]/1000f) else "${out[0].toInt()} m"),12,sepia))
         }
         val moveButton=action("↔ MOVE PIN")
         panel.addView(moveButton)
         val name=EditText(this).apply {
             setText(current.title);textSize=15f;setSingleLine(true)
-            setTextColor(sand);setHintTextColor(sage);hint="Marker title"
+            setTextColor(ink);setHintTextColor(sepia);hint="Marker title"
         }
         panel.addView(name)
         val memo=EditText(this).apply {
             setText(if(current.kind=="PHOTO"||current.kind=="VOICE") "" else current.body)
-            minLines=3;maxLines=7;setTextColor(sand);setHintTextColor(sage)
+            minLines=3;maxLines=7;setTextColor(ink);setHintTextColor(sepia)
             hint="Field notes / observations..."
         }
         if(current.kind!="PHOTO"&&current.kind!="VOICE")panel.addView(memo)
