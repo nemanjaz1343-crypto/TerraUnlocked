@@ -1770,6 +1770,10 @@ class MainActivity : Activity(), SensorEventListener {
      * Existing notes, visited fog and verified objectives are not affected.
      */
     private fun showSnapOptions() {
+        if(mode=="JOURNEY_PLAN" || mode=="MOVE") {
+            status.text="FINISH THE CURRENT MAP EDIT BEFORE SNAP"
+            return
+        }
         if(snapDraft!=null) {
             showSnapPlacement()
             return
