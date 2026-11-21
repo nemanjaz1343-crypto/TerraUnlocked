@@ -2698,10 +2698,11 @@ class MainActivity : Activity(), SensorEventListener {
         objectivesPopup?.dismiss()
         val panel=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
-            setPadding(dp(12),dp(12),dp(12),dp(12))
+            setPadding(dp(12),dp(11),dp(12),dp(11))
             background=GradientDrawable().apply {
-                cornerRadius=dp(16).toFloat()
-                setColor(Color.argb(126,31,44,36))
+                cornerRadius=dp(13).toFloat()
+                setColor(ExpeditionThemes.current.surface)
+                setStroke(dp(1),ExpeditionThemes.current.gold)
             }
         }
         panel.addView(label("◎ "+terms.plural+" / "+ExpeditionThemes.current.label.uppercase(),14,sand))
@@ -2872,8 +2873,8 @@ class MainActivity : Activity(), SensorEventListener {
             setPadding(dp(11),dp(10),dp(11),dp(10))
             background=GradientDrawable().apply {
                 cornerRadius=dp(11).toFloat()
-                setColor(Color.rgb(25,34,27))
-                setStroke(dp(1),Color.rgb(195,160,93))
+                setColor(ExpeditionThemes.current.surface)
+                setStroke(dp(1),ExpeditionThemes.current.gold)
             }
         }
         val stopIndex=(if(mode=="JOURNEY_PLAN")journeyDraft
@@ -4645,9 +4646,22 @@ class MainActivity : Activity(), SensorEventListener {
         text = t; textSize = size.toFloat(); setTextColor(color); gravity = Gravity.CENTER_VERTICAL
     }
     private fun action(t: String) = Button(this).apply {
-        text = t; textSize = 10f; isAllCaps = false
-        setTextColor(sand); setBackgroundColor(ExpeditionThemes.current.moss)
-        setPadding(0, 0, 0, 0)
+        text=t
+        textSize=10.5f
+        isAllCaps=false
+        gravity=Gravity.CENTER
+        includeFontPadding=false
+        setTextColor(sand)
+        minHeight=0
+        minimumHeight=0
+        minWidth=0
+        minimumWidth=0
+        setPadding(dp(6),dp(3),dp(6),dp(3))
+        background=GradientDrawable().apply {
+            cornerRadius=dp(7).toFloat()
+            setColor(ExpeditionThemes.current.surface)
+            setStroke(dp(1),ExpeditionThemes.current.raised)
+        }
     }
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, grants: IntArray) {
         super.onRequestPermissionsResult(code, permissions, grants)
