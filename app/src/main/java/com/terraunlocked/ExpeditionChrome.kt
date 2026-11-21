@@ -193,7 +193,10 @@ internal class ExpeditionHeaderView(context:Context,
         val hh=h/scale
         ExpeditionArt.fill(c,0f,0f,393f,hh,ExpeditionArt.dark)
         ExpeditionArt.panel(c,RectF(10f,6f,94f,hh-8f),false,5f)
-        ExpeditionArt.label(c,"MISSIONS ›",52f,hh/2f+5f,12f,ExpeditionArt.light,true,.3f)
+        val missionHeading=ExpeditionWording.current.heading
+        ExpeditionArt.label(c,missionHeading+" ›",52f,hh/2f+5f,
+            if(missionHeading.length>9)9.5f else 12f,
+            ExpeditionArt.light,true,.3f)
         ExpeditionArt.rule(c,108f,hh/2f,130f,hh/2f)
         // Original crest clipped outside its circular silhouette, supplied by the user.
         c.drawBitmap(crest,null,RectF(128f,hh/2f-22f,168f,hh/2f+22f),
