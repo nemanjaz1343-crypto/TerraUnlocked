@@ -78,3 +78,13 @@ If the GitHub API check fails, Terra displays the error and provides **OPEN RELE
 - The 15-second heartbeat remains; diagnostic `GNSS_SEARCHING_NO_DIRECT_FIX` is now rate-limited to 5 minutes. Real GNSS signal blockage is reported rather than papered over with fabricated coordinates.
 - Conservative discovery thresholds, 3-m minimum moving spacing, and protection against unverified fog removal remain unchanged.
 - This change is a hypothesis-driven recovery fix, not proof that the physical GNSS chipset will acquire a satellite fix beside skyscrapers. Test under clear sky and inside JLT and compare satellite counts, accepted fixes and gap durations.
+
+## v0.4.70: Adaptive REST battery saver for bounded GPS jitter
+
+- TRACK now supports a temporary REST mode without stopping the foreground tracking service or losing saved progress.
+- Enter REST **only after at least 90 seconds of stable, verified high-accuracy (<=25 m) fixes** in a small region (90th-percentile radius <=13 m; maximum radius <=19 m), predominantly low reported speed, and at least 75 seconds without meaningful inertial activity. This recognizes the noisy "fly-like" urban GPS drift without mistaking every small zigzag for real travel.
+- During REST, temporarily unsubscribe this app's high-frequency direct GNSS callbacks; keep the Android network provider for coarse movement hints and switch Google Fused to BALANCED_POWER_ACCURACY at a 10-second target interval. A deliberately REST-mode location cannot itself unlock new fog.
+- Immediately wake high-accuracy Fused + direct GNSS on sustained linear acceleration, verified displacement beyond the rest zone, or two consistent coarse network/Fused positions substantially beyond it. Coarse hints **never** independently reveal fog.
+- A maximum 90-second REST interval prompts a precise acquisition probe even if the phone's sensors miss a gentle start; the probe stays ACTIVE until repeated reliable stationary evidence again supports REST. May spend more power near skyscrapers, where fixes are unreliable, to avoid silent coverage gaps.
+- UI shows GPS REST / BATTERY SAVER / AUTO WAKE and diagnostic CSV logs REST_ENTER and REST_EXIT reasons, plus REST_JITTER skips.
+- No extra Android runtime permissions required; uses the existing linear-acceleration sensor. Actual energy saved depends on device hardware, other applications, and Android's shared GNSS scheduling, and must be field-measured rather than assumed.
