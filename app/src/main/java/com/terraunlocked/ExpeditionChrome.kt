@@ -45,8 +45,13 @@ internal object ExpeditionArt {
     }
     fun label(c:Canvas,txt:String,x:Float,y:Float,px:Float=13f,col:Int=light,serif:Boolean=false,spacing:Float=0f) {
         p.style=Paint.Style.FILL;p.color=col;p.textAlign=Paint.Align.CENTER;p.textSize=px
-        p.typeface=if(serif)Typeface.create(Typeface.SERIF,Typeface.BOLD)
-            else Typeface.create("sans-serif-condensed",Typeface.BOLD)
+        p.typeface=when(ExpeditionThemes.current.id) {
+            "EXPLORER" -> Typeface.create(Typeface.SERIF,
+                if(serif)Typeface.BOLD else Typeface.NORMAL)
+            "CIVIL" -> Typeface.create("sans-serif-medium",Typeface.BOLD)
+            else -> if(serif)Typeface.create(Typeface.SERIF,Typeface.BOLD)
+                else Typeface.create("sans-serif-condensed",Typeface.BOLD)
+        }
         if(spacing==0f)c.drawText(txt,x,y,p)
         else {
             val n=txt.length
@@ -193,7 +198,10 @@ internal class ExpeditionHeaderView(context:Context,
         val hh=h/scale
         ExpeditionArt.fill(c,0f,0f,393f,hh,ExpeditionArt.dark)
         ExpeditionArt.panel(c,RectF(10f,6f,94f,hh-8f),false,5f)
-        ExpeditionArt.label(c,"MISSIONS ›",52f,hh/2f+5f,12f,ExpeditionArt.light,true,.3f)
+        val missionHeading=ExpeditionWording.current.heading
+        ExpeditionArt.label(c,missionHeading+" ›",52f,hh/2f+5f,
+            if(missionHeading.length>9)9.5f else 12f,
+            ExpeditionArt.light,true,.3f)
         ExpeditionArt.rule(c,108f,hh/2f,130f,hh/2f)
         // Original crest clipped outside its circular silhouette, supplied by the user.
         c.drawBitmap(crest,null,RectF(128f,hh/2f-22f,168f,hh/2f+22f),

@@ -508,6 +508,8 @@ class MainActivity : Activity(), SensorEventListener {
     private var historyCutoff:Long?=null
     private var timeMachinePopup:PopupWindow?=null
     private lateinit var objectiveStore:ObjectiveStore
+    private lateinit var journeyStore:JourneyStore
+    private val terms get()=ExpeditionWording.current
     private val metroStations=mutableListOf<TransitStation>()
     private val taxiStandStore by lazy { TaxiStandStore(this) }
     private val taxiStands=mutableListOf<TaxiStand>()
@@ -717,6 +719,7 @@ class MainActivity : Activity(), SensorEventListener {
         store = DiscoveryStore(this)
         fieldNotes=FieldNotes(this)
         objectiveStore=ObjectiveStore(this)
+        journeyStore=JourneyStore(this)
         metroStations.addAll(TransitStations(this).load())
         taxiStandsEnabled=getSharedPreferences("terra_taxi_settings",Context.MODE_PRIVATE)
             .getBoolean("enabled",true)
@@ -1098,12 +1101,15 @@ class MainActivity : Activity(), SensorEventListener {
                 val width=canvas.width.toFloat()
                 val height=canvas.height.toFloat()
                 val all=(ReconObjectives.all+objectiveStore.customPlaces()).filter{objectiveVisible(it)}
+                val journeyIds=if(journeyStore.enabled)journeyStore.ids() else emptyList()
                 val occupied=mutableListOf<Pair<Float,Float>>()
                 all.forEach {o->
                     val location=if(o.id==movingObjectiveId) movingPreview else null
                     val p=mapView.projection.toPixels(location ?: GeoPoint(o.latitude,o.longitude),Point())
                     val x=p.x.toFloat();val y=p.y.toFloat()
                     val selected=objectiveStore.active==o.id || pendingObjective?.id==o.id
+                    val journeyIndex=journeyIds.indexOf(o.id)
+                    val inJourney=journeyIndex>=0
                     if(x<0f||y<0f||x>width||y>height) {
                         if(selected) {
                             val cx=width/2f;val cy=height/2f
@@ -1112,10 +1118,13 @@ class MainActivity : Activity(), SensorEventListener {
                             painter.edge(canvas,cx+dx*factor,cy+dy*factor,kotlin.math.atan2(dy.toDouble(),dx.toDouble()),true)
                         }
                     } else {
-                        // At city-scale zoom show only the active objective; avoid icon clutter.
-                        if(mapView.zoomLevelDouble<12.0 && !selected)return@forEach
+                        // All Journey stops remain visible at low zoom; other
+                        // icons are de-cluttered as before.
+                        if(mapView.zoomLevelDouble<12.0 && !selected && !inJourney)return@forEach
                         val spacing=if(mapView.zoomLevelDouble<15.0)dp(66) else dp(43)
-                        if(!selected && occupied.any{kotlin.math.hypot((it.first-x).toDouble(),(it.second-y).toDouble())<spacing})return@forEach
+                        if(!selected && !inJourney &&
+                            occupied.any{kotlin.math.hypot((it.first-x).toDouble(),(it.second-y).toDouble())<spacing})
+                            return@forEach
                         val distance=user?.let {
                             val m=FloatArray(1)
                             android.location.Location.distanceBetween(it.latitude,it.longitude,o.latitude,o.longitude,m)
@@ -1124,6 +1133,32 @@ class MainActivity : Activity(), SensorEventListener {
                         val overlap=occupied.any{kotlin.math.hypot((it.first-x).toDouble(),(it.second-y).toDouble())<dp(43)}
                         val showDistance=selected || (distance!=null && !overlap && mapView.zoomLevelDouble>=15.5)
                         painter.draw(canvas,x,y,o.category,selected,objectiveStore.completed(o.id),false,if(showDistance)distance else null)
+                        if(inJourney) {
+                            // Ordered Journey badge: the line between stops is
+                            // intentionally NOT painted as a navigable road.
+                            val bx=x+dp(14)
+                            val by=y-dp(19)
+                            val r=dp(10).toFloat()
+                            val back=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                                color=ExpeditionThemes.current.dark
+                                style=Paint.Style.FILL
+                            }
+                            val edge=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                                color=ExpeditionThemes.current.gold
+                                style=Paint.Style.STROKE
+                                strokeWidth=dp(2).toFloat()
+                            }
+                            val ink=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                                color=ExpeditionThemes.current.light
+                                textSize=dp(10).toFloat()
+                                typeface=Typeface.DEFAULT_BOLD
+                                textAlign=Paint.Align.CENTER
+                                style=Paint.Style.FILL
+                            }
+                            canvas.drawCircle(bx,by,r,back)
+                            canvas.drawCircle(bx,by,r,edge)
+                            canvas.drawText((journeyIndex+1).toString(),bx,by+dp(3),ink)
+                        }
                         occupied.add(x to y)
                     }
                 }
@@ -1286,6 +1321,14 @@ class MainActivity : Activity(), SensorEventListener {
                 return true
             }
         })
+        // Last map overlay: the live user pointer must remain visible even
+        // when HOME, OFFICE, a mission or a note occupies identical coordinates.
+        // No duplicate pointer remains inside DiscoveryFogOverlay.draw().
+        map.overlays.add(object:Overlay() {
+            override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
+                if(!shadow)fogOverlay.drawCurrentPosition(canvas,mapView)
+            }
+        })
         val mapArea=FrameLayout(this)
         mapArea.addView(map,FrameLayout.LayoutParams(-1,-1))
         // Always-visible ruler overlay with clear and exit actions. It does not
@@ -1357,7 +1400,7 @@ class MainActivity : Activity(), SensorEventListener {
                 System.currentTimeMillis(),"◆"))
             fieldNotes.save(notes)
             clearMapPreview()
-            status.text="PIN SAVED / FIELD JOURNAL"
+            status.text="PIN SAVED / "+terms.journal
             refresh()
         }},LinearLayout.LayoutParams(0,dp(48),1f))
         mapArea.addView(previewControls,FrameLayout.LayoutParams(-1,dp(54),Gravity.BOTTOM))
@@ -1419,7 +1462,7 @@ class MainActivity : Activity(), SensorEventListener {
                 setStroke(dp(1),Color.rgb(205,170,101))
             }
         }
-        drawerPanel.addView(label("EXPEDITION JOURNAL",16,sand).apply {
+        drawerPanel.addView(label(terms.journal,16,sand).apply {
             setTypeface(Typeface.SERIF,Typeface.BOLD)
         })
         fun slideJournal(open:Boolean) {
@@ -1431,7 +1474,7 @@ class MainActivity : Activity(), SensorEventListener {
                 .setInterpolator(android.view.animation.DecelerateInterpolator(1.4f))
                 .start()
         }
-        drawerPanel.addView(action("▤  FIELD JOURNAL").apply {
+        drawerPanel.addView(action("▤  "+terms.journal).apply {
             applyExpeditionStyle(this)
             setOnClickListener{slideJournal(false);showExpeditionJournal()}
         },LinearLayout.LayoutParams(-1,dp(46)))
@@ -1439,7 +1482,7 @@ class MainActivity : Activity(), SensorEventListener {
             applyExpeditionStyle(this)
             setOnClickListener{slideJournal(false);showKnownLocations()}
         },LinearLayout.LayoutParams(-1,dp(46)))
-        drawerPanel.addView(action("◈  FIELD STATISTICS").apply {
+        drawerPanel.addView(action("◈  "+terms.statistics).apply {
             applyExpeditionStyle(this)
             setOnClickListener{slideJournal(false);showExplorationStats()}
         },LinearLayout.LayoutParams(-1,dp(46)))
@@ -1690,7 +1733,7 @@ class MainActivity : Activity(), SensorEventListener {
             setPadding(dp(17),dp(16),dp(17),dp(15))
             background=ExpeditionParchment()
         }
-        layout.addView(label("FIELD ENTRY  /  "+kind,13,ink).apply {
+        layout.addView(label(terms.journal+" / NEW "+kind,13,ink).apply {
             setTypeface(null,Typeface.BOLD)
         })
         val preview=label("◆  SELECT MARKER",14,sepia)
@@ -1778,7 +1821,7 @@ class MainActivity : Activity(), SensorEventListener {
         followUser=false
         if(extent && map.zoomLevelDouble<17.0)map.controller.setZoom(17.0)
         map.controller.animateTo(GeoPoint(o.latitude,o.longitude))
-        status.text="MISSION / "+o.name.take(36)
+        status.text=terms.single+" / "+o.name.take(36)
         refresh()
         // Details stay attached to the marker and open only when it is tapped.
     }
@@ -2049,6 +2092,158 @@ class MainActivity : Activity(), SensorEventListener {
         status.text="TARGET PREVIEW / "+name.take(35)
         refresh()
     }
+    private fun validObjectiveIds():Set<String> =
+        (ReconObjectives.all+objectiveStore.customPlaces()).map{it.id}.toSet()
+
+    /**
+     * A Journey is one ordered collection of independently verifiable goals.
+     * No changes to GPS/photo completion rules or actual road routing.
+     */
+    private fun showJourneyPlanner() {
+        objectivesPopup?.dismiss()
+        val wording=terms
+        val all=(ReconObjectives.all+objectiveStore.customPlaces())
+            .filter{!objectiveStore.isHidden(it.id)||it.id in journeyStore.ids()}
+        val valid=all.map{it.id}.toSet()
+        val chosen=LinkedHashSet<String>()
+        journeyStore.ids().filterTo(chosen){it in valid}
+        val panel=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(17),dp(14),dp(17),dp(14))
+            background=tacticalPanel()
+        }
+        panel.addView(label("◈ PLAN "+wording.journey,17,sand).apply {
+            setTypeface(Typeface.SERIF,Typeface.BOLD)
+        })
+        panel.addView(label("Select 2–40 destinations. Tap them in your preferred order. Each stop still requires GPS + photo proof.",11,sage).apply {
+            setPadding(0,dp(4),0,dp(6))
+        })
+        val summary=label("",12,sand)
+        panel.addView(summary)
+        val orderPreview=label("",11,sage).apply{
+            maxLines=3
+            setPadding(0,dp(3),0,dp(3))
+        }
+        panel.addView(orderPreview)
+        val titles=all.associate{it.id to it.name}
+        fun updateSummary() {
+            val alreadyDone=chosen.count{objectiveStore.completed(it)}
+            summary.text=chosen.size.toString()+" STOPS / "+alreadyDone+
+                " COMPLETED / "+(JourneyPlanner.MAX_STOPS-chosen.size)+" SLOTS LEFT"
+            orderPreview.text=if(chosen.isEmpty())"ORDER / SELECT YOUR FIRST STOP"
+                else "ORDER / "+chosen.mapIndexed{index,id->
+                    (index+1).toString()+". "+(titles[id]?:id)
+                }.joinToString("  →  ").take(180)
+        }
+        updateSummary()
+        val list=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
+        all.sortedWith(compareBy<ReconObjective> {if(it.id in chosen)0 else 1}
+            .thenBy{it.name}).forEach {o->
+            val check=android.widget.CheckBox(this).apply {
+                isAllCaps=false
+                text=o.name+(if(objectiveStore.completed(o.id))"  ✓ DONE" else
+                    "  /  "+o.category)
+                textSize=13f
+                setTextColor(sand)
+                buttonTintList=android.content.res.ColorStateList.valueOf(
+                    ExpeditionThemes.current.gold)
+                isChecked=o.id in chosen
+                setPadding(dp(5),dp(4),dp(2),dp(4))
+                minHeight=dp(42)
+            }
+            check.setOnCheckedChangeListener {_,checked->
+                if(checked) {
+                    if(chosen.size>=JourneyPlanner.MAX_STOPS) {
+                        check.isChecked=false
+                        status.text=wording.journey+" / MAX 40 STOPS"
+                    } else chosen.add(o.id)
+                } else chosen.remove(o.id)
+                updateSummary()
+            }
+            list.addView(check)
+        }
+        panel.addView(android.widget.ScrollView(this).apply {
+            addView(list)
+            isFillViewport=false
+        },LinearLayout.LayoutParams(-1,dp(340)))
+        panel.addView(label("The numbered map markers show stop order, not a calculated road route.",10,sage))
+        lateinit var dialog:android.app.AlertDialog
+        panel.addView(action("×  CLEAR "+wording.journey).apply {
+            applyExpeditionStyle(this)
+            setOnClickListener {
+                android.app.AlertDialog.Builder(this@MainActivity)
+                    .setTitle("CLEAR "+wording.journey+"?")
+                    .setMessage("Remove this plan's stop list? Completed objectives, notes and explored map will remain saved.")
+                    .setNegativeButton("KEEP",null)
+                    .setPositiveButton("CLEAR") {_,_->
+                        journeyStore.clear()
+                        dialog.dismiss()
+                        status.text=wording.journey+" / CLEARED"
+                        refresh()
+                    }.show()
+            }
+        },LinearLayout.LayoutParams(-1,dp(42)).apply{topMargin=dp(5)})
+        val pauseAction=when {
+            journeyStore.ids().isEmpty()->"NO PLAN"
+            journeyStore.enabled->"PAUSE"
+            else->"RESUME"
+        }
+        dialog=android.app.AlertDialog.Builder(this)
+            .setView(panel)
+            .setNegativeButton("CLOSE",null)
+            .setNeutralButton(pauseAction,null)
+            .setPositiveButton("SAVE & START",null)
+            .create()
+        dialog.show()
+        dialog.window?.setBackgroundDrawable(
+            android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+        dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            if(chosen.size<2) {
+                summary.text="CHOOSE AT LEAST TWO DESTINATIONS"
+                status.text=wording.journey+" / SELECT TWO OR MORE STOPS"
+                return@setOnClickListener
+            }
+            journeyStore.save(chosen.toList(),valid,true)
+            val next=journeyStore.next{objectiveStore.completed(it)}
+            if(next!=null)objectiveStore.active=next
+            status.text=wording.journey+" STARTED / "+chosen.size+" STOPS"
+            refresh()
+            dialog.dismiss()
+        }
+        dialog.getButton(android.app.AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+            if(journeyStore.ids().isEmpty()) {
+                summary.text="SAVE AT LEAST TWO STOPS TO ENABLE THIS PLAN"
+                return@setOnClickListener
+            }
+            journeyStore.enabled=!journeyStore.enabled
+            status.text=wording.journey+
+                if(journeyStore.enabled)" / RESUMED" else " / PAUSED"
+            refresh()
+            dialog.dismiss()
+        }
+    }
+
+    private fun focusNextJourneyStop() {
+        if(!journeyStore.enabled) {
+            status.text=terms.journey+" / START OR RESUME A PLAN FIRST"
+            showJourneyPlanner()
+            return
+        }
+        val all=(ReconObjectives.all+objectiveStore.customPlaces()).associateBy{it.id}
+        val next=journeyStore.ids().firstOrNull{
+            it in all && !objectiveStore.completed(it)
+        }
+        if(next==null) {
+            status.text=terms.journey+" / ALL STOPS COMPLETE"
+            return
+        }
+        val o=all[next]?:return
+        objectiveStore.active=o.id
+        objectivesPopup?.dismiss()
+        focusObjective(o,true)
+        status.text=terms.journey+" / NEXT: "+o.name.take(26)
+    }
+
     private fun showObjectives() {
         objectivesPopup?.dismiss()
         val panel=LinearLayout(this).apply {
@@ -2059,9 +2254,25 @@ class MainActivity : Activity(), SensorEventListener {
                 setColor(Color.argb(126,31,44,36))
             }
         }
-        panel.addView(label("◎ RECON OBJECTIVES",14,sand))
+        panel.addView(label("◎ "+terms.plural+" / "+ExpeditionThemes.current.label.uppercase(),14,sand))
+        val journeyInfo=label("",11,sage)
+        panel.addView(journeyInfo)
+        val planActions=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
+        planActions.addView(action("◈ "+terms.journey).apply {
+            applyExpeditionStyle(this,journeyStore.enabled)
+            setOnClickListener {showJourneyPlanner()}
+        },LinearLayout.LayoutParams(0,dp(42),1f).apply{
+            setMargins(dp(1),dp(4),dp(2),dp(4))
+        })
+        planActions.addView(action("⌖ NEXT STOP").apply {
+            applyExpeditionStyle(this)
+            setOnClickListener {focusNextJourneyStop()}
+        },LinearLayout.LayoutParams(0,dp(42),1f).apply{
+            setMargins(dp(2),dp(4),dp(1),dp(4))
+        })
+        panel.addView(planActions)
         val search=EditText(this).apply {
-            hint="⌕ Search objectives";setSingleLine(true)
+            hint="⌕ Search "+terms.plural.lowercase(java.util.Locale.US);setSingleLine(true)
             setTextColor(sand);setHintTextColor(sage);textSize=13f
         }
         panel.addView(search)
@@ -2070,12 +2281,28 @@ class MainActivity : Activity(), SensorEventListener {
         panel.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
         fun populate(query:String) {
             list.removeAllViews()
+            val (completed,total)=journeyStore.progress{objectiveStore.completed(it)}
+            journeyInfo.text=if(total==0) "NO "+terms.journey+" / BUILD A MULTI-STOP PLAN"
+                else terms.journey+" / "+completed+"/"+total+
+                    " COMPLETE / "+(if(journeyStore.enabled)"ACTIVE" else "PAUSED")
+            val journeyIndices=if(journeyStore.enabled)journeyStore.ids()
+                .withIndex().associate{it.value to it.index} else emptyMap()
             (ReconObjectives.all+objectiveStore.customPlaces())
                 .filterNot {objectiveStore.isHidden(it.id)}
                 .filter {it.name.contains(query,true)||it.category.contains(query,true)}
-                .sortedWith(compareBy<ReconObjective> {if(objectiveStore.completed(it.id))2 else if(objectiveStore.active==it.id)0 else 1}.thenBy{it.name})
+                .sortedWith(compareBy<ReconObjective> {
+                    if(it.id in journeyIndices)0
+                    else if(objectiveStore.completed(it.id))3
+                    else if(objectiveStore.active==it.id)1 else 2
+                }.thenBy{journeyIndices[it.id]?:Int.MAX_VALUE}.thenBy{it.name})
                 .forEach {o ->
-                    val state=if(objectiveStore.completed(o.id))"✓ DONE" else if(objectiveStore.active==o.id)"● ACTIVE" else "◇ NEW"
+                    val state=when {
+                        objectiveStore.completed(o.id)->"✓ DONE"
+                        o.id in journeyIndices->
+                            "◈ STOP "+(journeyIndices.getValue(o.id)+1)
+                        objectiveStore.active==o.id->"● ACTIVE"
+                        else->"◇ NEW"
+                    }
                     list.addView(action(state+"  "+o.name+" / "+o.category).apply {
                         gravity=Gravity.CENTER_VERTICAL or Gravity.START
                         setPadding(dp(8),0,dp(5),0)
@@ -2099,7 +2326,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
     private fun requestObjectiveProofPhoto(o:ReconObjective) {
         if(objectiveStore.completed(o.id)) {
-            status.text="MISSION ALREADY COMPLETED / "+o.name.take(30)
+            status.text=terms.single+" ALREADY COMPLETED / "+o.name.take(30)
             return
         }
         if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED) {
@@ -2107,7 +2334,7 @@ class MainActivity : Activity(), SensorEventListener {
             requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),12)
             return
         }
-        status.text="MISSION / VERIFYING LIVE GPS..."
+        status.text=terms.single+" / VERIFYING LIVE GPS..."
         // Never use map center, an old location, or a manually placed marker as proof.
         val token=com.google.android.gms.tasks.CancellationTokenSource()
         client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY,token.token)
@@ -2115,19 +2342,19 @@ class MainActivity : Activity(), SensorEventListener {
                 if(isFinishing || isDestroyed)return@addOnSuccessListener
                 if(fix==null || !fix.hasAccuracy() || fix.accuracy>35f ||
                     !fix.latitude.isFinite() || !fix.longitude.isFinite()) {
-                    status.text="MISSION / GPS ACCURACY REQUIRED (35m OR BETTER)"
+                    status.text=terms.single+" / GPS ACCURACY REQUIRED (35m OR BETTER)"
                     return@addOnSuccessListener
                 }
                 val fixAgeMillis=(android.os.SystemClock.elapsedRealtimeNanos()-fix.elapsedRealtimeNanos)/1000000L
                 if(fixAgeMillis<0L || fixAgeMillis>30000L) {
-                    status.text="MISSION / WAIT FOR A FRESH GPS FIX"
+                    status.text=terms.single+" / WAIT FOR A FRESH GPS FIX"
                     return@addOnSuccessListener
                 }
                 val distance=FloatArray(1)
                 android.location.Location.distanceBetween(
                     fix.latitude,fix.longitude,o.latitude,o.longitude,distance)
                 if(distance[0]>100f) {
-                    status.text="MISSION LOCKED / "+distance[0].toInt()+"m AWAY / NEED 100m"
+                    status.text=terms.single+" LOCKED / "+distance[0].toInt()+"m AWAY / NEED 100m"
                     return@addOnSuccessListener
                 }
                 val values=android.content.ContentValues().apply {
@@ -2138,7 +2365,7 @@ class MainActivity : Activity(), SensorEventListener {
                 val uri=contentResolver.insert(
                     android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values)
                 if(uri==null) {
-                    status.text="MISSION / CAMERA STORAGE UNAVAILABLE"
+                    status.text=terms.single+" / CAMERA STORAGE UNAVAILABLE"
                     return@addOnSuccessListener
                 }
                 cameraUri=uri
@@ -2152,32 +2379,34 @@ class MainActivity : Activity(), SensorEventListener {
                     contentResolver.delete(uri,null,null)
                     cameraUri=null
                     objectivePhotoTargetId=null
-                    status.text="MISSION / CAMERA UNAVAILABLE"
+                    status.text=terms.single+" / CAMERA UNAVAILABLE"
                 }
             }.addOnFailureListener {
-                status.text="MISSION / LIVE GPS UNAVAILABLE"
+                status.text=terms.single+" / LIVE GPS UNAVAILABLE"
             }
     }
 
     private fun confirmDeleteObjective(o:ReconObjective) {
         if(!o.id.startsWith("saved_")) {
-            status.text="BUILT-IN OBJECTIVES CAN BE HIDDEN, NOT DELETED"
+            status.text="BUILT-IN "+terms.plural+" CAN BE HIDDEN, NOT DELETED"
             return
         }
         android.app.AlertDialog.Builder(this)
-            .setTitle("DELETE OBJECTIVE?")
-            .setMessage("Permanently remove \""+o.name+"\" from your saved objectives? "+
-                "This cannot be undone. Field journal photos and notes will be preserved.")
+            .setTitle("DELETE "+terms.single+"?")
+            .setMessage("Permanently remove \""+o.name+"\" from your saved "+terms.plural.lowercase(java.util.Locale.US)+"? "+
+                "This cannot be undone. "+terms.journal+" photos and notes will be preserved.")
             .setNegativeButton("CANCEL",null)
             .setPositiveButton("DELETE") {_,_->
                 if(objectiveStore.deleteCustom(o.id)) {
+                    journeyStore.save(journeyStore.ids().filterNot{it==o.id},
+                        validObjectiveIds(),journeyStore.enabled)
                     if(movingObjectiveId==o.id)cancelPinMove()
                     if(pendingObjective?.id==o.id)clearMapPreview()
                     objectiveBubble?.dismiss()
                     objectivesPopup?.dismiss()
-                    status.text="OBJECTIVE DELETED / "+o.name.take(24)
+                    status.text=terms.single+" DELETED / "+o.name.take(24)
                     refresh()
-                } else status.text="OBJECTIVE / DELETE FAILED"
+                } else status.text=terms.single+" / DELETE FAILED"
             }.show().getButton(android.app.AlertDialog.BUTTON_POSITIVE)
             .setTextColor(Color.rgb(227,128,112))
     }
@@ -2197,7 +2426,7 @@ class MainActivity : Activity(), SensorEventListener {
                 setStroke(dp(1),Color.rgb(195,160,93))
             }
         }
-        body.addView(label("FIELD OBJECTIVE / "+o.category,10,sage))
+        body.addView(label(terms.single+" / "+o.category,10,sage))
         body.addView(label("CHECK-IN / WITHIN 100m + 1 CAMERA PHOTO",10,sage))
         body.addView(label(o.name,16,sand).apply{
             setTypeface(Typeface.SERIF,Typeface.BOLD)
@@ -2264,12 +2493,27 @@ class MainActivity : Activity(), SensorEventListener {
                 val remove=objectiveStore.active==o.id
                 objectiveStore.active=if(remove)null else o.id
                 refresh()
-                status.text=if(remove)"MISSION DEACTIVATED / "+o.name.take(30)
-                    else "MISSION ACTIVE / "+o.name.take(30)
+                status.text=if(remove)terms.single+" DEACTIVATED / "+o.name.take(30)
+                    else terms.single+" ACTIVE / "+o.name.take(30)
             },
             (if(objectiveStore.completed(o.id))"✓ COMPLETED" else "▣ PHOTO + COMPLETE") to {
                 popup.dismiss()
                 requestObjectiveProofPhoto(o)
+            }
+        )
+        actionRow(
+            (if(o.id in journeyStore.ids())"✓ IN "+terms.journey
+                else "＋ ADD TO "+terms.journey) to {
+                val added=journeyStore.addOrRemove(o.id,validObjectiveIds())
+                status.text=if(added)terms.journey+" / STOP ADDED"
+                    else terms.journey+" / STOP REMOVED"
+                refresh()
+                popup.dismiss()
+                showObjective(o)
+            },
+            "◈ PLAN "+terms.journey to {
+                popup.dismiss()
+                showJourneyPlanner()
             }
         )
         actionRow(
@@ -2280,6 +2524,9 @@ class MainActivity : Activity(), SensorEventListener {
                 } else {
                     objectiveStore.hide(o.id)
                     if(objectiveStore.active==o.id)objectiveStore.active=null
+                    if(o.id in journeyStore.ids())
+                        journeyStore.save(journeyStore.ids().filterNot{it==o.id},
+                            validObjectiveIds(),journeyStore.enabled)
                     refresh()
                     popup.dismiss()
                 }
@@ -2293,7 +2540,7 @@ class MainActivity : Activity(), SensorEventListener {
                     map.controller.animateTo(GeoPoint(o.latitude,o.longitude))
                     movePinBar?.visibility=View.VISIBLE
                     pinMoveReticle?.invalidate()
-                    status.text="MOVE OBJECTIVE / TOUCH MAP TO RELOCATE, THEN CONFIRM"
+                    status.text="MOVE "+terms.single+" / TOUCH MAP TO RELOCATE, THEN CONFIRM"
                 } else if(o.source.startsWith("http")) {
                     startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(o.source)))
                 }
@@ -2326,7 +2573,7 @@ class MainActivity : Activity(), SensorEventListener {
             setPadding(dp(16),dp(16),dp(16),dp(16))
             background=ExpeditionParchment()
         }
-        panel.addView(label("EXPEDITION / FIELD JOURNAL",16,ink).apply {
+        panel.addView(label(terms.journal+" / PLACES",16,ink).apply {
             setTypeface(Typeface.SERIF,Typeface.BOLD)
         })
         panel.addView(label("${notes.size} PLACES / ${notes.count{it.visits.isNotEmpty()}} REVISITED",11,sepia))
@@ -2393,7 +2640,7 @@ class MainActivity : Activity(), SensorEventListener {
             setPadding(dp(16),dp(16),dp(16),dp(15))
             background=ExpeditionParchment()
         }
-        panel.addView(label("FIELD JOURNAL / PIN DETAILS",14,ink).apply {
+        panel.addView(label(terms.journal+" / PIN DETAILS",14,ink).apply {
             setTypeface(Typeface.SERIF,Typeface.BOLD)
         })
         panel.addView(label("RECORDED / "+java.text.SimpleDateFormat("dd MMM yyyy HH:mm",java.util.Locale.getDefault()).format(java.util.Date(current.time))+" / "+current.visits.size+" VISITS",11,sepia))
@@ -2633,7 +2880,7 @@ class MainActivity : Activity(), SensorEventListener {
     private fun showExplorationStats() {
         val stats=ExplorationStats.calculate(records,notes,historyCutoff ?: Long.MAX_VALUE)
         val panel=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(18),dp(14),dp(18),dp(14));background=tacticalPanel()}
-        panel.addView(label("◈ EXPLORATION / STATISTICS",14,sand))
+        panel.addView(label("◈ "+terms.statistics,14,sand))
         listOf(
             "DISTANCE  /  %.2f km".format(stats.distanceMeters/1000.0),
             "GPS SAMPLES  /  "+stats.gpsFixes,
@@ -2983,7 +3230,7 @@ class MainActivity : Activity(), SensorEventListener {
                 (if(saved)"  /  SAVED" else "  /  NOT SET")
         }.toTypedArray()
         android.app.AlertDialog.Builder(this)
-            .setTitle("EXPEDITION / KNOWN LOCATIONS")
+            .setTitle("KNOWN LOCATIONS / "+terms.savedPlaces)
             .setItems(choices) {_,index-> showKnownLocationActions(names[index]) }
             .setNegativeButton("CLOSE",null).show()
     }
@@ -3542,17 +3789,26 @@ class MainActivity : Activity(), SensorEventListener {
                                 objective.name,"CHECKPOINT",objective.brief,
                                 System.currentTimeMillis(),"⚑",listOf(file.name)))
                         }
-                        // Mark completion only after the photo was saved to field journal.
+                        // Completion is still gated by fresh GPS + a newly
+                        // captured, successfully saved photo for EACH stop.
                         fieldNotes.save(notes)
                         objectiveStore.complete(id)
-                        status.text="MISSION COMPLETED / GPS + PHOTO VERIFIED"
+                        if(journeyStore.enabled && id in journeyStore.ids()) {
+                            val next=journeyStore.next{objectiveStore.completed(it)}
+                            objectiveStore.active=next
+                            val (done,total)=journeyStore.progress{objectiveStore.completed(it)}
+                            status.text=if(next==null)
+                                terms.journey+" COMPLETE / "+done+"/"+total+" STOPS"
+                            else terms.single+" COMPLETE / "+terms.journey+
+                                " "+done+"/"+total+" / NEXT READY"
+                        } else status.text=terms.single+" COMPLETED / GPS + PHOTO VERIFIED"
                         refresh()
                     }.onFailure {
                         file.delete()
-                        status.text="MISSION NOT COMPLETED / PHOTO SAVE FAILED"
+                        status.text=terms.single+" NOT COMPLETED / PHOTO SAVE FAILED"
                     }
-                } else status.text="MISSION NOT COMPLETED / OBJECTIVE NOT FOUND"
-            } else status.text="MISSION NOT COMPLETED / PHOTO CANCELLED"
+                } else status.text=terms.single+" NOT COMPLETED / DESTINATION NOT FOUND"
+            } else status.text=terms.single+" NOT COMPLETED / PHOTO CANCELLED"
             uri?.let {runCatching{contentResolver.delete(it,null,null)}}
             cameraUri=null
             objectivePhotoTargetId=null
@@ -3761,7 +4017,7 @@ class MainActivity : Activity(), SensorEventListener {
             if(grants.isNotEmpty() && grants[0]==PackageManager.PERMISSION_GRANTED && id!=null) {
                 (ReconObjectives.all+objectiveStore.customPlaces()).firstOrNull{it.id==id}
                     ?.let {requestObjectiveProofPhoto(it)}
-            } else status.text="MISSION / LOCATION PERMISSION REQUIRED"
+            } else status.text=terms.single+" / LOCATION PERMISSION REQUIRED"
         }
     }
     override fun onResume() {
