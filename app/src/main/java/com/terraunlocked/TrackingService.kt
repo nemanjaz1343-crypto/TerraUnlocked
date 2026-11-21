@@ -23,6 +23,10 @@ class TrackingService:Service(),SensorEventListener {
     private var accelerationEnergy=0.0
     private var lastMotionElapsed=0L
     private var lastSensorElapsed=0L
+    private var motionPulseCount=0
+    private var lastPulseElapsed=0L
+    private val adaptiveMotion=AdaptiveMotionPolicy()
+    private var fusedRequestRevision=0
     private fun inertialMoving():Boolean {
         // Motion is supporting context, never a substitute for a valid GPS fix.
         val now=android.os.SystemClock.elapsedRealtime()
@@ -42,6 +46,17 @@ class TrackingService:Service(),SensorEventListener {
             lastMotionElapsed=now
             lastActiveMovementElapsed=now
         }
+        if(accelerationEnergy>.78 && now-lastPulseElapsed>=250L) {
+            if(now-lastPulseElapsed>4000L)motionPulseCount=0
+            lastPulseElapsed=now
+            motionPulseCount++
+            if(motionPulseCount>=3) {
+                motionPulseCount=0
+                if(adaptiveMotion.onInertialMovement(now)==
+                        AdaptiveMotionPolicy.Change.WAKE_MOVEMENT)
+                    switchMode(false,"INERTIAL_MOVEMENT")
+            }
+        }
     }
     override fun onAccuracyChanged(sensor:Sensor?,accuracy:Int){}
     private fun startMotionSensors() {
@@ -58,9 +73,11 @@ class TrackingService:Service(),SensorEventListener {
         const val ACTION_STOP="com.terraunlocked.STOP_TRACK"
         const val ACTION_FIX="com.terraunlocked.LOCATION_FIX"
         const val ACTION_STATE="com.terraunlocked.TRACK_STATE"
+        const val ACTION_MODE="com.terraunlocked.TRACK_MODE"
         const val ACTION_RESET_EXPLORATION="com.terraunlocked.RESET_EXPLORATION"
         const val ACTION_RESET_COMPLETE="com.terraunlocked.RESET_EXPLORATION_COMPLETE"
         var running=false
+        @Volatile var resting=false
     }
     private val trackingPrefs by lazy {getSharedPreferences("terra_tracking_state",MODE_PRIVATE)}
     private val diagnostics by lazy {GpsDiagnostics(this)}
@@ -92,6 +109,11 @@ class TrackingService:Service(),SensorEventListener {
             .setMinUpdateIntervalMillis(750L)
             .setMaxUpdateDelayMillis(0L)
             .setMinUpdateDistanceMeters(0f).build()
+    private fun restRequest():LocationRequest =
+        LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY,10000L)
+            .setMinUpdateIntervalMillis(5000L)
+            .setMaxUpdateDelayMillis(0L)
+            .setMinUpdateDistanceMeters(0f).build()
 
     private fun recoverGps(reason:String) {
         if(!running || recoveryPending)return
@@ -101,6 +123,7 @@ class TrackingService:Service(),SensorEventListener {
             return
         }
         recoveryPending=true
+        val revision=++fusedRequestRevision
         pendingRecoveryAt=SystemClock.elapsedRealtime()
         diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
             "EVENT","GPS_RESTART_"+reason)
@@ -108,12 +131,14 @@ class TrackingService:Service(),SensorEventListener {
         // Fused stream. Unsubscribe first, then create a fresh high-accuracy request.
         try {
             client.removeLocationUpdates(callback).addOnCompleteListener {
-                if(!running) {
+                if(!running || revision!=fusedRequestRevision) {
                     recoveryPending=false
                 } else {
                     try {
-                        client.requestLocationUpdates(activeRequest(),callback,mainLooper)
+                        client.requestLocationUpdates(
+                            if(ecoMode)restRequest() else activeRequest(),callback,mainLooper)
                             .addOnCompleteListener { task ->
+                                if(revision!=fusedRequestRevision)return@addOnCompleteListener
                                 recoveryPending=false
                                 diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
                                     "EVENT",if(task.isSuccessful)"GPS_RESUBSCRIBE_OK"
@@ -144,13 +169,15 @@ class TrackingService:Service(),SensorEventListener {
             val fusedAge=elapsed-lastFusedCallbackElapsed
             val gnssAge=elapsed-lastGnssCallbackElapsed
             // A callback containing only cached measurements is not fresh GPS.
-            if(callbackAge>90000L && elapsed-lastNoFixLogElapsed>=120000L) {
+            if(!ecoMode && callbackAge>90000L &&
+                elapsed-lastNoFixLogElapsed>=120000L) {
                 diagnostics.record(null,callbackAge,0.0,0.0,fixConfidence,
                     motionProfile,"EVENT","NO_LOCATION_CALLBACK_90S")
             }
             // Distinguish missing callbacks from callbacks that contain unusable fixes.
             val goodAge=if(lastGoodFixElapsed>0L)elapsed-lastGoodFixElapsed else -1L
-            if(goodAge>90000L && elapsed-lastNoFixLogElapsed>=120000L) {
+            if(!ecoMode && goodAge>90000L &&
+                elapsed-lastNoFixLogElapsed>=120000L) {
                 lastNoFixLogElapsed=elapsed
                 diagnostics.record(null,goodAge,0.0,0.0,fixConfidence,
                     motionProfile,"EVENT","NO_USABLE_FIX_90S")
@@ -160,7 +187,7 @@ class TrackingService:Service(),SensorEventListener {
                 diagnostics.record(null,-1L,0.0,0.0,fixConfidence,
                     motionProfile,"EVENT","GPS_REQUEST_TIMEOUT")
             }
-            if(lastFixElapsed>0L && age>45000L &&
+            if(!ecoMode && lastFixElapsed>0L && age>45000L &&
                 elapsed-lastGapAlertElapsed>60000L) {
                 lastGapAlertElapsed=elapsed
                 diagnostics.record(null,age,0.0,0.0,fixConfidence,
@@ -176,15 +203,15 @@ class TrackingService:Service(),SensorEventListener {
                 lastRecoveryElapsed=elapsed
                 recoverGps("NO_FUSED_CALLBACK")
             }
-            if(gnssAge>=120000L &&
+            if(!ecoMode && gnssAge>=120000L &&
                 elapsed-lastGnssSearchingLogElapsed>=300000L) {
                 lastGnssSearchingLogElapsed=elapsed
                 diagnostics.record(null,gnssAge,0.0,0.0,fixConfidence,
                     motionProfile,"EVENT","GNSS_SEARCHING_NO_DIRECT_FIX")
             }
-            // Only restart direct GNSS if both fixes AND engine status fall
-            // silent for a prolonged period; otherwise allow acquisition.
-            platformSources.recoverIfSilent(gnssAge)
+            if(!ecoMode)platformSources.recoverIfSilent(gnssAge)
+            if(adaptiveMotion.onHeartbeat(elapsed)==AdaptiveMotionPolicy.Change.WAKE_PROBE)
+                switchMode(false,"PERIODIC_WAKE_PROBE")
             heartbeatHandler.postDelayed(this,15000L)
         }
     }
@@ -218,6 +245,10 @@ class TrackingService:Service(),SensorEventListener {
             return
         val age=(SystemClock.elapsedRealtimeNanos()-loc.elapsedRealtimeNanos)/1000000L
         gpsHistory.recordRaw(loc,age,"NETWORK")
+        if(ecoMode && age in 0..15000L &&
+            adaptiveMotion.onCoarseEstimate(loc.latitude,loc.longitude,
+                loc.accuracy,now)==AdaptiveMotionPolicy.Change.WAKE_MOVEMENT)
+            switchMode(false,"NETWORK_DISPLACEMENT")
         // Network fixes can be street-ambiguous. Show estimates only: never reveal fog.
         if(now-lastNetworkLogElapsed>=30000L) {
             lastNetworkLogElapsed=now
@@ -282,13 +313,42 @@ class TrackingService:Service(),SensorEventListener {
     }
 
 
-    // TRACK always uses one high-accuracy request, regardless of transport.
-    // No automatic ECO switching while the user is recording a route.
-    private fun switchMode(eco:Boolean) {
-        if(!running || !ecoMode)return
-        ecoMode=false
-        if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED)
-            client.requestLocationUpdates(activeRequest(),callback,mainLooper)
+    // REST changes only provider subscriptions, not TRACK state or saved map.
+    private fun switchMode(eco:Boolean,reason:String="MOTION") {
+        if(!running || ecoMode==eco)return
+        ecoMode=eco
+        resting=eco
+        platformSources.setEco(eco)
+        diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
+            "EVENT",if(eco)"REST_ENTER_$reason" else "REST_EXIT_$reason")
+        sendBroadcast(Intent(ACTION_MODE).setPackage(packageName)
+            .putExtra("eco",eco).putExtra("reason",reason))
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(1801,makeNotification(if(eco)"Resting / battery saver"
+                else "Movement / high accuracy"))
+        if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=
+                PackageManager.PERMISSION_GRANTED)return
+        val revision=++fusedRequestRevision
+        recoveryPending=false
+        client.removeLocationUpdates(callback).addOnCompleteListener {
+            if(!running || revision!=fusedRequestRevision)return@addOnCompleteListener
+            try {
+                client.requestLocationUpdates(
+                    if(eco)restRequest() else activeRequest(),callback,mainLooper)
+                    .addOnCompleteListener { task ->
+                        if(!running || revision!=fusedRequestRevision)return@addOnCompleteListener
+                        if(!task.isSuccessful) {
+                            diagnostics.record(null,-1L,0.0,0.0,fixConfidence,
+                                motionProfile,"EVENT","MOTION_REQUEST_FAILED")
+                            lastFusedCallbackElapsed=0L
+                        }
+                    }
+            } catch(error:Exception) {
+                diagnostics.record(null,-1L,0.0,0.0,fixConfidence,
+                    motionProfile,"EVENT","MOTION_REQUEST_EXCEPTION")
+                lastFusedCallbackElapsed=0L
+            }
+        }
     }
 
     private fun makeNotification(message:String):Notification {
@@ -356,23 +416,13 @@ class TrackingService:Service(),SensorEventListener {
             val jump=prev!=null && seconds>0.5 &&
                 prev.distanceTo(loc)>maxOf(45f,2f*maxOf(prev.accuracy,loc.accuracy)) &&
                 prev.distanceTo(loc)/seconds>55.0
-            // Re-enter active mode from movement, even with temporarily weak accuracy.
-            // Do this before rejecting locations to prevent a stuck ECO mode in cars.
-            val anchorBeforeFilter=motionAnchor
-            if(ecoMode && anchorBeforeFilter!=null) {
-                val traveled=anchorBeforeFilter.distanceTo(loc)
-                // Walking at 1.3m/s previously could not exit ECO while GPS
-                // reported a 40-100m uncertainty. Wake high-accuracy updates
-                // even on weak movement, without accepting weak discoveries.
-                if(loc.accuracy>35f ||
-                   (loc.hasSpeed() && loc.speed>=0.85f) ||
-                   (loc.accuracy<=25f &&
-                       traveled>maxOf(13f,1.25f*loc.accuracy))) {
-                    switchMode(false)
-                    motionAnchor=loc
-                    stationarySince=android.os.SystemClock.elapsedRealtime()
-                }
-            }
+            // Low-confidence Fused location is only a wake signal; it never
+            // grants discovery while resting.
+            if(ecoMode &&
+                adaptiveMotion.onCoarseEstimate(loc.latitude,loc.longitude,
+                    loc.accuracy,SystemClock.elapsedRealtime())==
+                        AdaptiveMotionPolicy.Change.WAKE_MOVEMENT)
+                switchMode(false,"FUSED_DISPLACEMENT")
             if(loc.accuracy>65f || jump) {
                 fixConfidence=PathIntelligence.assess(
                     loc.accuracy,fixAgeMs,
@@ -405,7 +455,7 @@ class TrackingService:Service(),SensorEventListener {
                 if(moving) {
                     motionAnchor=loc
                     stationarySince=nowElapsed
-                    if(ecoMode)switchMode(false)
+
                 }
             }
             val now=System.currentTimeMillis()
@@ -503,6 +553,16 @@ class TrackingService:Service(),SensorEventListener {
                     else -> 6.0
                 }
             if(plausible) {
+                val change=adaptiveMotion.onVerifiedFix(
+                    smooth.latitude,smooth.longitude,loc.accuracy,
+                    if(loc.hasSpeed())loc.speed else Float.NaN,nowElapsed)
+                when(change) {
+                    AdaptiveMotionPolicy.Change.ENTER_REST ->
+                        switchMode(true,"BOUNDED_GPS_JITTER")
+                    AdaptiveMotionPolicy.Change.WAKE_MOVEMENT ->
+                        switchMode(false,"VERIFIED_DISPLACEMENT")
+                    else -> Unit
+                }
                 // Only coherent verified fixes reset the no-verified-fix watchdog.
                 if(lastVerifiedFixElapsed<lastRecoveryElapsed &&
                     lastRecoveryElapsed>0L) {
@@ -515,7 +575,7 @@ class TrackingService:Service(),SensorEventListener {
             }
             // Record trustworthy intermediate fixes more frequently while moving.
             // Avoid excessive stationary samples and retain jump protection.
-            val moved=plausible && (saved==null ||
+            val moved=plausible && !ecoMode && (saved==null ||
                 (secondsSinceSaved>0.0 && step>=spacing))
             if(moved) {
                 // Use the measurement timestamp, NOT the shared callback time.
@@ -547,7 +607,8 @@ class TrackingService:Service(),SensorEventListener {
                 diagnostics.record(loc,fixAgeMs,secondsSinceSaved,
                     if(saved!=null && step.isFinite())step.toDouble() else 0.0,
                     fixConfidence,"$motionProfile/$source","SKIPPED",
-                    if(!plausible)"IMPLAUSIBLE_STEP" else "BELOW_SPACING")
+                    if(!plausible)"IMPLAUSIBLE_STEP" else
+                    if(ecoMode)"REST_JITTER" else "BELOW_SPACING")
                 if(now-lastBroadcast>=15000L) {
                 lastBroadcast=now
                 broadcastFix(loc,false,ecoMode,sampleTime=now,source=source)
@@ -562,6 +623,8 @@ class TrackingService:Service(),SensorEventListener {
             // Disable tracking before clearing so no late callback can reveal the map.
             saveTrackingRequested(false)
             running=false
+            resting=false
+            fusedRequestRevision++
             heartbeatHandler.removeCallbacks(heartbeat)
             stopMotionSensors()
             client.removeLocationUpdates(callback)
@@ -601,6 +664,14 @@ class TrackingService:Service(),SensorEventListener {
             return START_NOT_STICKY
         }
         running=true
+        resting=false
+        adaptiveMotion.reset(SystemClock.elapsedRealtime())
+        accelerationEnergy=0.0
+        lastMotionElapsed=0L
+        lastSensorElapsed=0L
+        lastPulseElapsed=0L
+        motionPulseCount=0
+        fusedRequestRevision++
         saveTrackingRequested(true)
         lastFixElapsed=SystemClock.elapsedRealtime()
         lastCallbackElapsed=lastFixElapsed
@@ -657,6 +728,8 @@ class TrackingService:Service(),SensorEventListener {
             "EVENT","TRACK_STOPPED")
         saveTrackingRequested(false)
         running=false
+        resting=false
+        fusedRequestRevision++
         heartbeatHandler.removeCallbacks(heartbeat)
         stopMotionSensors()
         client.removeLocationUpdates(callback)
@@ -675,6 +748,8 @@ class TrackingService:Service(),SensorEventListener {
         if(running)diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
             "EVENT","SERVICE_DESTROYED")
         running=false
+        resting=false
+        fusedRequestRevision++
         heartbeatHandler.removeCallbacks(heartbeat)
         stopMotionSensors()
         client.removeLocationUpdates(callback)

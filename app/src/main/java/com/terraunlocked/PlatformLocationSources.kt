@@ -32,6 +32,7 @@ internal class PlatformLocationSources(
     private var gpsRegistered=false
     private var networkRegistered=false
     private var statusRegistered=false
+    private var ecoMode=false
     private var lastSatelliteLogElapsed=0L
     private var lastSatelliteActivityElapsed=0L
     private var lastRecoveryAttemptElapsed=0L
@@ -130,13 +131,8 @@ internal class PlatformLocationSources(
     }
 
     @Suppress("MissingPermission")
-    fun start() {
-        if(!permissionGranted())return
-        val now=SystemClock.elapsedRealtime()
-        lastSatelliteActivityElapsed=now
-        lastRecoveryAttemptElapsed=now
-        registerGps()
-        registerNetwork()
+    private fun registerGnssStatus() {
+        if(statusRegistered || !permissionGranted())return
         try {
             statusRegistered=manager.registerGnssStatusCallback(statusCallback,handler)
             if(!statusRegistered)onEvent("GNSS_STATUS_UNAVAILABLE")
@@ -146,12 +142,48 @@ internal class PlatformLocationSources(
         }
     }
 
+    fun start() {
+        if(!permissionGranted())return
+        ecoMode=false
+        val now=SystemClock.elapsedRealtime()
+        lastSatelliteActivityElapsed=now
+        lastRecoveryAttemptElapsed=now
+        registerGps()
+        registerNetwork()
+        registerGnssStatus()
+    }
+
+    /**
+     * At confirmed rest, stop THIS app's high-rate direct GNSS subscription.
+     * The Wi-Fi/cell provider stays available to detect larger displacements.
+     * When movement resumes, register GNSS once and allow it to acquire.
+     */
+    fun setEco(enabled:Boolean) {
+        if(ecoMode==enabled)return
+        ecoMode=enabled
+        if(enabled) {
+            if(gpsRegistered)runCatching {manager.removeUpdates(gpsListener)}
+            if(statusRegistered)runCatching {
+                manager.unregisterGnssStatusCallback(statusCallback)
+            }
+            gpsRegistered=false
+            statusRegistered=false
+            onEvent("GNSS_PAUSED_REST")
+        } else {
+            lastSatelliteActivityElapsed=SystemClock.elapsedRealtime()
+            lastRecoveryAttemptElapsed=lastSatelliteActivityElapsed
+            registerGps()
+            registerGnssStatus()
+            onEvent("GNSS_RESUMED_MOVEMENT")
+        }
+    }
+
     /**
      * Never reset GNSS while satellite-status callbacks continue to arrive:
      * searching with poor sky visibility is not the same as a dead listener.
      */
     fun recoverIfSilent(gnssFixAgeMs:Long) {
-        if(!permissionGranted())return
+        if(ecoMode || !permissionGranted())return
         val now=SystemClock.elapsedRealtime()
         if(!GpsRecoveryPolicy.recoverGnss(
                 gnssFixAgeMs,now-lastSatelliteActivityElapsed,
@@ -170,5 +202,6 @@ internal class PlatformLocationSources(
         gpsRegistered=false
         networkRegistered=false
         statusRegistered=false
+        ecoMode=false
     }
 }
