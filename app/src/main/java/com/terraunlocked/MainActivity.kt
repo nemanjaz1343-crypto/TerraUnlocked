@@ -1146,7 +1146,7 @@ class MainActivity : Activity(), SensorEventListener {
                             val edge=Paint(Paint.ANTI_ALIAS_FLAG).apply {
                                 color=ExpeditionThemes.current.gold
                                 style=Paint.Style.STROKE
-                                strokeWidth=dp(1.5f).toFloat()
+                                strokeWidth=dp(2).toFloat()
                             }
                             val ink=Paint(Paint.ANTI_ALIAS_FLAG).apply {
                                 color=ExpeditionThemes.current.light
