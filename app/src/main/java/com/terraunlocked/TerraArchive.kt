@@ -24,6 +24,25 @@ class TerraArchive(private val context:Context) {
                 zip.write(value.toByteArray(Charsets.UTF_8))
                 zip.closeEntry()
             }
+            // Objective completion/visibility must also survive a backup so
+            // a restored Journey retains its actual verified progress.
+            val objectives=ObjectiveStore(context)
+            val objectivePrefs=context.getSharedPreferences(
+                "terra_objectives_v1",Context.MODE_PRIVATE)
+            val allGoals=ReconObjectives.all+objectives.customPlaces()
+            val done=org.json.JSONArray()
+            val hidden=org.json.JSONArray()
+            allGoals.forEach { goal ->
+                if(objectives.completed(goal.id))done.put(goal.id)
+                if(objectives.isHidden(goal.id))hidden.put(goal.id)
+            }
+            val objectiveState=JSONObject()
+                .put("completed",done)
+                .put("hidden",hidden)
+                .put("active",objectivePrefs.getString("active","") ?: "")
+            zip.putNextEntry(ZipEntry("objective_state.json"))
+            zip.write(objectiveState.toString().toByteArray(Charsets.UTF_8))
+            zip.closeEntry()
             // Optional Journey remains independent of one active objective.
             val journey=JourneyStore(context)
             val journeyJson=JSONObject()
@@ -68,6 +87,7 @@ class TerraArchive(private val context:Context) {
         val gpsFiles=mutableMapOf<String,ByteArray>()
         var anchors:JSONObject?=null
         var journey:JSONObject?=null
+        var objectiveState:JSONObject?=null
         ZipInputStream(input).use {zip->
             while(true) {
                 val entry=zip.nextEntry ?: break
@@ -80,6 +100,10 @@ class TerraArchive(private val context:Context) {
                     val bytes=zip.readBytes()
                     require(bytes.size<=100_000) {"Journey too large"}
                     journey=JSONObject(bytes.toString(Charsets.UTF_8))
+                } else if(name=="objective_state.json") {
+                    val bytes=zip.readBytes()
+                    require(bytes.size<=100_000) {"Objective state too large"}
+                    objectiveState=JSONObject(bytes.toString(Charsets.UTF_8))
                 } else if(name in keys.map {it.first}) {
                     val data=zip.readBytes()
                     require(data.size<=15_000_000) {"Archive data too large"}
@@ -125,6 +149,31 @@ class TerraArchive(private val context:Context) {
         }
         for((filename,pref,key) in keys.filter {fields.containsKey(it.first)}) {
             context.getSharedPreferences(pref,Context.MODE_PRIVATE).edit().putString(key,fields.getValue(filename)).commit()
+        }
+        // Apply optional completion/visibility snapshot after places.json.
+        // Strictly whitelist objective IDs from built-ins and restored custom
+        // places, never arbitrary preference keys from a ZIP.
+        objectiveState?.let {state->
+            val valid=(ReconObjectives.all+ObjectiveStore(context).customPlaces())
+                .map{it.id}.toSet()
+            fun listed(key:String):Set<String> {
+                val array=state.optJSONArray(key)?:org.json.JSONArray()
+                return (0 until array.length()).mapNotNull {i->
+                    array.optString(i,"").takeIf{it in valid}
+                }.toSet()
+            }
+            val completed=listed("completed")
+            val hidden=listed("hidden")
+            val editor=context.getSharedPreferences("terra_objectives_v1",
+                Context.MODE_PRIVATE).edit()
+            valid.forEach {id->
+                editor.putBoolean("done_"+id,id in completed)
+                editor.putBoolean("hidden_"+id,id in hidden)
+            }
+            val active=state.optString("active","").takeIf{it in valid}
+            if(active==null)editor.remove("active")
+            else editor.putString("active",active)
+            editor.commit()
         }
         // Load Journey only after places.json, so restored user-created goals
         // can be matched to their stable IDs. Older backups remain valid.
