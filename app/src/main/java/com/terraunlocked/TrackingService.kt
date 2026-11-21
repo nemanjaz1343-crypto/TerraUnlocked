@@ -77,6 +77,7 @@ class TrackingService:Service(),SensorEventListener {
         const val ACTION_RESET_EXPLORATION="com.terraunlocked.RESET_EXPLORATION"
         const val ACTION_RESET_COMPLETE="com.terraunlocked.RESET_EXPLORATION_COMPLETE"
         var running=false
+        @Volatile var resting=false
     }
     private val trackingPrefs by lazy {getSharedPreferences("terra_tracking_state",MODE_PRIVATE)}
     private val diagnostics by lazy {GpsDiagnostics(this)}
@@ -314,6 +315,7 @@ class TrackingService:Service(),SensorEventListener {
     private fun switchMode(eco:Boolean,reason:String="MOTION") {
         if(!running || ecoMode==eco)return
         ecoMode=eco
+        resting=eco
         platformSources.setEco(eco)
         diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
             "EVENT",if(eco)"REST_ENTER_$reason" else "REST_EXIT_$reason")
@@ -619,6 +621,7 @@ class TrackingService:Service(),SensorEventListener {
             // Disable tracking before clearing so no late callback can reveal the map.
             saveTrackingRequested(false)
             running=false
+            resting=false
             fusedRequestRevision++
             heartbeatHandler.removeCallbacks(heartbeat)
             stopMotionSensors()
@@ -659,6 +662,7 @@ class TrackingService:Service(),SensorEventListener {
             return START_NOT_STICKY
         }
         running=true
+        resting=false
         adaptiveMotion.reset(SystemClock.elapsedRealtime())
         accelerationEnergy=0.0
         lastMotionElapsed=0L
@@ -722,6 +726,7 @@ class TrackingService:Service(),SensorEventListener {
             "EVENT","TRACK_STOPPED")
         saveTrackingRequested(false)
         running=false
+        resting=false
         fusedRequestRevision++
         heartbeatHandler.removeCallbacks(heartbeat)
         stopMotionSensors()
@@ -741,6 +746,7 @@ class TrackingService:Service(),SensorEventListener {
         if(running)diagnostics.record(null,-1L,0.0,0.0,fixConfidence,motionProfile,
             "EVENT","SERVICE_DESTROYED")
         running=false
+        resting=false
         fusedRequestRevision++
         heartbeatHandler.removeCallbacks(heartbeat)
         stopMotionSensors()
