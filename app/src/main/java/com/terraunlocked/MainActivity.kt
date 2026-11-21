@@ -508,6 +508,8 @@ class MainActivity : Activity(), SensorEventListener {
     private var historyCutoff:Long?=null
     private var timeMachinePopup:PopupWindow?=null
     private lateinit var objectiveStore:ObjectiveStore
+    private lateinit var journeyStore:JourneyStore
+    private val terms get()=ExpeditionWording.current
     private val metroStations=mutableListOf<TransitStation>()
     private val taxiStandStore by lazy { TaxiStandStore(this) }
     private val taxiStands=mutableListOf<TaxiStand>()
@@ -717,6 +719,7 @@ class MainActivity : Activity(), SensorEventListener {
         store = DiscoveryStore(this)
         fieldNotes=FieldNotes(this)
         objectiveStore=ObjectiveStore(this)
+        journeyStore=JourneyStore(this)
         metroStations.addAll(TransitStations(this).load())
         taxiStandsEnabled=getSharedPreferences("terra_taxi_settings",Context.MODE_PRIVATE)
             .getBoolean("enabled",true)
