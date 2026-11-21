@@ -169,13 +169,15 @@ class TrackingService:Service(),SensorEventListener {
             val fusedAge=elapsed-lastFusedCallbackElapsed
             val gnssAge=elapsed-lastGnssCallbackElapsed
             // A callback containing only cached measurements is not fresh GPS.
-            if(callbackAge>90000L && elapsed-lastNoFixLogElapsed>=120000L) {
+            if(!ecoMode && callbackAge>90000L &&
+                elapsed-lastNoFixLogElapsed>=120000L) {
                 diagnostics.record(null,callbackAge,0.0,0.0,fixConfidence,
                     motionProfile,"EVENT","NO_LOCATION_CALLBACK_90S")
             }
             // Distinguish missing callbacks from callbacks that contain unusable fixes.
             val goodAge=if(lastGoodFixElapsed>0L)elapsed-lastGoodFixElapsed else -1L
-            if(goodAge>90000L && elapsed-lastNoFixLogElapsed>=120000L) {
+            if(!ecoMode && goodAge>90000L &&
+                elapsed-lastNoFixLogElapsed>=120000L) {
                 lastNoFixLogElapsed=elapsed
                 diagnostics.record(null,goodAge,0.0,0.0,fixConfidence,
                     motionProfile,"EVENT","NO_USABLE_FIX_90S")
@@ -185,7 +187,7 @@ class TrackingService:Service(),SensorEventListener {
                 diagnostics.record(null,-1L,0.0,0.0,fixConfidence,
                     motionProfile,"EVENT","GPS_REQUEST_TIMEOUT")
             }
-            if(lastFixElapsed>0L && age>45000L &&
+            if(!ecoMode && lastFixElapsed>0L && age>45000L &&
                 elapsed-lastGapAlertElapsed>60000L) {
                 lastGapAlertElapsed=elapsed
                 diagnostics.record(null,age,0.0,0.0,fixConfidence,
@@ -201,7 +203,7 @@ class TrackingService:Service(),SensorEventListener {
                 lastRecoveryElapsed=elapsed
                 recoverGps("NO_FUSED_CALLBACK")
             }
-            if(gnssAge>=120000L &&
+            if(!ecoMode && gnssAge>=120000L &&
                 elapsed-lastGnssSearchingLogElapsed>=300000L) {
                 lastGnssSearchingLogElapsed=elapsed
                 diagnostics.record(null,gnssAge,0.0,0.0,fixConfidence,
