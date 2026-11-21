@@ -23,7 +23,10 @@ internal object ExpeditionArt {
         p.style=Paint.Style.FILL;p.color=col;p.clearShadowLayer();c.drawRect(l,t,r,b,p)
     }
     fun panel(c:Canvas,rect:RectF,highlight:Boolean=false,radius:Float=10f) {
-        p.style=Paint.Style.FILL;p.color=if(highlight)ExpeditionThemes.current.raised else dark
+        p.style=Paint.Style.FILL;p.color=if(highlight)
+            (if(ExpeditionThemes.current.id=="MILITARY")Color.rgb(54,49,31)
+                else ExpeditionThemes.current.raised)
+            else dark
         c.drawRoundRect(rect,radius,radius,p)
         // Faint leather/grain and military-map scuffs; deterministic, inexpensive.
         p.style=Paint.Style.STROKE;p.strokeWidth=.45f
@@ -289,7 +292,8 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
             }
             if(i>0 && i!=selected && i-1!=selected)
                 ExpeditionArt.rule(c,3*d+i*step,11*d,3*d+i*step,h-10*d,ExpeditionArt.muted,.75f*d)
-            ExpeditionArt.icon(c,icons[i],x,17*d,18*d,if(i==selected || (i==0 && trackingActive))ExpeditionArt.light else ExpeditionThemes.current.secondary)
+            ExpeditionArt.icon(c,icons[i],x,17*d,18*d,if(i==selected || (i==0 && trackingActive))ExpeditionArt.light else (if(ExpeditionThemes.current.id=="MILITARY")
+                Color.rgb(183,178,150) else ExpeditionThemes.current.secondary))
             if(i==0 && gpsSearching){
                 // Two widening radar rings show that Android has not delivered its first fix.
                 val ring=Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -300,7 +304,8 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
                 ring.alpha=((scanPhase)*135).toInt()
                 c.drawCircle(x,17*d,(10f+10f*((scanPhase+0.5f)%1f))*d,ring)
             }
-            ExpeditionArt.label(c,if(i==0 && gpsSearching)"SEARCH" else if(i==0 && trackingActive)"STOP" else labels[i],x,h-8*d,9.5f*d,if(i==selected)ExpeditionArt.light else ExpeditionThemes.current.secondary,false,.2f*d)
+            ExpeditionArt.label(c,if(i==0 && gpsSearching)"SEARCH" else if(i==0 && trackingActive)"STOP" else labels[i],x,h-8*d,9.5f*d,if(i==selected)ExpeditionArt.light else (if(ExpeditionThemes.current.id=="MILITARY")
+                Color.rgb(183,178,150) else ExpeditionThemes.current.secondary),false,.2f*d)
             if(i==0 && trackingActive){
                 ExpeditionArt.p.style=Paint.Style.FILL
                 ExpeditionArt.p.color=Color.rgb(181,216,132)
