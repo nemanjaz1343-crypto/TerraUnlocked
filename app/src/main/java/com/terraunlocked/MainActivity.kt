@@ -1286,6 +1286,14 @@ class MainActivity : Activity(), SensorEventListener {
                 return true
             }
         })
+        // Last map overlay: the live user pointer must remain visible even
+        // when HOME, OFFICE, a mission or a note occupies identical coordinates.
+        // No duplicate pointer remains inside DiscoveryFogOverlay.draw().
+        map.overlays.add(object:Overlay() {
+            override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
+                if(!shadow)fogOverlay.drawCurrentPosition(canvas,mapView)
+            }
+        })
         val mapArea=FrameLayout(this)
         mapArea.addView(map,FrameLayout.LayoutParams(-1,-1))
         // Always-visible ruler overlay with clear and exit actions. It does not
