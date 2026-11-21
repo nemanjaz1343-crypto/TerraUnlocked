@@ -35,9 +35,11 @@ class DiscoveryFogOverlay(
     var currentPosition: GeoPoint? = null
     var positionAccuracy = 0f
     var northAzimuth = 0f
-    private val fogPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(15, 22, 17) }
+    private val fogPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = ExpeditionThemes.current.dark
+    }
     private val routePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(218, 199, 148); strokeWidth = 2.5f; style = Paint.Style.STROKE
+        color = ExpeditionThemes.current.gold; strokeWidth = 2.5f; style = Paint.Style.STROKE
     }
     private fun toPoint(map: MapView, lat: Double, lon: Double): Point =
         map.projection.toPixels(GeoPoint(lat, lon), Point())
