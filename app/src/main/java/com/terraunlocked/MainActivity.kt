@@ -1101,12 +1101,15 @@ class MainActivity : Activity(), SensorEventListener {
                 val width=canvas.width.toFloat()
                 val height=canvas.height.toFloat()
                 val all=(ReconObjectives.all+objectiveStore.customPlaces()).filter{objectiveVisible(it)}
+                val journeyIds=if(journeyStore.enabled)journeyStore.ids() else emptyList()
                 val occupied=mutableListOf<Pair<Float,Float>>()
                 all.forEach {o->
                     val location=if(o.id==movingObjectiveId) movingPreview else null
                     val p=mapView.projection.toPixels(location ?: GeoPoint(o.latitude,o.longitude),Point())
                     val x=p.x.toFloat();val y=p.y.toFloat()
                     val selected=objectiveStore.active==o.id || pendingObjective?.id==o.id
+                    val journeyIndex=journeyIds.indexOf(o.id)
+                    val inJourney=journeyIndex>=0
                     if(x<0f||y<0f||x>width||y>height) {
                         if(selected) {
                             val cx=width/2f;val cy=height/2f
@@ -1115,10 +1118,13 @@ class MainActivity : Activity(), SensorEventListener {
                             painter.edge(canvas,cx+dx*factor,cy+dy*factor,kotlin.math.atan2(dy.toDouble(),dx.toDouble()),true)
                         }
                     } else {
-                        // At city-scale zoom show only the active objective; avoid icon clutter.
-                        if(mapView.zoomLevelDouble<12.0 && !selected)return@forEach
+                        // All Journey stops remain visible at low zoom; other
+                        // icons are de-cluttered as before.
+                        if(mapView.zoomLevelDouble<12.0 && !selected && !inJourney)return@forEach
                         val spacing=if(mapView.zoomLevelDouble<15.0)dp(66) else dp(43)
-                        if(!selected && occupied.any{kotlin.math.hypot((it.first-x).toDouble(),(it.second-y).toDouble())<spacing})return@forEach
+                        if(!selected && !inJourney &&
+                            occupied.any{kotlin.math.hypot((it.first-x).toDouble(),(it.second-y).toDouble())<spacing})
+                            return@forEach
                         val distance=user?.let {
                             val m=FloatArray(1)
                             android.location.Location.distanceBetween(it.latitude,it.longitude,o.latitude,o.longitude,m)
@@ -1127,6 +1133,32 @@ class MainActivity : Activity(), SensorEventListener {
                         val overlap=occupied.any{kotlin.math.hypot((it.first-x).toDouble(),(it.second-y).toDouble())<dp(43)}
                         val showDistance=selected || (distance!=null && !overlap && mapView.zoomLevelDouble>=15.5)
                         painter.draw(canvas,x,y,o.category,selected,objectiveStore.completed(o.id),false,if(showDistance)distance else null)
+                        if(inJourney) {
+                            // Ordered Journey badge: the line between stops is
+                            // intentionally NOT painted as a navigable road.
+                            val bx=x+dp(14)
+                            val by=y-dp(19)
+                            val r=dp(10).toFloat()
+                            val back=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                                color=ExpeditionThemes.current.dark
+                                style=Paint.Style.FILL
+                            }
+                            val edge=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                                color=ExpeditionThemes.current.gold
+                                style=Paint.Style.STROKE
+                                strokeWidth=dp(1.5f).toFloat()
+                            }
+                            val ink=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                                color=ExpeditionThemes.current.light
+                                textSize=dp(10).toFloat()
+                                typeface=Typeface.DEFAULT_BOLD
+                                textAlign=Paint.Align.CENTER
+                                style=Paint.Style.FILL
+                            }
+                            canvas.drawCircle(bx,by,r,back)
+                            canvas.drawCircle(bx,by,r,edge)
+                            canvas.drawText((journeyIndex+1).toString(),bx,by+dp(3),ink)
+                        }
                         occupied.add(x to y)
                     }
                 }
