@@ -88,3 +88,19 @@ If the GitHub API check fails, Terra displays the error and provides **OPEN RELE
 - A maximum 90-second REST interval prompts a precise acquisition probe even if the phone's sensors miss a gentle start; the probe stays ACTIVE until repeated reliable stationary evidence again supports REST. May spend more power near skyscrapers, where fixes are unreliable, to avoid silent coverage gaps.
 - UI shows GPS REST / BATTERY SAVER / AUTO WAKE and diagnostic CSV logs REST_ENTER and REST_EXIT reasons, plus REST_JITTER skips.
 - No extra Android runtime permissions required; uses the existing linear-acceleration sensor. Actual energy saved depends on device hardware, other applications, and Android's shared GNSS scheduling, and must be field-measured rather than assumed.
+
+## v0.4.71: Expedition UX and map panning
+
+- **Pan responsiveness:** while a map drag or pinch is active, translate the existing validated fog mask instead of re-blurring all visited geometry every ~80 pixels on the UI thread. Deferred invalidation recomposes after the gesture settles. Debounce objective bubble alignment and throttle compass-triggered map redraws. This is a frame-latency improvement, not altered exploration data.
+- **Settings:** bottom KIT becomes SETTINGS (gear icon). Three persisted interface palettes appear in Settings → DISPLAY:
+  - MILITARY (original olive + brass, default, unchanged theme choice)
+  - EXPLORER (pine green #162720 + aged-gold #D4A66B + parchment #F3E3C2)
+  - CIVIL (navy #142735 + cool blue #82BDD5 + copper #E6A066).
+  Styling concept informed by Pinterest design/palette articles; these are original UI color definitions.
+- **Field Journal:** antique parchment texture behind journal and note editor/detail cards; high-contrast sepia ink for legibility. The paper is drawn locally (no remote images or uploads).
+- **Known Locations:** long-press the Journal side tab or tap its new KNOWN LOCATIONS entry; choose HOME or OFFICE, then go to it, save current GPS, set map center, or remove the saved anchor. Existing anchor preferences remain compatible.
+- **MARK:** replaced the generic pencil with a quill icon.
+- **Saved pin note icons:** choose a new symbol from a visible selection strip; selection now immediately saves to local Field Notes and redraws the map (title/body still use the SAVE button).
+- **Ruler:** high-contrast dark outline, theme-colored bright line and a readable distance badge rendered at its midpoint, as well as the existing caption bar.
+- No location permissions, tracking policy, backup schema or existing saved locations are modified.
+- Validate pan smoothness with large histories, Map/Journal editing and each palette on a real Android phone; unit/build CI cannot measure frame timing.

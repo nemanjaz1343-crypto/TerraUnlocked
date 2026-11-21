@@ -50,9 +50,10 @@ import org.osmdroid.views.overlay.Overlay
 
 class MainActivity : Activity(), SensorEventListener {
     private val markerArt by lazy { ObjectiveMarkerArt(this) }
-    private val olive = Color.rgb(31, 40, 32)
-    private val sand = Color.rgb(218, 201, 156)
-    private val sage = Color.rgb(155, 181, 134)
+    private val olive:Int get()=ExpeditionThemes.current.screen
+    private val sand:Int get()=if(ExpeditionThemes.current.id=="MILITARY")
+        Color.rgb(218,201,156) else ExpeditionThemes.current.light
+    private val sage:Int get()=ExpeditionThemes.current.secondary
     private lateinit var map: MapView
     private lateinit var compassView: TextView
     private lateinit var weatherView: TextView
@@ -617,6 +618,9 @@ class MainActivity : Activity(), SensorEventListener {
     private var last: DiscoveryPoint? = null
     private var lastPaintTime = 0L
     private val handler = Handler(Looper.getMainLooper())
+    private val repositionBubbleAfterPan=Runnable {updateObjectiveBubblePosition()}
+    private var lastCompassPaintElapsed=0L
+    private var lastCompassHeading=-1
     private var simulationIndex = 0
     private val client by lazy { LocationServices.getFusedLocationProviderClient(this) }
     private val callback = object : LocationCallback() {
@@ -696,6 +700,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ExpeditionThemes.load(this)
         attachmentNoteTime=savedInstanceState?.getLong("attachment_note_time")?.takeIf{it!=0L}
         objectivePhotoTargetId=savedInstanceState?.getString("objective_photo_target")
         objectivePhotoPermissionId=savedInstanceState?.getString("objective_photo_permission")
@@ -726,8 +731,8 @@ class MainActivity : Activity(), SensorEventListener {
         segments.addAll(pathStore.load())
         records.addAll(store.load())
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(olive); fitsSystemWindows = true }
-        window.statusBarColor=Color.rgb(14,20,16)
-        window.navigationBarColor=Color.rgb(12,16,13)
+        window.statusBarColor=ExpeditionThemes.current.dark
+        window.navigationBarColor=ExpeditionThemes.current.dark
         sensors=getSystemService(Context.SENSOR_SERVICE) as SensorManager
         compassEnabled=sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)!=null
         compassView=label("N ---°",10,sand)
@@ -745,14 +750,14 @@ class MainActivity : Activity(), SensorEventListener {
         // The status text remains available to services; no extra row obscures the map.
         status=label("GPS OFFLINE  |  FOG 82%  |  R 20m",10,sage).apply{
             setPadding(dp(12),dp(1),dp(8),dp(3))
-            setBackgroundColor(Color.rgb(14,20,16))
+            setBackgroundColor(ExpeditionThemes.current.dark)
         }
         status.isSingleLine=true
         status.ellipsize=android.text.TextUtils.TruncateAt.END
         val statusRow=LinearLayout(this).apply{
             orientation=LinearLayout.HORIZONTAL
             gravity=Gravity.CENTER_VERTICAL
-            setBackgroundColor(Color.rgb(14,20,16))
+            setBackgroundColor(ExpeditionThemes.current.dark)
         }
         statusRow.addView(status,LinearLayout.LayoutParams(0,dp(23),1f))
         statusRow.addView(action("▤ LAYERS").apply{
@@ -760,8 +765,8 @@ class MainActivity : Activity(), SensorEventListener {
             setTextColor(sand)
             background=GradientDrawable().apply{
                 cornerRadius=dp(4).toFloat()
-                setColor(Color.rgb(32,45,34))
-                setStroke(dp(1),Color.rgb(165,143,92))
+                setColor(ExpeditionThemes.current.surface)
+                setStroke(dp(1),ExpeditionThemes.current.gold)
             }
             setOnClickListener{showOverlayFilters()}
         },LinearLayout.LayoutParams(dp(84),dp(22)).apply{
@@ -855,14 +860,59 @@ class MainActivity : Activity(), SensorEventListener {
                 return false
             }
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
-                if(shadow || measurePoints.isEmpty()) return
-                val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply {color=Color.argb(190,250,210,130);strokeWidth=3f}
+                if(shadow || measurePoints.isEmpty())return
                 val a=mapView.projection.toPixels(measurePoints[0],Point())
-                canvas.drawCircle(a.x.toFloat(),a.y.toFloat(),5f,paint)
+                val x=a.x.toFloat();val y=a.y.toFloat()
+                val outline=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    style=Paint.Style.STROKE
+                    color=Color.argb(245,12,18,18)
+                    strokeCap=Paint.Cap.ROUND
+                    strokeWidth=dp(8).toFloat()
+                    setShadowLayer(dp(3).toFloat(),0f,dp(1).toFloat(),Color.BLACK)
+                }
+                val luminous=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color=ExpeditionThemes.current.gold
+                    strokeWidth=dp(4).toFloat()
+                    strokeCap=Paint.Cap.ROUND
+                    style=Paint.Style.STROKE
+                }
+                canvas.drawCircle(x,y,dp(6).toFloat(),outline)
+                canvas.drawCircle(x,y,dp(5).toFloat(),luminous)
                 if(measurePoints.size==2) {
                     val b=mapView.projection.toPixels(measurePoints[1],Point())
-                    canvas.drawLine(a.x.toFloat(),a.y.toFloat(),b.x.toFloat(),b.y.toFloat(),paint)
-                    canvas.drawCircle(b.x.toFloat(),b.y.toFloat(),5f,paint)
+                    val bx=b.x.toFloat();val by=b.y.toFloat()
+                    canvas.drawLine(x,y,bx,by,outline)
+                    canvas.drawLine(x,y,bx,by,luminous)
+                    canvas.drawCircle(bx,by,dp(6).toFloat(),outline)
+                    canvas.drawCircle(bx,by,dp(5).toFloat(),luminous)
+                    val metres=gap(measurePoints[0],measurePoints[1])
+                    val caption=if(metres>=1000f)
+                        "%.2f km".format(java.util.Locale.US,metres/1000f)
+                        else "%.0f m".format(java.util.Locale.US,metres)
+                    val ink=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        style=Paint.Style.FILL
+                        color=ExpeditionThemes.current.light
+                        textSize=dp(14).toFloat()
+                        textAlign=Paint.Align.CENTER
+                        typeface=Typeface.create("sans-serif-condensed",Typeface.BOLD)
+                    }
+                    val midX=(x+bx)/2f
+                    val midY=(y+by)/2f-dp(15)
+                    val tw=ink.measureText(caption)
+                    val rect=android.graphics.RectF(
+                        midX-tw/2f-dp(12),midY-dp(20),
+                        midX+tw/2f+dp(12),midY+dp(7))
+                    val back=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color=ExpeditionThemes.current.dark
+                        setShadowLayer(dp(3).toFloat(),0f,dp(2).toFloat(),Color.BLACK)
+                    }
+                    canvas.drawRoundRect(rect,dp(8).toFloat(),dp(8).toFloat(),back)
+                    back.clearShadowLayer()
+                    back.style=Paint.Style.STROKE
+                    back.strokeWidth=dp(1).toFloat()
+                    back.color=ExpeditionThemes.current.gold
+                    canvas.drawRoundRect(rect,dp(8).toFloat(),dp(8).toFloat(),back)
+                    canvas.drawText(caption,midX,midY,ink)
                 }
             }
         })
@@ -1385,6 +1435,10 @@ class MainActivity : Activity(), SensorEventListener {
             applyExpeditionStyle(this)
             setOnClickListener{slideJournal(false);showExpeditionJournal()}
         },LinearLayout.LayoutParams(-1,dp(46)))
+        drawerPanel.addView(action("⌖  KNOWN LOCATIONS").apply {
+            applyExpeditionStyle(this)
+            setOnClickListener{slideJournal(false);showKnownLocations()}
+        },LinearLayout.LayoutParams(-1,dp(46)))
         drawerPanel.addView(action("◈  FIELD STATISTICS").apply {
             applyExpeditionStyle(this)
             setOnClickListener{slideJournal(false);showExplorationStats()}
@@ -1394,15 +1448,21 @@ class MainActivity : Activity(), SensorEventListener {
             setOnClickListener{slideJournal(false)}
         },LinearLayout.LayoutParams(-1,dp(42)))
         journalDrawer.addView(drawerPanel,FrameLayout.LayoutParams(journalWidth,-2,Gravity.END or Gravity.CENTER_VERTICAL))
-        val journalTab=ExpeditionJournalTab(this) {
-            val opening=journalDrawer.translationX>journalWidth/2f
-            slideJournal(opening)
-        }
+        val journalTab=ExpeditionJournalTab(this,
+            onToggle={
+                val opening=journalDrawer.translationX>journalWidth/2f
+                slideJournal(opening)
+            },
+            onLongPress={
+                slideJournal(false)
+                showKnownLocations()
+            }
+        )
         journalTabRef=journalTab
         journalDrawer.addView(journalTab,FrameLayout.LayoutParams(journalTabWidth,dp(90),Gravity.START or Gravity.CENTER_VERTICAL))
         journalDrawer.translationX=journalWidth.toFloat()
         mapArea.addView(journalDrawer,FrameLayout.LayoutParams(
-            journalWidth+journalTabWidth,dp(213),Gravity.END or Gravity.CENTER_VERTICAL))
+            journalWidth+journalTabWidth,dp(272),Gravity.END or Gravity.CENTER_VERTICAL))
         root.addView(mapArea,LinearLayout.LayoutParams(-1,0,1f))
         // Hidden adapter buttons preserve existing activity actions; visual chrome is Canvas based.
         trackButton=action("TRACK")
@@ -1503,12 +1563,18 @@ class MainActivity : Activity(), SensorEventListener {
         viewButton.setOnClickListener {showLayers(viewButton)}
         map.addMapListener(object:org.osmdroid.events.MapListener {
             override fun onScroll(event:org.osmdroid.events.ScrollEvent?):Boolean {
-                handler.post{updateObjectiveBubblePosition()}
+                // Dragging the map must not rebuild a blurred discovery mask
+                // or queue one bubble calculation per scroll event.
+                fogOverlay.onMapPanned()
+                handler.removeCallbacks(repositionBubbleAfterPan)
+                handler.postDelayed(repositionBubbleAfterPan,85L)
                 scheduleTaxiStandsRefresh()
                 return false
             }
             override fun onZoom(event:org.osmdroid.events.ZoomEvent?):Boolean {
-                handler.post{updateObjectiveBubblePosition()}
+                fogOverlay.onMapPanned()
+                handler.removeCallbacks(repositionBubbleAfterPan)
+                handler.postDelayed(repositionBubbleAfterPan,110L)
                 scheduleTaxiStandsRefresh()
                 return false
             }
@@ -1617,19 +1683,17 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
     private fun showNoteEditor(where:GeoPoint,kind:String="POI") {
+        val ink=Color.rgb(67,48,28)
+        val sepia=Color.rgb(118,84,53)
         val layout=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
             setPadding(dp(17),dp(16),dp(17),dp(15))
-            background=GradientDrawable().apply {
-                cornerRadius=dp(19).toFloat()
-                setColor(Color.argb(126,31,44,36))
-                setStroke(dp(1),Color.rgb(119,139,106))
-            }
+            background=ExpeditionParchment()
         }
-        layout.addView(label("FIELD ENTRY  /  "+kind,13,sand).apply {
+        layout.addView(label("FIELD ENTRY  /  "+kind,13,ink).apply {
             setTypeface(null,Typeface.BOLD)
         })
-        val preview=label("◆  SELECT MARKER",14,sage)
+        val preview=label("◆  SELECT MARKER",14,sepia)
         layout.addView(preview)
         val iconBar=LinearLayout(this).apply {gravity=Gravity.CENTER;orientation=LinearLayout.HORIZONTAL}
         val icons=listOf("◆","⚑","★","✎","▲","●","⌖","▣")
@@ -1644,12 +1708,12 @@ class MainActivity : Activity(), SensorEventListener {
         layout.addView(iconBar)
         updatePreview()
         val title=EditText(this).apply {
-            hint="Name / callsign";setTextColor(sand);setHintTextColor(sage)
+            hint="Name / callsign";setTextColor(ink);setHintTextColor(sepia)
             textSize=15f;setSingleLine(true)
         }
         val detail=EditText(this).apply {
             hint="Add a note (optional)";minLines=2;maxLines=4
-            setTextColor(sand);setHintTextColor(sage);textSize=14f
+            setTextColor(ink);setHintTextColor(sepia);textSize=14f
         }
         layout.addView(title);layout.addView(detail)
         val dialog=android.app.AlertDialog.Builder(this)
@@ -1726,8 +1790,11 @@ class MainActivity : Activity(), SensorEventListener {
     }
     private fun tacticalPanel():GradientDrawable = GradientDrawable().apply {
         cornerRadius=dp(16).toFloat()
-        setColor(Color.argb(238,38,47,38))
-        setStroke(dp(1),Color.argb(190,155,181,134))
+        val military=ExpeditionThemes.current.id=="MILITARY"
+        setColor(if(military)Color.argb(238,38,47,38)
+            else ExpeditionThemes.current.surface)
+        setStroke(dp(1),if(military)Color.argb(190,155,181,134)
+            else ExpeditionThemes.current.gold)
     }
     private data class MapPlaceSuggestion(
         val title:String,val subtitle:String,val lat:Double,val lon:Double
@@ -2252,10 +2319,21 @@ class MainActivity : Activity(), SensorEventListener {
     }
     private fun showExpeditionJournal() {
         notes.clear();notes.addAll(fieldNotes.load())
-        val panel=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(12),dp(12),dp(12),dp(12));background=tacticalPanel()}
-        panel.addView(label("EXPEDITION / FIELD JOURNAL",16,sand))
-        panel.addView(label("${notes.size} PLACES / ${notes.count{it.visits.isNotEmpty()}} REVISITED",11,sage))
-        val search=EditText(this).apply {hint="Search journal";setSingleLine(true);textSize=14f;setTextColor(sand);setHintTextColor(sage)}
+        val ink=Color.rgb(65,47,29)
+        val sepia=Color.rgb(121,84,50)
+        val panel=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(16),dp(16),dp(16),dp(16))
+            background=ExpeditionParchment()
+        }
+        panel.addView(label("EXPEDITION / FIELD JOURNAL",16,ink).apply {
+            setTypeface(Typeface.SERIF,Typeface.BOLD)
+        })
+        panel.addView(label("${notes.size} PLACES / ${notes.count{it.visits.isNotEmpty()}} REVISITED",11,sepia))
+        val search=EditText(this).apply {
+            hint="Search the field journal";setSingleLine(true);textSize=14f
+            setTextColor(ink);setHintTextColor(sepia)
+        }
         panel.addView(search)
         val list=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
         panel.addView(android.widget.ScrollView(this).apply {addView(list)},LinearLayout.LayoutParams(-1,dp(350)))
@@ -2264,11 +2342,15 @@ class MainActivity : Activity(), SensorEventListener {
             list.removeAllViews()
             val entries=notes.filter{it.title.contains(query,true)||it.body.contains(query,true)}
                 .sortedByDescending{maxOf(it.time,it.visits.lastOrNull()?:0L)}
-            if(entries.isEmpty())list.addView(label("No records yet. Add a pin on the map.",12,sage))
+            if(entries.isEmpty())list.addView(label("No records yet. Add a pin on the map.",12,sepia))
             entries.forEach {entry->
                 val date=java.text.SimpleDateFormat("dd MMM yyyy",java.util.Locale.getDefault()).format(java.util.Date(entry.time))
                 val photos=entry.attachments.count{!it.endsWith(".m4a")}+(if(entry.kind=="PHOTO")1 else 0)
-                val card=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(10),dp(8),dp(10),dp(8));background=tacticalPanel()}
+                val card=LinearLayout(this).apply {
+                    orientation=LinearLayout.VERTICAL
+                    setPadding(dp(10),dp(8),dp(10),dp(8))
+                    background=ExpeditionParchment(card=true)
+                }
                 val contents=LinearLayout(this).apply{
                     orientation=LinearLayout.HORIZONTAL
                     gravity=Gravity.CENTER_VERTICAL
@@ -2280,13 +2362,13 @@ class MainActivity : Activity(), SensorEventListener {
                     },LinearLayout.LayoutParams(dp(62),dp(62)).apply{rightMargin=dp(9)})
                 }
                 val summary=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
-                summary.addView(label(entry.title,15,sand).apply{
+                summary.addView(label(entry.title,15,ink).apply{
                     maxLines=2
                     ellipsize=android.text.TextUtils.TruncateAt.END
                 })
-                summary.addView(label("$date / ${entry.visits.size} VISITS / $photos PHOTOS",11,sage))
+                summary.addView(label("$date / ${entry.visits.size} VISITS / $photos PHOTOS",11,sepia))
                 if(entry.body.isNotBlank()&&entry.kind!="VOICE"&&entry.kind!="PHOTO")
-                    summary.addView(label(entry.body.take(100),12,sand))
+                    summary.addView(label(entry.body.take(100),12,ink))
                 contents.addView(summary,LinearLayout.LayoutParams(0,-2,1f))
                 card.addView(contents)
                 card.setOnClickListener {dialog.dismiss();showExisting(entry)}
@@ -2300,47 +2382,80 @@ class MainActivity : Activity(), SensorEventListener {
         })
         populate("")
         dialog.show()
+        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
     }
     private fun showExisting(note:FieldNote) {
         val current=notes.find { it.time==note.time } ?: return
+        val ink=Color.rgb(67,48,28)
+        val sepia=Color.rgb(118,84,53)
         val panel=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
-            setPadding(dp(12),dp(10),dp(12),dp(10))
-            background=GradientDrawable().apply {
-                cornerRadius=dp(18).toFloat()
-                setColor(Color.argb(126,32,45,37))
-                setStroke(dp(1),Color.rgb(115,137,103))
-            }
+            setPadding(dp(16),dp(16),dp(16),dp(15))
+            background=ExpeditionParchment()
         }
-        panel.addView(label("FIELD JOURNAL / PIN DETAILS",12,sand))
-        panel.addView(label("RECORDED / "+java.text.SimpleDateFormat("dd MMM yyyy HH:mm",java.util.Locale.getDefault()).format(java.util.Date(current.time))+" / "+current.visits.size+" VISITS",11,sage))
+        panel.addView(label("FIELD JOURNAL / PIN DETAILS",14,ink).apply {
+            setTypeface(Typeface.SERIF,Typeface.BOLD)
+        })
+        panel.addView(label("RECORDED / "+java.text.SimpleDateFormat("dd MMM yyyy HH:mm",java.util.Locale.getDefault()).format(java.util.Date(current.time))+" / "+current.visits.size+" VISITS",11,sepia))
 
         fogOverlay.currentPosition?.let {position->
             val out=FloatArray(1)
             android.location.Location.distanceBetween(position.latitude,position.longitude,current.latitude,current.longitude,out)
-            panel.addView(label("DISTANCE / "+(if(out[0]>=1000f)"%.1f km".format(java.util.Locale.US,out[0]/1000f) else "${out[0].toInt()} m"),12,sage))
+            panel.addView(label("DISTANCE / "+(if(out[0]>=1000f)"%.1f km".format(java.util.Locale.US,out[0]/1000f) else "${out[0].toInt()} m"),12,sepia))
         }
         val moveButton=action("↔ MOVE PIN")
         panel.addView(moveButton)
         val name=EditText(this).apply {
             setText(current.title);textSize=15f;setSingleLine(true)
-            setTextColor(sand);setHintTextColor(sage);hint="Marker title"
+            setTextColor(ink);setHintTextColor(sepia);hint="Marker title"
         }
         panel.addView(name)
         val memo=EditText(this).apply {
             setText(if(current.kind=="PHOTO"||current.kind=="VOICE") "" else current.body)
-            minLines=3;maxLines=7;setTextColor(sand);setHintTextColor(sage)
+            minLines=3;maxLines=7;setTextColor(ink);setHintTextColor(sepia)
             hint="Field notes / observations..."
         }
         if(current.kind!="PHOTO"&&current.kind!="VOICE")panel.addView(memo)
         var selected=current.icon
+        val iconPreview=label("PIN ICON / $selected   •   TAP AN ICON TO UPDATE",12,sepia)
+        panel.addView(iconPreview)
         val choices=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
-        listOf("◆","⚑","★","✎","▲","●","⌖","▣").forEach {glyph->
-            choices.addView(action(glyph).apply {
-                textSize=17f
-                setOnClickListener {selected=glyph;this@MainActivity.status.text="ICON "+glyph}
-            },LinearLayout.LayoutParams(0,dp(32),1f))
+        val iconButtons=mutableListOf<Pair<String,Button>>()
+        fun highlightSelection() {
+            iconButtons.forEach { (glyph,button) ->
+                button.background=GradientDrawable().apply {
+                    cornerRadius=dp(5).toFloat()
+                    setColor(if(glyph==selected)Color.rgb(123,88,52)
+                        else ExpeditionThemes.current.surface)
+                    setStroke(dp(if(glyph==selected)2 else 1),
+                        if(glyph==selected)Color.rgb(240,217,174)
+                        else ExpeditionThemes.current.gold)
+                }
+                button.setTextColor(if(glyph==selected)Color.WHITE
+                    else ExpeditionThemes.current.light)
+            }
         }
+        listOf("◆","⚑","★","✎","▲","●","⌖","▣").forEach {glyph->
+            val button=action(glyph).apply {
+                textSize=17f
+                setOnClickListener {
+                    selected=glyph
+                    val idx=notes.indexOfFirst{it.time==current.time}
+                    if(idx>=0) {
+                        // Persist icon immediately; the user need not find SAVE.
+                        notes[idx]=notes[idx].copy(icon=glyph)
+                        fieldNotes.save(notes)
+                        refresh()
+                    }
+                    iconPreview.text="PIN ICON / $glyph   ✓ SAVED"
+                    status.text="PIN ICON UPDATED / $glyph"
+                    highlightSelection()
+                }
+            }
+            iconButtons.add(glyph to button)
+            choices.addView(button,LinearLayout.LayoutParams(0,dp(40),1f))
+        }
+        highlightSelection()
         panel.addView(choices)
         val count=label("PHOTOS / "+photoFiles(current).size+
             "    ATTACHMENTS / "+current.attachments.size,12,sage)
@@ -2853,6 +2968,70 @@ class MainActivity : Activity(), SensorEventListener {
         pinMoveReticle?.invalidate()
         status.text="MOVE PIN / TOUCH OR DRAG TARGET, THEN CONFIRM"
     }
+    /**
+     * Long-press Journal or choose Known Locations in its drawer.
+     * Stage 1 chooses HOME or OFFICE; stage 2 offers clear, non-destructive
+     * actions on that specific saved destination.
+     */
+    private fun showKnownLocations() {
+        val prefs=getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE)
+        val names=arrayOf("HOME","OFFICE")
+        val choices=names.map { name ->
+            val saved=prefs.getString(name+"_lat",null)?.toDoubleOrNull()!=null &&
+                prefs.getString(name+"_lon",null)?.toDoubleOrNull()!=null
+            (if(name=="HOME")"⌂  " else "▣  ")+name+
+                (if(saved)"  /  SAVED" else "  /  NOT SET")
+        }.toTypedArray()
+        android.app.AlertDialog.Builder(this)
+            .setTitle("EXPEDITION / KNOWN LOCATIONS")
+            .setItems(choices) {_,index-> showKnownLocationActions(names[index]) }
+            .setNegativeButton("CLOSE",null).show()
+    }
+    private fun showKnownLocationActions(name:String) {
+        val prefs=getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE)
+        val lat=prefs.getString(name+"_lat",null)?.toDoubleOrNull()
+        val lon=prefs.getString(name+"_lon",null)?.toDoubleOrNull()
+        val current=fogOverlay.currentPosition
+        val options=arrayOf(
+            "⌖  GO TO $name",
+            "◎  SAVE GPS POSITION AS $name",
+            "▣  SAVE MAP CENTER AS $name",
+            "×  REMOVE $name"
+        )
+        android.app.AlertDialog.Builder(this)
+            .setTitle("$name / LOCATION")
+            .setItems(options) {_,chosen->
+                when(chosen) {
+                    0 -> {
+                        if(lat!=null && lon!=null) {
+                            followUser=false
+                            map.controller.animateTo(GeoPoint(lat,lon))
+                            status.text="$name / TARGET"
+                        } else {
+                            status.text="$name / NOT YET SET"
+                            showKnownLocationActions(name)
+                        }
+                    }
+                    1 -> {
+                        if(current!=null) {
+                            prefs.edit().putString(name+"_lat",current.latitude.toString())
+                                .putString(name+"_lon",current.longitude.toString()).apply()
+                            status.text="$name / GPS POSITION SAVED";refresh()
+                        } else status.text="$name / NO CURRENT GPS"
+                    }
+                    2 -> anchor(name,true)
+                    3 -> android.app.AlertDialog.Builder(this)
+                        .setTitle("REMOVE $name?")
+                        .setMessage("Only the saved HOME/OFFICE marker will be removed. Notes and discovered map remain unchanged.")
+                        .setNegativeButton("KEEP",null)
+                        .setPositiveButton("REMOVE") {_,_->
+                            prefs.edit().remove(name+"_lat").remove(name+"_lon").apply()
+                            status.text="$name / REMOVED";refresh()
+                        }.show()
+                }
+            }.setNegativeButton("BACK") {_,_->showKnownLocations()}.show()
+    }
+
     private fun anchor(name:String,save:Boolean) {
         val prefs=getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE)
         if(save) {
@@ -3141,12 +3320,13 @@ class MainActivity : Activity(), SensorEventListener {
         }.start()
     }
     private fun applyExpeditionStyle(button:Button,selected:Boolean=false) {
-        button.setTextColor(if(selected)Color.rgb(245,218,156) else sand)
+        button.setTextColor(if(selected)ExpeditionThemes.current.light else sand)
         button.setTypeface(Typeface.SERIF,Typeface.BOLD)
         button.background=GradientDrawable().apply {
             cornerRadius=dp(6).toFloat()
-            setColor(if(selected)Color.rgb(69,64,40) else Color.rgb(29,36,27))
-            setStroke(dp(1),Color.rgb(151,125,76))
+            setColor(if(selected)ExpeditionThemes.current.raised else ExpeditionThemes.current.surface)
+            setStroke(dp(1),if(ExpeditionThemes.current.id=="MILITARY")
+                Color.rgb(151,125,76) else ExpeditionThemes.current.gold)
         }
     }
 
@@ -3156,17 +3336,17 @@ class MainActivity : Activity(), SensorEventListener {
             orientation=LinearLayout.VERTICAL
             background=GradientDrawable().apply {
                 cornerRadius=dp(12).toFloat()
-                setColor(Color.rgb(23,31,25))
-                setStroke(dp(1),Color.rgb(190,154,89))
+                setColor(ExpeditionThemes.current.surface)
+                setStroke(dp(1),ExpeditionThemes.current.gold)
             }
             setPadding(dp(11),dp(10),dp(11),dp(10))
         }
-        panel.addView(label("FIELD KIT",19,sand).apply {
+        panel.addView(label("SETTINGS",19,sand).apply {
             gravity=Gravity.CENTER
             setTypeface(Typeface.SERIF,Typeface.BOLD)
             letterSpacing=.11f
         },LinearLayout.LayoutParams(-1,dp(30)))
-        panel.addView(label("EXPEDITION / TOOLS & SETTINGS",10,sage).apply {
+        panel.addView(label("EXPEDITION / TOOLS & DISPLAY",10,sage).apply {
             gravity=Gravity.CENTER
         },LinearLayout.LayoutParams(-1,dp(20)))
         val tabBar=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
@@ -3258,6 +3438,42 @@ class MainActivity : Activity(), SensorEventListener {
                 }
                 if(items.size==1)row.addView(View(this),LinearLayout.LayoutParams(0,dp(49),1f))
                 optionGrid.addView(row)
+            }
+            if(tab=="DISPLAY") {
+                optionGrid.addView(label("INTERFACE COLOR / CHOOSE STYLE",12,sand).apply {
+                    setPadding(dp(5),dp(7),0,dp(4))
+                    setTypeface(Typeface.SERIF,Typeface.BOLD)
+                })
+                val themes=LinearLayout(this).apply {
+                    orientation=LinearLayout.HORIZONTAL
+                }
+                ExpeditionThemes.all().forEach {palette ->
+                    val selected=palette.id==ExpeditionThemes.current.id
+                    val button=action((if(selected)"✓ " else "")+palette.label.uppercase()).apply {
+                        textSize=10f
+                        setTextColor(palette.light)
+                        background=GradientDrawable().apply {
+                            cornerRadius=dp(8).toFloat()
+                            setColor(palette.surface)
+                            setStroke(dp(if(selected)3 else 1),palette.gold)
+                        }
+                        setOnClickListener {
+                            if(!selected) {
+                                ExpeditionThemes.select(this@MainActivity,palette.id)
+                                layersPopup?.dismiss()
+                                recreate()
+                            }
+                        }
+                    }
+                    themes.addView(button,LinearLayout.LayoutParams(0,dp(48),1f).apply {
+                        setMargins(dp(2),dp(2),dp(2),dp(2))
+                    })
+                }
+                optionGrid.addView(themes)
+                optionGrid.addView(label("MILITARY: OLIVE / BRASS   •   EXPLORER: PINE / GOLD   •   CIVIL: NAVY / COPPER",9,sage).apply {
+                    setPadding(dp(4),dp(2),dp(2),dp(5))
+                    maxLines=2
+                })
             }
         }
         tabs.forEach {tab->
@@ -3474,10 +3690,16 @@ class MainActivity : Activity(), SensorEventListener {
         SensorManager.getRotationMatrixFromVector(rotation,event.values)
         SensorManager.getOrientation(rotation,orientation)
         val degrees = ((Math.toDegrees(orientation[0].toDouble())+360.0)%360.0).toInt()
+        val now=android.os.SystemClock.uptimeMillis()
+        val change=if(lastCompassHeading<0)360
+            else kotlin.math.abs((degrees-lastCompassHeading+540)%360-180)
+        if(change<3 && now-lastCompassPaintElapsed<600L)return
+        lastCompassHeading=degrees
+        lastCompassPaintElapsed=now
         compassView.text = "▲ N %03d°".format(degrees)
         expeditionHeader?.bearing=degrees
         fogOverlay.northAzimuth = degrees.toFloat()
-        map.invalidate()
+        if(!map.isInLayout)map.postInvalidateOnAnimation()
     }
     override fun onAccuracyChanged(sensor:Sensor?,accuracy:Int) {}
     private fun startTracking() {
@@ -3524,7 +3746,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
     private fun action(t: String) = Button(this).apply {
         text = t; textSize = 10f; isAllCaps = false
-        setTextColor(sand); setBackgroundColor(Color.rgb(58, 69, 52))
+        setTextColor(sand); setBackgroundColor(ExpeditionThemes.current.moss)
         setPadding(0, 0, 0, 0)
     }
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, grants: IntArray) {
@@ -3595,6 +3817,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
     override fun onPause() {
         handler.removeCallbacks(taxiRefreshTask)
+        handler.removeCallbacks(repositionBubbleAfterPan)
         handler.removeCallbacks(solarTick)
         super.onPause(); sensors.unregisterListener(this); map.onPause()
         if(receiverRegistered) {unregisterReceiver(trackingReceiver);receiverRegistered=false}

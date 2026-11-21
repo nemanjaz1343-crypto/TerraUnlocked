@@ -13,17 +13,20 @@ import kotlin.math.*
 
 /** Native hand-drawn expedition controls. The map itself is never repainted by these views. */
 internal object ExpeditionArt {
-    val gold=Color.rgb(213,175,106)
-    val light=Color.rgb(240,218,166)
-    val dark=Color.rgb(14,20,16)
-    val moss=Color.rgb(43,47,32)
-    val muted=Color.rgb(105,111,91)
+    val gold:Int get()=ExpeditionThemes.current.gold
+    val light:Int get()=ExpeditionThemes.current.light
+    val dark:Int get()=ExpeditionThemes.current.dark
+    val moss:Int get()=ExpeditionThemes.current.moss
+    val muted:Int get()=ExpeditionThemes.current.muted
     val p=Paint(Paint.ANTI_ALIAS_FLAG)
     fun fill(c:Canvas,l:Float,t:Float,r:Float,b:Float,col:Int) {
         p.style=Paint.Style.FILL;p.color=col;p.clearShadowLayer();c.drawRect(l,t,r,b,p)
     }
     fun panel(c:Canvas,rect:RectF,highlight:Boolean=false,radius:Float=10f) {
-        p.style=Paint.Style.FILL;p.color=if(highlight)Color.rgb(54,49,31) else dark
+        p.style=Paint.Style.FILL;p.color=if(highlight)
+            (if(ExpeditionThemes.current.id=="MILITARY")Color.rgb(54,49,31)
+                else ExpeditionThemes.current.raised)
+            else dark
         c.drawRoundRect(rect,radius,radius,p)
         // Faint leather/grain and military-map scuffs; deterministic, inexpensive.
         p.style=Paint.Style.STROKE;p.strokeWidth=.45f
@@ -81,24 +84,45 @@ internal object ExpeditionArt {
                 val v=Path().apply{moveTo(-7f,7f);lineTo(10f,-10f);lineTo(3f,10f);lineTo(-1f,2f);close()}
                 c.drawPath(v,p)
             }
-            "mark","paint" -> {
+            "mark" -> {
+                // Distinctive feather quill with a fine ink shaft.
+                c.save();c.rotate(28f)
+                p.style=Paint.Style.FILL
+                val feather=Path().apply {
+                    moveTo(-2f,8f)
+                    cubicTo(-13f,2f,-10f,-11f,6f,-12f)
+                    cubicTo(12f,-2f,4f,6f,-2f,8f)
+                    close()
+                }
+                c.drawPath(feather,p)
+                p.style=Paint.Style.STROKE
+                p.color=dark;p.strokeWidth=1.3f
+                val shaft=Path().apply{moveTo(-4f,11f);quadTo(-1f,-1f,7f,-10f)}
+                c.drawPath(shaft,p)
+                p.color=col;p.strokeWidth=1.3f
+                line(-9f,-3f,-3f,-1f);line(-8f,2f,-3f,3f)
+                line(2f,-7f,7f,-6f);line(-4f,11f,-7f,13f)
+                c.restore()
+            }
+            "paint" -> {
                 c.save();c.rotate(37f)
                 p.style=Paint.Style.FILL
                 val v=Path().apply{moveTo(-3f,-11f);lineTo(3f,-11f);lineTo(4f,3f);lineTo(0f,12f);lineTo(-4f,3f);close()}
                 c.drawPath(v,p);c.restore()
-                if(name=="mark")line(-8f,7f,-11f,10f)
             }
             "erase" -> {
                 c.save();c.rotate(-42f)
                 c.drawRoundRect(-6f,-10f,6f,10f,2f,2f,p)
                 line(-6f,2f,6f,2f);c.restore()
             }
-            "kit" -> {
-                // Expedition field bag, distinct from the map-source button above.
-                c.drawRoundRect(-10f,-5f,10f,10f,2.2f,2.2f,p)
-                path(-4f,-5f,-4f,-9f,4f,-9f,4f,-5f)
-                line(-10f,1f,10f,1f)
-                c.drawRoundRect(-2.2f,-1.8f,2.2f,4f,1f,1f,p)
+            "settings" -> {
+                c.drawCircle(0f,0f,5.7f,p)
+                c.drawCircle(0f,0f,2f,p)
+                for(i in 0..7) {
+                    val a=i*Math.PI/4.0
+                    line((7.2*cos(a)).toFloat(),(7.2*sin(a)).toFloat(),
+                        (10.5*cos(a)).toFloat(),(10.5*sin(a)).toFloat())
+                }
             }
             "map" -> {
                 path(-9f,-4f,0f,-9f,9f,-4f,0f,1f,-9f,-4f)
@@ -187,7 +211,7 @@ internal class ExpeditionHeaderView(context:Context,
         val dial=RectF(327f,cy-12f,351f,cy+12f)
         ExpeditionArt.p.style=Paint.Style.STROKE
         ExpeditionArt.p.strokeWidth=1.6f
-        ExpeditionArt.p.color=Color.rgb(166,132,73)
+        ExpeditionArt.p.color=ExpeditionThemes.current.accent
         c.drawArc(dial,180f,180f,false,ExpeditionArt.p)
         ExpeditionArt.p.color=Color.rgb(81,106,75)
         c.drawArc(dial,0f,180f,false,ExpeditionArt.p)
@@ -253,8 +277,8 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
     override fun onDetachedFromWindow(){radar.cancel();super.onDetachedFromWindow()}
     private var pressedIndex=-1
     private val d=resources.displayMetrics.density
-    private val labels=arrayOf("TRACK","LOCATE","MARK","ERASE","KIT")
-    private val icons=arrayOf("track","follow","mark","erase","kit")
+    private val labels=arrayOf("TRACK","LOCATE","MARK","ERASE","SETTINGS")
+    private val icons=arrayOf("track","follow","mark","erase","settings")
     override fun onDraw(c:Canvas) {
         val w=width.toFloat();val h=height.toFloat()
         ExpeditionArt.fill(c,0f,0f,w,h,ExpeditionArt.dark)
@@ -264,11 +288,14 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
             val x=3*d+(i+.5f)*step
             if(i==selected || i==pressedIndex || (i==0 && trackingActive)){
                 ExpeditionArt.panel(c,RectF(3*d+i*step,3*d,3*d+(i+1)*step,h-3*d),true,7*d)
-                ExpeditionArt.rule(c,x-step*.22f,h-8*d,x+step*.22f,h-8*d,ExpeditionArt.light,1*d)
+                ExpeditionArt.rule(c,x-step*.22f,h-8*d,x+step*.22f,h-8*d,
+                    if(ExpeditionThemes.current.id=="CIVIL")ExpeditionThemes.current.accent
+                    else ExpeditionArt.light,1*d)
             }
             if(i>0 && i!=selected && i-1!=selected)
                 ExpeditionArt.rule(c,3*d+i*step,11*d,3*d+i*step,h-10*d,ExpeditionArt.muted,.75f*d)
-            ExpeditionArt.icon(c,icons[i],x,17*d,18*d,if(i==selected || (i==0 && trackingActive))ExpeditionArt.light else Color.rgb(183,178,150))
+            ExpeditionArt.icon(c,icons[i],x,17*d,18*d,if(i==selected || (i==0 && trackingActive))ExpeditionArt.light else (if(ExpeditionThemes.current.id=="MILITARY")
+                Color.rgb(183,178,150) else ExpeditionThemes.current.secondary))
             if(i==0 && gpsSearching){
                 // Two widening radar rings show that Android has not delivered its first fix.
                 val ring=Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -279,10 +306,12 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
                 ring.alpha=((scanPhase)*135).toInt()
                 c.drawCircle(x,17*d,(10f+10f*((scanPhase+0.5f)%1f))*d,ring)
             }
-            ExpeditionArt.label(c,if(i==0 && gpsSearching)"SEARCH" else if(i==0 && trackingActive)"STOP" else labels[i],x,h-8*d,9.5f*d,if(i==selected)ExpeditionArt.light else Color.rgb(183,178,150),false,.2f*d)
+            ExpeditionArt.label(c,if(i==0 && gpsSearching)"SEARCH" else if(i==0 && trackingActive)"STOP" else labels[i],x,h-8*d,9.5f*d,if(i==selected)ExpeditionArt.light else (if(ExpeditionThemes.current.id=="MILITARY")
+                Color.rgb(183,178,150) else ExpeditionThemes.current.secondary),false,.2f*d)
             if(i==0 && trackingActive){
                 ExpeditionArt.p.style=Paint.Style.FILL
-                ExpeditionArt.p.color=Color.rgb(181,216,132)
+                ExpeditionArt.p.color=if(ExpeditionThemes.current.id=="MILITARY")
+                    Color.rgb(181,216,132) else ExpeditionThemes.current.accent
                 c.drawCircle(x+17*d,13*d,3*d,ExpeditionArt.p)
             }
         }
@@ -337,7 +366,9 @@ internal class ExpeditionMarkPanelView(context:Context,val onSelect:(Int)->Unit)
         return true
     }
 }
-internal class ExpeditionJournalTab(context:Context,val onToggle:()->Unit):View(context) {
+internal class ExpeditionJournalTab(
+    context:Context,val onToggle:()->Unit,val onLongPress:()->Unit={}
+):View(context) {
     private val d=resources.displayMetrics.density
     var open:Boolean=false;set(value){field=value;invalidate()}
     override fun onDraw(c:Canvas) {
@@ -349,8 +380,39 @@ internal class ExpeditionJournalTab(context:Context,val onToggle:()->Unit):View(
         c.restore()
         ExpeditionArt.icon(c,"book",w*.46f,h*.70f,18*d,ExpeditionArt.light)
     }
+    private val handler=android.os.Handler(android.os.Looper.getMainLooper())
+    private val touchSlop=android.view.ViewConfiguration.get(context).scaledTouchSlop
+    private var downX=0f
+    private var downY=0f
+    private var fired=false
+    private val openLocations=Runnable {
+        fired=true
+        onLongPress()
+        performLongClick()
+    }
     override fun onTouchEvent(e:MotionEvent):Boolean {
-        if(e.actionMasked==MotionEvent.ACTION_UP){onToggle();return true}
+        when(e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX=e.x;downY=e.y;fired=false
+                handler.postDelayed(openLocations,550L)
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if(kotlin.math.abs(e.x-downX)>touchSlop ||
+                    kotlin.math.abs(e.y-downY)>touchSlop)
+                    handler.removeCallbacks(openLocations)
+                return true
+            }
+            MotionEvent.ACTION_UP -> {
+                handler.removeCallbacks(openLocations)
+                if(!fired) {onToggle();performClick()}
+                return true
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                handler.removeCallbacks(openLocations);return true
+            }
+        }
         return true
     }
+    override fun performClick():Boolean {super.performClick();return true}
 }

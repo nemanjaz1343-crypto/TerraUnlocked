@@ -35,9 +35,11 @@ class DiscoveryFogOverlay(
     var currentPosition: GeoPoint? = null
     var positionAccuracy = 0f
     var northAzimuth = 0f
-    private val fogPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(15, 22, 17) }
+    private val fogPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = ExpeditionThemes.current.dark
+    }
     private val routePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(218, 199, 148); strokeWidth = 2.5f; style = Paint.Style.STROKE
+        color = ExpeditionThemes.current.gold; strokeWidth = 2.5f; style = Paint.Style.STROKE
     }
     private fun toPoint(map: MapView, lat: Double, lon: Double): Point =
         map.projection.toPixels(GeoPoint(lat, lon), Point())
@@ -83,6 +85,13 @@ class DiscoveryFogOverlay(
     private var cachedScale=1f
     private var lastZoomChange=0L
     private var observedZoom=Double.NaN
+    private var lastPanElapsed=0L
+    private var lastDeferredMaskFrame=0L
+
+    /** Avoid heavy fog recomposition during drag; cached holes translate with map. */
+    fun onMapPanned() {
+        lastPanElapsed=android.os.SystemClock.uptimeMillis()
+    }
     private val maskPaint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
         xfermode=android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT)
     }
@@ -112,15 +121,24 @@ class DiscoveryFogOverlay(
                 val scale=Math.pow(2.0,zoom-cachedZoom).toFloat()
                 // Reuse the existing GPU-composited bitmap while pinch zoom is active.
                 // Rebuild only after zoom settles; avoid frame-by-frame CPU blurring.
-                val stillZooming=now-lastZoomChange<90L
+                val stillZooming=now-lastZoomChange<120L
+                val panning=now-lastPanElapsed<190L
                 val dx=projected.x-anchor.x*scale
                 val dy=projected.y-anchor.y*scale
-                if(stillZooming || (kotlin.math.abs(scale-1f)<0.001f &&
-                    kotlin.math.abs(dx)<pad*0.5f && kotlin.math.abs(dy)<pad*0.5f)) {
+                // Original 80px threshold forced a blur/mask rebuild every
+                // few pan frames on the UI thread. Translate the last mask
+                // during the gesture, then rebuild after the map settles.
+                if(stillZooming || panning ||
+                    (kotlin.math.abs(scale-1f)<0.001f &&
+                    kotlin.math.abs(dx)<pad*0.7f && kotlin.math.abs(dy)<pad*0.7f)) {
                     cachedScale=scale
                     cachedShiftX=dx
                     cachedShiftY=dy
-                    if(stillZooming)map.postInvalidateDelayed(100L)
+                    if((panning || stillZooming) &&
+                        now-lastDeferredMaskFrame>=120L) {
+                        lastDeferredMaskFrame=now
+                        map.postInvalidateDelayed(220L)
+                    }
                     return cached
                 }
             }
