@@ -24,6 +24,14 @@ class TerraArchive(private val context:Context) {
                 zip.write(value.toByteArray(Charsets.UTF_8))
                 zip.closeEntry()
             }
+            // Optional Journey remains independent of one active objective.
+            val journey=JourneyStore(context)
+            val journeyJson=JSONObject()
+                .put("ids",org.json.JSONArray(journey.ids()))
+                .put("enabled",journey.enabled)
+            zip.putNextEntry(ZipEntry("journey.json"))
+            zip.write(journeyJson.toString().toByteArray(Charsets.UTF_8))
+            zip.closeEntry()
             // GPS evidence is kept separate from discoveries and drawn paths.
             // Export only on explicit user request; older archives remain valid.
             for(name in listOf("terra_gps_raw.csv","terra_gps_trace.csv",
@@ -59,6 +67,7 @@ class TerraArchive(private val context:Context) {
         val media=mutableMapOf<String,ByteArray>()
         val gpsFiles=mutableMapOf<String,ByteArray>()
         var anchors:JSONObject?=null
+        var journey:JSONObject?=null
         ZipInputStream(input).use {zip->
             while(true) {
                 val entry=zip.nextEntry ?: break
@@ -67,6 +76,10 @@ class TerraArchive(private val context:Context) {
                     val bytes=zip.readBytes()
                     require(bytes.size<=100_000) {"Anchors too large"}
                     anchors=JSONObject(bytes.toString(Charsets.UTF_8))
+                } else if(name=="journey.json") {
+                    val bytes=zip.readBytes()
+                    require(bytes.size<=100_000) {"Journey too large"}
+                    journey=JSONObject(bytes.toString(Charsets.UTF_8))
                 } else if(name in keys.map {it.first}) {
                     val data=zip.readBytes()
                     require(data.size<=15_000_000) {"Archive data too large"}
@@ -112,6 +125,17 @@ class TerraArchive(private val context:Context) {
         }
         for((filename,pref,key) in keys.filter {fields.containsKey(it.first)}) {
             context.getSharedPreferences(pref,Context.MODE_PRIVATE).edit().putString(key,fields.getValue(filename)).commit()
+        }
+        // Load Journey only after places.json, so restored user-created goals
+        // can be matched to their stable IDs. Older backups remain valid.
+        journey?.let {plan->
+            val raw=plan.optJSONArray("ids") ?: org.json.JSONArray()
+            val ids=(0 until raw.length()).mapNotNull {i->
+                raw.optString(i,"").takeIf{it.isNotBlank()}
+            }
+            val valid=(ReconObjectives.all+ObjectiveStore(context).customPlaces())
+                .map{it.id}.toSet()
+            JourneyStore(context).save(ids,valid,plan.optBoolean("enabled",false))
         }
     }
 }
