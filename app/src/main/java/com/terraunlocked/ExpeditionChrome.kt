@@ -211,7 +211,7 @@ internal class ExpeditionHeaderView(context:Context,
         val dial=RectF(327f,cy-12f,351f,cy+12f)
         ExpeditionArt.p.style=Paint.Style.STROKE
         ExpeditionArt.p.strokeWidth=1.6f
-        ExpeditionArt.p.color=Color.rgb(166,132,73)
+        ExpeditionArt.p.color=ExpeditionThemes.current.accent
         c.drawArc(dial,180f,180f,false,ExpeditionArt.p)
         ExpeditionArt.p.color=Color.rgb(81,106,75)
         c.drawArc(dial,0f,180f,false,ExpeditionArt.p)
@@ -288,7 +288,9 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
             val x=3*d+(i+.5f)*step
             if(i==selected || i==pressedIndex || (i==0 && trackingActive)){
                 ExpeditionArt.panel(c,RectF(3*d+i*step,3*d,3*d+(i+1)*step,h-3*d),true,7*d)
-                ExpeditionArt.rule(c,x-step*.22f,h-8*d,x+step*.22f,h-8*d,ExpeditionArt.light,1*d)
+                ExpeditionArt.rule(c,x-step*.22f,h-8*d,x+step*.22f,h-8*d,
+                    if(ExpeditionThemes.current.id=="CIVIL")ExpeditionThemes.current.accent
+                    else ExpeditionArt.light,1*d)
             }
             if(i>0 && i!=selected && i-1!=selected)
                 ExpeditionArt.rule(c,3*d+i*step,11*d,3*d+i*step,h-10*d,ExpeditionArt.muted,.75f*d)
@@ -308,7 +310,8 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
                 Color.rgb(183,178,150) else ExpeditionThemes.current.secondary),false,.2f*d)
             if(i==0 && trackingActive){
                 ExpeditionArt.p.style=Paint.Style.FILL
-                ExpeditionArt.p.color=Color.rgb(181,216,132)
+                ExpeditionArt.p.color=if(ExpeditionThemes.current.id=="MILITARY")
+                    Color.rgb(181,216,132) else ExpeditionThemes.current.accent
                 c.drawCircle(x+17*d,13*d,3*d,ExpeditionArt.p)
             }
         }
