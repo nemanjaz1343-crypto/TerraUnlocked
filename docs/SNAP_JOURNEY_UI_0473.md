@@ -7,7 +7,7 @@
 - PICK ON MAP activates a temporary map mode and leaves a visible instruction bar. Tapping any desired point creates a FieldNote. The user can pan/zoom before tapping.
 - Photos, short video clips (max 30 seconds/24 MB requested of camera), and audio recordings remain ordinary FieldNote attachments and use the existing backup/export mechanism. Videos are shared with an external video player through FileProvider and removed only when the user chooses removal.
 - No capture completes objectives or bypasses mission photo/GPS evidence; SNAP and mission-proof images are separate features.
-- A staged capture survives activity state restoration when the staged private file remains available, but is not a cloud upload or background capture.
+- A staged capture is persisted in private app preferences and remains available after the app is closed and reopened until the user attaches or discards it. It is not a cloud upload or background capture; unplaced drafts are not included in the regular ZIP backup.
 
 ## Planner: tap destinations on the map
 - From Missions/Expeditions/Tasks, press PLAN OPERATION / EXPEDITION / ITINERARY to enter an on-map planner.
