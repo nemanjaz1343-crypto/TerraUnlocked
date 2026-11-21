@@ -3220,43 +3220,153 @@ class MainActivity : Activity(), SensorEventListener {
         dialog.show()
         dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
     }
-    private fun startVoice(where:GeoPoint) {
+    /** Record first, review sound and waveform, then explicitly save. */
+    private fun startVoice(where:GeoPoint?,forSnap:Boolean=false) {
         voicePoint=where
+        snapVoiceRecording=forSnap
         if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO),11);return
+            snapVoicePermissionPending=forSnap
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO),11)
+            return
         }
-        try {
+        snapVoicePermissionPending=false
+        val panel=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(14),dp(13),dp(14),dp(13))
+            background=tacticalPanel()
+        }
+        panel.addView(label("● VOICE MEMO / RECORD & REVIEW",15,sand))
+        val state=label("MIC ACTIVE / 00:00",12,sage)
+        panel.addView(state,LinearLayout.LayoutParams(-1,dp(33)))
+        val meter=VoiceMeterView(this).apply{
+            minimumHeight=dp(64)
+            setBackgroundColor(ExpeditionThemes.current.dark)
+        }
+        panel.addView(meter,LinearLayout.LayoutParams(-1,dp(64)))
+        val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        val extra=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        panel.addView(row,LinearLayout.LayoutParams(-1,dp(46)).apply{topMargin=dp(8)})
+        panel.addView(extra,LinearLayout.LayoutParams(-1,dp(46)).apply{topMargin=dp(5)})
+        val stop=action("■ STOP");val play=action("▶ PLAY")
+        val retry=action("↻ RETAKE");val discard=action("× DELETE")
+        val save=action("✓ SAVE")
+        fun append(parent:LinearLayout,button:Button) {
+            applyExpeditionStyle(button)
+            parent.addView(button,LinearLayout.LayoutParams(0,dp(43),1f).apply{
+                setMargins(dp(2),0,dp(2),0)
+            })
+        }
+        append(row,stop);append(row,play)
+        append(extra,retry);append(extra,discard);append(extra,save)
+        lateinit var dialog:android.app.AlertDialog
+        var recording=false;var recorded=false;var began=0L
+        var player:MediaPlayer?=null
+        var ticker:Runnable?=null
+        fun stopTicker() {ticker?.let{handler.removeCallbacks(it)};ticker=null}
+        fun stopPlayer() {player?.let{runCatching{it.stop()};it.release()};player=null}
+        fun stopTake() {
+            if(!recording)return
+            recording=false;stopTicker()
+            val stopped=runCatching{recorder?.stop()}.isSuccess
+            runCatching{recorder?.release()};recorder=null
+            recorded=stopped && audioFile?.let{it.isFile&&it.length()>100L}==true
+            if(!recorded)audioFile?.delete()
+            state.text=if(recorded)"READY / REVIEW OR SAVE" else "NO AUDIO / RETAKE"
+            stop.visibility=View.GONE
+            play.isEnabled=recorded;save.isEnabled=recorded
+            retry.isEnabled=true
+        }
+        fun startTake() {
+            stopPlayer();stopTake()
+            audioFile?.delete()
             val file=File(filesDir,"voice_"+System.currentTimeMillis()+".m4a")
-            recorder=MediaRecorder().apply {
-                setAudioSource(MediaRecorder.AudioSource.MIC)
-                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setOutputFile(file.absolutePath);prepare();start()
+            val started=runCatching {
+                recorder=MediaRecorder().apply {
+                    setAudioSource(MediaRecorder.AudioSource.MIC)
+                    setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                    setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                    setOutputFile(file.absolutePath);prepare();start()
+                }
+            }.isSuccess
+            if(!started) {
+                runCatching{recorder?.release()};recorder=null
+                file.delete();state.text="MIC ERROR / RETAKE";save.isEnabled=false
+                return
             }
-            audioFile=file
-            android.app.AlertDialog.Builder(this).setTitle("● VOICE MEMO")
-                .setMessage("Recording locally")
-                .setNegativeButton("DISCARD") {_,_->stopVoice(false)}
-                .setPositiveButton("SAVE") {_,_->stopVoice(true)}
-                .setCancelable(false).show()
-        }catch(e:Exception) {recorder?.release();recorder=null;status.text="MIC UNAVAILABLE"}
-    }
-    private fun stopVoice(save:Boolean) {
-        runCatching {recorder?.stop()}
-        recorder?.release();recorder=null
-        val file=audioFile
-        val point=voicePoint
-        if(save && file!=null && file.exists() && file.length()>0 && voiceNoteTime!=null) {
-            val idx=notes.indexOfFirst {it.time==voiceNoteTime}
-            if(idx>=0) {
-                notes[idx]=notes[idx].copy(attachments=notes[idx].attachments+file.name)
-                fieldNotes.save(notes);refresh()
+            audioFile=file;recording=true;recorded=false
+            began=android.os.SystemClock.elapsedRealtime()
+            meter.reset();stop.visibility=View.VISIBLE
+            play.isEnabled=false;save.isEnabled=false;retry.isEnabled=false
+            val tick=object:Runnable {
+                override fun run() {
+                    if(!recording)return
+                    meter.sample(runCatching{recorder?.maxAmplitude?:0}.getOrDefault(0))
+                    val elapsed=(android.os.SystemClock.elapsedRealtime()-began)/1000L
+                    state.text="● RECORDING / %02d:%02d".format(
+                        java.util.Locale.US,elapsed/60,elapsed%60)
+                    handler.postDelayed(this,95L)
+                }
             }
-        } else if(save && file!=null && file.exists() && file.length()>0 && point!=null) {
-            notes.add(FieldNote(point.latitude,point.longitude,"Voice memo","VOICE",file.name,System.currentTimeMillis()))
+            ticker=tick;handler.post(tick)
+        }
+        fun clean(delete:Boolean) {
+            stopTake();stopTicker();stopPlayer()
+            runCatching{recorder?.release()};recorder=null
+            if(delete)audioFile?.delete()
+            audioFile=null;voicePoint=null;voiceNoteTime=null
+            snapVoiceRecording=false;snapVoicePermissionPending=false
+        }
+        stop.setOnClickListener{stopTake()}
+        retry.setOnClickListener{startTake()}
+        play.setOnClickListener{
+            if(recording)return@setOnClickListener
+            val file=audioFile?:return@setOnClickListener
+            stopPlayer()
+            runCatching {
+                player=MediaPlayer().apply {
+                    setDataSource(file.absolutePath)
+                    setOnCompletionListener{it.release();player=null;state.text="PLAYBACK DONE"}
+                    prepare();start()
+                }
+                state.text="▶ PLAYING"
+            }.onFailure{stopPlayer();state.text="PLAYBACK FAILED / RETAKE"}
+        }
+        discard.setOnClickListener{
+            clean(true);dialog.dismiss()
+            status.text="VOICE MEMO / DISCARDED"
+        }
+        save.setOnClickListener{
+            if(recording || !recorded)return@setOnClickListener
+            val file=audioFile?:return@setOnClickListener
+            if(snapVoiceRecording) {
+                snapDraft=SnapDraft(file.name,"VOICE","Quick voice memo")
+                clean(false);dialog.dismiss();showSnapPlacement()
+                return@setOnClickListener
+            }
+            val index=voiceNoteTime?.let{id->notes.indexOfFirst{it.time==id}}?:-1
+            val updated=if(index>=0) {
+                notes[index]=notes[index].copy(
+                    attachments=notes[index].attachments+file.name)
+                notes[index]
+            } else {
+                voicePoint?.let{point->
+                    FieldNote(point.latitude,point.longitude,"Voice memo",
+                        "VOICE","",System.currentTimeMillis(),"●",listOf(file.name))
+                        .also{notes.add(it)}
+                }
+            }
+            if(updated==null) {state.text="PIN LOCATION MISSING";return@setOnClickListener}
             fieldNotes.save(notes);refresh()
-        }else file?.delete()
-        audioFile=null;voicePoint=null;voiceNoteTime=null
+            clean(false);dialog.dismiss()
+            status.text="VOICE MEMO / SAVED"
+            showExisting(updated)
+        }
+        dialog=android.app.AlertDialog.Builder(this).setView(panel)
+            .setCancelable(false).create()
+        dialog.show()
+        dialog.window?.setBackgroundDrawable(
+            android.graphics.drawable.ColorDrawable(ExpeditionThemes.current.surface))
+        startTake()
     }
     private fun gap(a: GeoPoint, b: GeoPoint): Float {
         val out = FloatArray(1)
