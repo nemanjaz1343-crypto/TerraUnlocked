@@ -1462,7 +1462,7 @@ class MainActivity : Activity(), SensorEventListener {
                 setStroke(dp(1),Color.rgb(205,170,101))
             }
         }
-        drawerPanel.addView(label("EXPEDITION JOURNAL",16,sand).apply {
+        drawerPanel.addView(label(terms.journal,16,sand).apply {
             setTypeface(Typeface.SERIF,Typeface.BOLD)
         })
         fun slideJournal(open:Boolean) {
@@ -1474,7 +1474,7 @@ class MainActivity : Activity(), SensorEventListener {
                 .setInterpolator(android.view.animation.DecelerateInterpolator(1.4f))
                 .start()
         }
-        drawerPanel.addView(action("▤  FIELD JOURNAL").apply {
+        drawerPanel.addView(action("▤  "+terms.journal).apply {
             applyExpeditionStyle(this)
             setOnClickListener{slideJournal(false);showExpeditionJournal()}
         },LinearLayout.LayoutParams(-1,dp(46)))
@@ -1482,7 +1482,7 @@ class MainActivity : Activity(), SensorEventListener {
             applyExpeditionStyle(this)
             setOnClickListener{slideJournal(false);showKnownLocations()}
         },LinearLayout.LayoutParams(-1,dp(46)))
-        drawerPanel.addView(action("◈  FIELD STATISTICS").apply {
+        drawerPanel.addView(action("◈  "+terms.statistics).apply {
             applyExpeditionStyle(this)
             setOnClickListener{slideJournal(false);showExplorationStats()}
         },LinearLayout.LayoutParams(-1,dp(46)))
@@ -1733,7 +1733,7 @@ class MainActivity : Activity(), SensorEventListener {
             setPadding(dp(17),dp(16),dp(17),dp(15))
             background=ExpeditionParchment()
         }
-        layout.addView(label("FIELD ENTRY  /  "+kind,13,ink).apply {
+        layout.addView(label(terms.journal+" / NEW "+kind,13,ink).apply {
             setTypeface(null,Typeface.BOLD)
         })
         val preview=label("◆  SELECT MARKER",14,sepia)
@@ -1821,7 +1821,7 @@ class MainActivity : Activity(), SensorEventListener {
         followUser=false
         if(extent && map.zoomLevelDouble<17.0)map.controller.setZoom(17.0)
         map.controller.animateTo(GeoPoint(o.latitude,o.longitude))
-        status.text="MISSION / "+o.name.take(36)
+        status.text=terms.single+" / "+o.name.take(36)
         refresh()
         // Details stay attached to the marker and open only when it is tapped.
     }
@@ -2537,7 +2537,7 @@ class MainActivity : Activity(), SensorEventListener {
             setPadding(dp(16),dp(16),dp(16),dp(16))
             background=ExpeditionParchment()
         }
-        panel.addView(label("EXPEDITION / FIELD JOURNAL",16,ink).apply {
+        panel.addView(label(terms.journal+" / PLACES",16,ink).apply {
             setTypeface(Typeface.SERIF,Typeface.BOLD)
         })
         panel.addView(label("${notes.size} PLACES / ${notes.count{it.visits.isNotEmpty()}} REVISITED",11,sepia))
@@ -2604,7 +2604,7 @@ class MainActivity : Activity(), SensorEventListener {
             setPadding(dp(16),dp(16),dp(16),dp(15))
             background=ExpeditionParchment()
         }
-        panel.addView(label("FIELD JOURNAL / PIN DETAILS",14,ink).apply {
+        panel.addView(label(terms.journal+" / PIN DETAILS",14,ink).apply {
             setTypeface(Typeface.SERIF,Typeface.BOLD)
         })
         panel.addView(label("RECORDED / "+java.text.SimpleDateFormat("dd MMM yyyy HH:mm",java.util.Locale.getDefault()).format(java.util.Date(current.time))+" / "+current.visits.size+" VISITS",11,sepia))
@@ -2844,7 +2844,7 @@ class MainActivity : Activity(), SensorEventListener {
     private fun showExplorationStats() {
         val stats=ExplorationStats.calculate(records,notes,historyCutoff ?: Long.MAX_VALUE)
         val panel=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(18),dp(14),dp(18),dp(14));background=tacticalPanel()}
-        panel.addView(label("◈ EXPLORATION / STATISTICS",14,sand))
+        panel.addView(label("◈ "+terms.statistics,14,sand))
         listOf(
             "DISTANCE  /  %.2f km".format(stats.distanceMeters/1000.0),
             "GPS SAMPLES  /  "+stats.gpsFixes,
@@ -3194,7 +3194,7 @@ class MainActivity : Activity(), SensorEventListener {
                 (if(saved)"  /  SAVED" else "  /  NOT SET")
         }.toTypedArray()
         android.app.AlertDialog.Builder(this)
-            .setTitle("EXPEDITION / KNOWN LOCATIONS")
+            .setTitle("KNOWN LOCATIONS / "+terms.savedPlaces)
             .setItems(choices) {_,index-> showKnownLocationActions(names[index]) }
             .setNegativeButton("CLOSE",null).show()
     }
