@@ -2103,12 +2103,50 @@ class MainActivity : Activity(), SensorEventListener {
         dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
     }
 
-    private fun photoFiles(note:FieldNote):List<String> {
-        val photos=note.attachments.filterNot{it.endsWith(".m4a",ignoreCase=true)}
-        return (if(note.kind=="PHOTO" && note.body.isNotBlank())
-            listOf(note.body)+photos else photos).distinct().filter{
-            File(filesDir,it).isFile
+    private fun photoFiles(note:FieldNote):List<String> =
+        (note.attachments+
+            (if(note.kind=="PHOTO" && SnapCapture.isPhoto(note.body))
+                listOf(note.body) else emptyList()))
+            .distinct().filter{SnapCapture.isPhoto(it) && File(filesDir,it).isFile}
+
+    private fun videoFiles(note:FieldNote):List<String> =
+        note.attachments.distinct().filter{
+            SnapCapture.isVideo(it) && File(filesDir,it).isFile
         }
+
+    private fun voiceFiles(note:FieldNote):List<String> =
+        (note.attachments+
+            (if(note.kind=="VOICE" && SnapCapture.isVoice(note.body))
+                listOf(note.body) else emptyList()))
+            .distinct().filter{SnapCapture.isVoice(it) && File(filesDir,it).isFile}
+
+    private var audioPlayback:MediaPlayer?=null
+    private fun playVoiceMemo(filename:String) {
+        audioPlayback?.let{runCatching{it.stop()};it.release()}
+        audioPlayback=null
+        val file=File(filesDir,filename)
+        if(!file.isFile) {status.text="VOICE MEMO / FILE MISSING";return}
+        runCatching {
+            audioPlayback=MediaPlayer().apply {
+                setDataSource(file.absolutePath)
+                setOnCompletionListener{it.release();audioPlayback=null}
+                prepare();start()
+            }
+            status.text="VOICE MEMO / PLAYING"
+        }.onFailure {status.text="VOICE MEMO / PLAYBACK FAILED"}
+    }
+
+    private fun playSnapVideo(filename:String) {
+        val file=File(filesDir,filename)
+        if(!file.isFile)return
+        val uri=androidx.core.content.FileProvider.getUriForFile(
+            this,packageName+".fileprovider",file)
+        runCatching {
+            startActivity(Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri,"video/mp4")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            })
+        }.onFailure{status.text="VIDEO / NO PLAYER AVAILABLE"}
     }
 
     /** Decode a suitably sampled, EXIF-correct image rather than a full-res bitmap. */
