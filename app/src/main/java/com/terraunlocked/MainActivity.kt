@@ -436,6 +436,13 @@ class MainActivity : Activity(), SensorEventListener {
     private var attachmentPoint:GeoPoint?=null
     private var attachmentNoteTime:Long?=null
     private var cameraUri:Uri?=null
+    private var snapCameraUri:Uri?=null
+    private var snapCaptureKind:String?=null
+    private var snapDraft:SnapDraft?=null
+    private var snapPickingMap=false
+    private var snapPickBar:LinearLayout?=null
+    private var snapVoicePermissionPending=false
+    private var snapVoiceRecording=false
     // A mission can only be completed after a fresh GPS check and a new camera photo.
     private var objectivePhotoTargetId:String?=null
     private var objectivePhotoPermissionId:String?=null
@@ -707,6 +714,13 @@ class MainActivity : Activity(), SensorEventListener {
         objectivePhotoTargetId=savedInstanceState?.getString("objective_photo_target")
         objectivePhotoPermissionId=savedInstanceState?.getString("objective_photo_permission")
         savedInstanceState?.getString("objective_camera_uri")?.let { cameraUri=Uri.parse(it) }
+        savedInstanceState?.getString("snap_camera_uri")?.let {snapCameraUri=Uri.parse(it)}
+        snapCaptureKind=savedInstanceState?.getString("snap_capture_kind")
+        val restored=savedInstanceState?.getString("snap_draft_filename")
+        val restoredKind=savedInstanceState?.getString("snap_draft_kind")
+        if(restored!=null && restoredKind!=null && File(filesDir,restored).isFile)
+            snapDraft=SnapDraft(restored,restoredKind,
+                savedInstanceState.getString("snap_draft_title")?:"Quick capture")
         if(savedInstanceState?.containsKey("field_photo_lat")==true &&
            savedInstanceState.containsKey("field_photo_lon")) {
             attachmentPoint=GeoPoint(
@@ -1511,6 +1525,7 @@ class MainActivity : Activity(), SensorEventListener {
         trackButton=action("TRACK")
         followButton=action("LOCATE")
         val markButton=action("MARK")
+        val snapButton=action("SNAP")
         val eraseButton=action("ERASE")
         val viewButton=action("VIEW")
         lateinit var palette:ExpeditionMarkPanelView
@@ -1518,9 +1533,10 @@ class MainActivity : Activity(), SensorEventListener {
             when(index) {
                 0->trackButton.performClick()
                 1->followButton.performClick()
-                2->markButton.performClick()
-                3->eraseButton.performClick()
-                4->viewButton.performClick()
+                2->snapButton.performClick()
+                3->markButton.performClick()
+                4->eraseButton.performClick()
+                5->viewButton.performClick()
             }
         }
         expeditionBottom=controls
@@ -1592,13 +1608,14 @@ class MainActivity : Activity(), SensorEventListener {
             }else{
                 mode="VIEW";pending.clear();lasso.clear();confirmButton.visibility=View.GONE
             }
-            controls.selected=if(opening)2 else -1
+            controls.selected=if(opening)3 else -1
             refresh()
         }
+        snapButton.setOnClickListener {showSnapOptions()}
         eraseButton.setOnClickListener {
             if(mode!="ERASE"){
                 mode="ERASE";palette.visibility=View.GONE
-                controls.selected=3;status.text="ERASE / REMOVE DISCOVERED AREA"
+                controls.selected=4;status.text="ERASE / REMOVE DISCOVERED AREA"
             }else{
                 mode="VIEW";controls.selected=-1;status.text="MAP READY"
             }
@@ -3763,6 +3780,13 @@ class MainActivity : Activity(), SensorEventListener {
         outState.putString("objective_photo_target",objectivePhotoTargetId)
         outState.putString("objective_photo_permission",objectivePhotoPermissionId)
         cameraUri?.let {outState.putString("objective_camera_uri",it.toString())}
+        snapCameraUri?.let{outState.putString("snap_camera_uri",it.toString())}
+        outState.putString("snap_capture_kind",snapCaptureKind)
+        snapDraft?.let{
+            outState.putString("snap_draft_filename",it.filename)
+            outState.putString("snap_draft_kind",it.kind)
+            outState.putString("snap_draft_title",it.title)
+        }
     }
 
     override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?) {
