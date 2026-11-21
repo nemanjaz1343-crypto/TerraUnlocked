@@ -3087,8 +3087,10 @@ class MainActivity : Activity(), SensorEventListener {
         val sepia=Color.rgb(118,84,53)
         val panel=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
-            setPadding(dp(16),dp(16),dp(16),dp(15))
+            setPadding(dp(13),dp(12),dp(13),dp(12))
             background=ExpeditionParchment()
+            isClickable=true
+            alpha=1f
         }
         panel.addView(label(terms.journal+" / PIN DETAILS",14,ink).apply {
             setTypeface(Typeface.SERIF,Typeface.BOLD)
@@ -3100,22 +3102,30 @@ class MainActivity : Activity(), SensorEventListener {
             android.location.Location.distanceBetween(position.latitude,position.longitude,current.latitude,current.longitude,out)
             panel.addView(label("DISTANCE / "+(if(out[0]>=1000f)"%.1f km".format(java.util.Locale.US,out[0]/1000f) else "${out[0].toInt()} m"),12,sepia))
         }
-        val moveButton=action("↔ MOVE PIN")
-        panel.addView(moveButton)
+        val moveButton=action("↔ MOVE PIN").apply {
+            applyExpeditionStyle(this)
+        }
+        panel.addView(moveButton,LinearLayout.LayoutParams(-1,dp(43)).apply{
+            topMargin=dp(7);bottomMargin=dp(6)
+        })
         val name=EditText(this).apply {
             setText(current.title);textSize=15f;setSingleLine(true)
             setTextColor(ink);setHintTextColor(sepia);hint="Marker title"
         }
-        panel.addView(name)
+        panel.addView(name,LinearLayout.LayoutParams(-1,dp(45)))
         val memo=EditText(this).apply {
             setText(if(current.kind=="PHOTO"||current.kind=="VOICE") "" else current.body)
-            minLines=3;maxLines=7;setTextColor(ink);setHintTextColor(sepia)
+            minLines=2;maxLines=4
+            setTextColor(ink);setHintTextColor(sepia)
+            textSize=13f
             hint="Field notes / observations..."
         }
         if(current.kind!="PHOTO"&&current.kind!="VOICE")panel.addView(memo)
         var selected=current.icon
-        val iconPreview=label("PIN ICON / $selected   •   TAP AN ICON TO UPDATE",12,sepia)
-        panel.addView(iconPreview)
+        val iconPreview=label("PIN ICON / $selected   •   TAP TO CHANGE",11,sepia)
+        panel.addView(iconPreview,LinearLayout.LayoutParams(-1,dp(27)).apply{
+            topMargin=dp(4)
+        })
         val choices=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
         val iconButtons=mutableListOf<Pair<String,Button>>()
         fun highlightSelection() {
@@ -3150,13 +3160,18 @@ class MainActivity : Activity(), SensorEventListener {
                 }
             }
             iconButtons.add(glyph to button)
-            choices.addView(button,LinearLayout.LayoutParams(0,dp(40),1f))
+            choices.addView(button,LinearLayout.LayoutParams(0,dp(38),1f).apply{
+                setMargins(dp(1),0,dp(1),0)
+            })
         }
         highlightSelection()
         panel.addView(choices)
         val count=label("PHOTOS / "+photoFiles(current).size+
-            "    ATTACHMENTS / "+current.attachments.size,12,sage)
-        panel.addView(count)
+            "    VIDEO / "+videoFiles(current).size+
+            "    AUDIO / "+voiceFiles(current).size,11,sepia)
+        panel.addView(count,LinearLayout.LayoutParams(-1,dp(29)).apply{
+            topMargin=dp(5)
+        })
         val photoStrip=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
         photoFiles(current).forEach { filename ->
             val thumb=android.widget.ImageView(this).apply {
@@ -3177,12 +3192,15 @@ class MainActivity : Activity(), SensorEventListener {
                         }.show()
                 }
             }
-            photoStrip.addView(thumb,LinearLayout.LayoutParams(dp(90),dp(88)).apply{
+            photoStrip.addView(thumb,LinearLayout.LayoutParams(dp(84),dp(79)).apply{
                 rightMargin=dp(5)
             })
         }
-        val scroller=android.widget.HorizontalScrollView(this)
-        scroller.addView(photoStrip);panel.addView(scroller)
+        if(photoStrip.childCount>0) {
+            val scroller=android.widget.HorizontalScrollView(this)
+            scroller.addView(photoStrip)
+            panel.addView(scroller,LinearLayout.LayoutParams(-1,dp(85)))
+        }
         current.attachments.filter {it.endsWith(".m4a")}.forEachIndexed {i,file ->
             panel.addView(action("▶ VOICE MEMO "+(i+1)).apply {
                 setOnClickListener {
