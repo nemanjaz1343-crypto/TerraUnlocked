@@ -1118,7 +1118,62 @@ class MainActivity : Activity(), SensorEventListener {
                 val width=canvas.width.toFloat()
                 val height=canvas.height.toFloat()
                 val all=(ReconObjectives.all+objectiveStore.customPlaces()).filter{objectiveVisible(it)}
-                val journeyIds=if(journeyStore.enabled)journeyStore.ids() else emptyList()
+                val journeyIds=when {
+                    mode=="JOURNEY_PLAN"->journeyDraft.toList()
+                    journeyStore.enabled->journeyStore.ids()
+                    else->emptyList()
+                }
+                // Plan line is a straight visual sequence, NOT a navigable road.
+                // Draw beneath all objective markers to keep numbers readable.
+                if(journeyIds.size>=2) {
+                    val objectiveById=all.associateBy{it.id}
+                    val points=journeyIds.mapNotNull{id->
+                        objectiveById[id]?.let{o->
+                            mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
+                        }
+                    }
+                    val dark=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color=Color.argb(235,15,20,21)
+                        strokeWidth=dp(8).toFloat()
+                        strokeCap=Paint.Cap.ROUND
+                        style=Paint.Style.STROKE
+                    }
+                    val bright=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color=ExpeditionThemes.current.gold
+                        strokeWidth=dp(3).toFloat()
+                        strokeCap=Paint.Cap.ROUND
+                        style=Paint.Style.STROKE
+                        pathEffect=android.graphics.DashPathEffect(
+                            floatArrayOf(dp(11).toFloat(),dp(6).toFloat()),0f)
+                    }
+                    points.zipWithNext().forEach{(a,b)->
+                        val ax=a.x.toFloat();val ay=a.y.toFloat()
+                        val bx=b.x.toFloat();val by=b.y.toFloat()
+                        canvas.drawLine(ax,ay,bx,by,dark)
+                        canvas.drawLine(ax,ay,bx,by,bright)
+                        val length=kotlin.math.hypot((bx-ax).toDouble(),
+                            (by-ay).toDouble()).toFloat()
+                        if(length>dp(24)) {
+                            val vx=(bx-ax)/length;val vy=(by-ay)/length
+                            val midX=ax+(bx-ax)*.58f
+                            val midY=ay+(by-ay)*.58f
+                            val size=dp(8).toFloat()
+                            val arrow=android.graphics.Path().apply {
+                                moveTo(midX+vx*size,midY+vy*size)
+                                lineTo(midX-vx*size*.7f-vy*size*.7f,
+                                    midY-vy*size*.7f+vx*size*.7f)
+                                lineTo(midX-vx*size*.7f+vy*size*.7f,
+                                    midY-vy*size*.7f-vx*size*.7f)
+                                close()
+                            }
+                            val fill=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                                color=ExpeditionThemes.current.light
+                                style=Paint.Style.FILL
+                            }
+                            canvas.drawPath(arrow,fill)
+                        }
+                    }
+                }
                 val occupied=mutableListOf<Pair<Float,Float>>()
                 all.forEach {o->
                     val location=if(o.id==movingObjectiveId) movingPreview else null
@@ -1510,11 +1565,7 @@ class MainActivity : Activity(), SensorEventListener {
             })
         }
         plannerButton("↕ ORDER"){showJourneyReorder()}
-        plannerButton("× CLEAR"){
-            journeyDraft.clear()
-            updateJourneyPlanBar()
-            refresh()
-        }
+        plannerButton("× CLEAR"){clearJourneyPlan()}
         plannerButton("✓ SAVE"){saveJourneyPlan()}
         plannerButton("EXIT"){finishJourneyPlan(false)}
         planBar.addView(planButtons)
