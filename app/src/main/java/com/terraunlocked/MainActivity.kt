@@ -443,6 +443,9 @@ class MainActivity : Activity(), SensorEventListener {
     private var snapPickBar:LinearLayout?=null
     private var snapVoicePermissionPending=false
     private var snapVoiceRecording=false
+    private val journeyDraft=mutableListOf<String>()
+    private var journeyPlanBar:LinearLayout?=null
+    private var journeyPlanSummary:TextView?=null
     // A mission can only be completed after a fresh GPS check and a new camera photo.
     private var objectivePhotoTargetId:String?=null
     private var objectivePhotoPermissionId:String?=null
@@ -1335,12 +1338,26 @@ class MainActivity : Activity(), SensorEventListener {
                 return true
             }
         })
-        // Last map overlay: the live user pointer must remain visible even
-        // when HOME, OFFICE, a mission or a note occupies identical coordinates.
-        // No duplicate pointer remains inside DiscoveryFogOverlay.draw().
+        // Last drawing layer: user location stays above all other markers.
         map.overlays.add(object:Overlay() {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
                 if(!shadow)fogOverlay.drawCurrentPosition(canvas,mapView)
+            }
+        })
+        // The highest-priority tap listener handles temporary map workflows
+        // without changing existing single-tap and long-press interactions.
+        map.overlays.add(object:Overlay() {
+            override fun onSingleTapConfirmed(e:MotionEvent,mapView:MapView):Boolean {
+                if(mode=="SNAP_PICK") {
+                    val geo=mapView.projection.fromPixels(e.x.toInt(),e.y.toInt())
+                    saveSnapAt(GeoPoint(geo.latitude,geo.longitude))
+                    return true
+                }
+                if(mode=="JOURNEY_PLAN") {
+                    toggleJourneyStopOnMap(e.x,e.y,mapView)
+                    return true
+                }
+                return false
             }
         })
         val mapArea=FrameLayout(this)
@@ -1450,6 +1467,60 @@ class MainActivity : Activity(), SensorEventListener {
         mapArea.addView(moveReticle,FrameLayout.LayoutParams(-1,-1))
         moveReticle.isClickable=false
         mapArea.addView(movingBar,FrameLayout.LayoutParams(-1,dp(54),Gravity.BOTTOM))
+        // SNAP placement stays visible as a small high-contrast overlay.
+        val snapBar=LinearLayout(this).apply {
+            orientation=LinearLayout.HORIZONTAL
+            gravity=Gravity.CENTER_VERTICAL
+            setPadding(dp(8),dp(5),dp(8),dp(5))
+            background=tacticalPanel()
+            visibility=View.GONE
+        }
+        snapPickBar=snapBar
+        snapBar.addView(label("SNAP / TAP A MAP POSITION",11,sand),
+            LinearLayout.LayoutParams(0,dp(42),1f))
+        snapBar.addView(action("× CANCEL").apply {
+            applyExpeditionStyle(this)
+            setOnClickListener{cancelSnapMapPick()}
+        },LinearLayout.LayoutParams(dp(100),dp(40)))
+        mapArea.addView(snapBar,FrameLayout.LayoutParams(-1,dp(54),Gravity.BOTTOM))
+        // A compact floating Journey planning toolbar, not a modal checklist.
+        val planBar=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            gravity=Gravity.CENTER_VERTICAL
+            background=tacticalPanel()
+            setPadding(dp(8),dp(5),dp(8),dp(6))
+            visibility=View.GONE
+        }
+        journeyPlanBar=planBar
+        val planLabel=label("",12,sand).apply{
+            setTypeface(Typeface.DEFAULT,Typeface.BOLD)
+            setSingleLine(true)
+            ellipsize=android.text.TextUtils.TruncateAt.END
+        }
+        journeyPlanSummary=planLabel
+        planBar.addView(planLabel,LinearLayout.LayoutParams(-1,dp(30)))
+        val planButtons=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        fun plannerButton(title:String,run:()->Unit) {
+            planButtons.addView(action(title).apply {
+                textSize=10f
+                applyExpeditionStyle(this)
+                setOnClickListener{run()}
+            },LinearLayout.LayoutParams(0,dp(43),1f).apply {
+                setMargins(dp(2),0,dp(2),0)
+            })
+        }
+        plannerButton("↕ ORDER"){showJourneyReorder()}
+        plannerButton("× CLEAR"){
+            journeyDraft.clear()
+            updateJourneyPlanBar()
+            refresh()
+        }
+        plannerButton("✓ SAVE"){saveJourneyPlan()}
+        plannerButton("EXIT"){finishJourneyPlan(false)}
+        planBar.addView(planButtons)
+        mapArea.addView(planBar,FrameLayout.LayoutParams(-1,dp(85),Gravity.BOTTOM).apply{
+            setMargins(dp(6),0,dp(6),dp(5))
+        })
         confirmButton.setOnClickListener {
             if(mode=="LASSO"){commitLasso();confirmButton.visibility=View.GONE;return@setOnClickListener}
             pushMark()
