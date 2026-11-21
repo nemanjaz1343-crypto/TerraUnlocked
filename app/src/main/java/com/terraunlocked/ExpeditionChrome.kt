@@ -90,24 +90,26 @@ internal object ExpeditionArt {
                 c.drawPath(v,p)
             }
             "mark" -> {
-                // Distinctive feather quill with a fine ink shaft.
-                c.save();c.rotate(28f)
+                // Ballpoint pen: narrow barrel, cap, pocket clip and tapered nib.
+                c.save();c.rotate(42f)
                 p.style=Paint.Style.FILL
-                val feather=Path().apply {
-                    moveTo(-2f,8f)
-                    cubicTo(-13f,2f,-10f,-11f,6f,-12f)
-                    cubicTo(12f,-2f,4f,6f,-2f,8f)
-                    close()
+                val barrel=Path().apply {
+                    moveTo(-3.6f,-10f);lineTo(3.6f,-10f)
+                    lineTo(3f,4f);lineTo(0f,10f)
+                    lineTo(-3f,4f);close()
                 }
-                c.drawPath(feather,p)
-                p.style=Paint.Style.STROKE
-                p.color=dark;p.strokeWidth=1.3f
-                val shaft=Path().apply{moveTo(-4f,11f);quadTo(-1f,-1f,7f,-10f)}
-                c.drawPath(shaft,p)
-                p.color=col;p.strokeWidth=1.3f
-                line(-9f,-3f,-3f,-1f);line(-8f,2f,-3f,3f)
-                line(2f,-7f,7f,-6f);line(-4f,11f,-7f,13f)
-                c.restore()
+                c.drawPath(barrel,p)
+                p.style=Paint.Style.STROKE;p.strokeWidth=1.3f
+                p.color=dark;line(-1.9f,-7.5f,-1.9f,2.8f)
+                p.color=col;line(4.5f,-8f,4.5f,1.5f)
+                line(-3.8f,-11.5f,3.8f,-11.5f)
+                line(0f,10f,0f,12.5f);c.restore()
+            }
+            "snap" -> {
+                c.drawRoundRect(-10f,-6f,10f,9f,2.3f,2.3f,p)
+                path(-6f,-6f,-3f,-10f,3f,-10f,6f,-6f)
+                c.drawCircle(0f,1f,4f,p)
+                p.style=Paint.Style.FILL;c.drawCircle(6.6f,-2.4f,1f,p)
             }
             "paint" -> {
                 c.save();c.rotate(37f)
@@ -285,14 +287,14 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
     override fun onDetachedFromWindow(){radar.cancel();super.onDetachedFromWindow()}
     private var pressedIndex=-1
     private val d=resources.displayMetrics.density
-    private val labels=arrayOf("TRACK","LOCATE","MARK","ERASE","SETTINGS")
-    private val icons=arrayOf("track","follow","mark","erase","settings")
+    private val labels=arrayOf("TRACK","LOCATE","SNAP","MARK","ERASE","SETTINGS")
+    private val icons=arrayOf("track","follow","snap","mark","erase","settings")
     override fun onDraw(c:Canvas) {
         val w=width.toFloat();val h=height.toFloat()
         ExpeditionArt.fill(c,0f,0f,w,h,ExpeditionArt.dark)
         ExpeditionArt.panel(c,RectF(3*d,3*d,w-3*d,h-3*d),false,8*d)
-        val step=(w-6*d)/5
-        for(i in 0..4){
+        val step=(w-6*d)/6
+        for(i in 0..5){
             val x=3*d+(i+.5f)*step
             if(i==selected || i==pressedIndex || (i==0 && trackingActive)){
                 ExpeditionArt.panel(c,RectF(3*d+i*step,3*d,3*d+(i+1)*step,h-3*d),true,7*d)
@@ -314,7 +316,7 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
                 ring.alpha=((scanPhase)*135).toInt()
                 c.drawCircle(x,17*d,(10f+10f*((scanPhase+0.5f)%1f))*d,ring)
             }
-            ExpeditionArt.label(c,if(i==0 && gpsSearching)"SEARCH" else if(i==0 && trackingActive)"STOP" else labels[i],x,h-8*d,9.5f*d,if(i==selected)ExpeditionArt.light else (if(ExpeditionThemes.current.id=="MILITARY")
+            ExpeditionArt.label(c,if(i==0 && gpsSearching)"SEARCH" else if(i==0 && trackingActive)"STOP" else labels[i],x,h-8*d,8.7f*d,if(i==selected)ExpeditionArt.light else (if(ExpeditionThemes.current.id=="MILITARY")
                 Color.rgb(183,178,150) else ExpeditionThemes.current.secondary),false,.2f*d)
             if(i==0 && trackingActive){
                 ExpeditionArt.p.style=Paint.Style.FILL
@@ -327,11 +329,11 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
     override fun onTouchEvent(e:MotionEvent):Boolean {
         when(e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                pressedIndex=(5*e.x/width).toInt().coerceIn(0,4)
+                pressedIndex=(6*e.x/width).toInt().coerceIn(0,5)
                 invalidate();return true
             }
             MotionEvent.ACTION_UP -> {
-                val idx=(5*e.x/width).toInt().coerceIn(0,4)
+                val idx=(6*e.x/width).toInt().coerceIn(0,5)
                 val shouldClick=idx==pressedIndex
                 pressedIndex=-1;invalidate()
                 if(shouldClick)onSelect(idx)
