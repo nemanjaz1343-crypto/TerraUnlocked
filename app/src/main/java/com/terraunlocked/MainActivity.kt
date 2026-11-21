@@ -2317,10 +2317,21 @@ class MainActivity : Activity(), SensorEventListener {
     }
     private fun showExpeditionJournal() {
         notes.clear();notes.addAll(fieldNotes.load())
-        val panel=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(12),dp(12),dp(12),dp(12));background=tacticalPanel()}
-        panel.addView(label("EXPEDITION / FIELD JOURNAL",16,sand))
-        panel.addView(label("${notes.size} PLACES / ${notes.count{it.visits.isNotEmpty()}} REVISITED",11,sage))
-        val search=EditText(this).apply {hint="Search journal";setSingleLine(true);textSize=14f;setTextColor(sand);setHintTextColor(sage)}
+        val ink=Color.rgb(65,47,29)
+        val sepia=Color.rgb(121,84,50)
+        val panel=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(16),dp(16),dp(16),dp(16))
+            background=ExpeditionParchment()
+        }
+        panel.addView(label("EXPEDITION / FIELD JOURNAL",16,ink).apply {
+            setTypeface(Typeface.SERIF,Typeface.BOLD)
+        })
+        panel.addView(label("${notes.size} PLACES / ${notes.count{it.visits.isNotEmpty()}} REVISITED",11,sepia))
+        val search=EditText(this).apply {
+            hint="Search the field journal";setSingleLine(true);textSize=14f
+            setTextColor(ink);setHintTextColor(sepia)
+        }
         panel.addView(search)
         val list=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
         panel.addView(android.widget.ScrollView(this).apply {addView(list)},LinearLayout.LayoutParams(-1,dp(350)))
@@ -2329,11 +2340,15 @@ class MainActivity : Activity(), SensorEventListener {
             list.removeAllViews()
             val entries=notes.filter{it.title.contains(query,true)||it.body.contains(query,true)}
                 .sortedByDescending{maxOf(it.time,it.visits.lastOrNull()?:0L)}
-            if(entries.isEmpty())list.addView(label("No records yet. Add a pin on the map.",12,sage))
+            if(entries.isEmpty())list.addView(label("No records yet. Add a pin on the map.",12,sepia))
             entries.forEach {entry->
                 val date=java.text.SimpleDateFormat("dd MMM yyyy",java.util.Locale.getDefault()).format(java.util.Date(entry.time))
                 val photos=entry.attachments.count{!it.endsWith(".m4a")}+(if(entry.kind=="PHOTO")1 else 0)
-                val card=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(dp(10),dp(8),dp(10),dp(8));background=tacticalPanel()}
+                val card=LinearLayout(this).apply {
+                    orientation=LinearLayout.VERTICAL
+                    setPadding(dp(10),dp(8),dp(10),dp(8))
+                    background=ExpeditionParchment(card=true)
+                }
                 val contents=LinearLayout(this).apply{
                     orientation=LinearLayout.HORIZONTAL
                     gravity=Gravity.CENTER_VERTICAL
@@ -2345,13 +2360,13 @@ class MainActivity : Activity(), SensorEventListener {
                     },LinearLayout.LayoutParams(dp(62),dp(62)).apply{rightMargin=dp(9)})
                 }
                 val summary=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
-                summary.addView(label(entry.title,15,sand).apply{
+                summary.addView(label(entry.title,15,ink).apply{
                     maxLines=2
                     ellipsize=android.text.TextUtils.TruncateAt.END
                 })
-                summary.addView(label("$date / ${entry.visits.size} VISITS / $photos PHOTOS",11,sage))
+                summary.addView(label("$date / ${entry.visits.size} VISITS / $photos PHOTOS",11,sepia))
                 if(entry.body.isNotBlank()&&entry.kind!="VOICE"&&entry.kind!="PHOTO")
-                    summary.addView(label(entry.body.take(100),12,sand))
+                    summary.addView(label(entry.body.take(100),12,ink))
                 contents.addView(summary,LinearLayout.LayoutParams(0,-2,1f))
                 card.addView(contents)
                 card.setOnClickListener {dialog.dismiss();showExisting(entry)}
@@ -2365,6 +2380,7 @@ class MainActivity : Activity(), SensorEventListener {
         })
         populate("")
         dialog.show()
+        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
     }
     private fun showExisting(note:FieldNote) {
         val current=notes.find { it.time==note.time } ?: return
