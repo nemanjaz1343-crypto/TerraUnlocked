@@ -2310,7 +2310,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
     private fun requestObjectiveProofPhoto(o:ReconObjective) {
         if(objectiveStore.completed(o.id)) {
-            status.text="MISSION ALREADY COMPLETED / "+o.name.take(30)
+            status.text=terms.single+" ALREADY COMPLETED / "+o.name.take(30)
             return
         }
         if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED) {
@@ -2318,7 +2318,7 @@ class MainActivity : Activity(), SensorEventListener {
             requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),12)
             return
         }
-        status.text="MISSION / VERIFYING LIVE GPS..."
+        status.text=terms.single+" / VERIFYING LIVE GPS..."
         // Never use map center, an old location, or a manually placed marker as proof.
         val token=com.google.android.gms.tasks.CancellationTokenSource()
         client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY,token.token)
@@ -2326,19 +2326,19 @@ class MainActivity : Activity(), SensorEventListener {
                 if(isFinishing || isDestroyed)return@addOnSuccessListener
                 if(fix==null || !fix.hasAccuracy() || fix.accuracy>35f ||
                     !fix.latitude.isFinite() || !fix.longitude.isFinite()) {
-                    status.text="MISSION / GPS ACCURACY REQUIRED (35m OR BETTER)"
+                    status.text=terms.single+" / GPS ACCURACY REQUIRED (35m OR BETTER)"
                     return@addOnSuccessListener
                 }
                 val fixAgeMillis=(android.os.SystemClock.elapsedRealtimeNanos()-fix.elapsedRealtimeNanos)/1000000L
                 if(fixAgeMillis<0L || fixAgeMillis>30000L) {
-                    status.text="MISSION / WAIT FOR A FRESH GPS FIX"
+                    status.text=terms.single+" / WAIT FOR A FRESH GPS FIX"
                     return@addOnSuccessListener
                 }
                 val distance=FloatArray(1)
                 android.location.Location.distanceBetween(
                     fix.latitude,fix.longitude,o.latitude,o.longitude,distance)
                 if(distance[0]>100f) {
-                    status.text="MISSION LOCKED / "+distance[0].toInt()+"m AWAY / NEED 100m"
+                    status.text=terms.single+" LOCKED / "+distance[0].toInt()+"m AWAY / NEED 100m"
                     return@addOnSuccessListener
                 }
                 val values=android.content.ContentValues().apply {
@@ -2349,7 +2349,7 @@ class MainActivity : Activity(), SensorEventListener {
                 val uri=contentResolver.insert(
                     android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values)
                 if(uri==null) {
-                    status.text="MISSION / CAMERA STORAGE UNAVAILABLE"
+                    status.text=terms.single+" / CAMERA STORAGE UNAVAILABLE"
                     return@addOnSuccessListener
                 }
                 cameraUri=uri
@@ -2363,22 +2363,22 @@ class MainActivity : Activity(), SensorEventListener {
                     contentResolver.delete(uri,null,null)
                     cameraUri=null
                     objectivePhotoTargetId=null
-                    status.text="MISSION / CAMERA UNAVAILABLE"
+                    status.text=terms.single+" / CAMERA UNAVAILABLE"
                 }
             }.addOnFailureListener {
-                status.text="MISSION / LIVE GPS UNAVAILABLE"
+                status.text=terms.single+" / LIVE GPS UNAVAILABLE"
             }
     }
 
     private fun confirmDeleteObjective(o:ReconObjective) {
         if(!o.id.startsWith("saved_")) {
-            status.text="BUILT-IN OBJECTIVES CAN BE HIDDEN, NOT DELETED"
+            status.text="BUILT-IN "+terms.plural+" CAN BE HIDDEN, NOT DELETED"
             return
         }
         android.app.AlertDialog.Builder(this)
-            .setTitle("DELETE OBJECTIVE?")
-            .setMessage("Permanently remove \""+o.name+"\" from your saved objectives? "+
-                "This cannot be undone. Field journal photos and notes will be preserved.")
+            .setTitle("DELETE "+terms.single+"?")
+            .setMessage("Permanently remove \""+o.name+"\" from your saved "+terms.plural.lowercase(java.util.Locale.US)+"? "+
+                "This cannot be undone. "+terms.journal+" photos and notes will be preserved.")
             .setNegativeButton("CANCEL",null)
             .setPositiveButton("DELETE") {_,_->
                 if(objectiveStore.deleteCustom(o.id)) {
@@ -2388,9 +2388,9 @@ class MainActivity : Activity(), SensorEventListener {
                     if(pendingObjective?.id==o.id)clearMapPreview()
                     objectiveBubble?.dismiss()
                     objectivesPopup?.dismiss()
-                    status.text="OBJECTIVE DELETED / "+o.name.take(24)
+                    status.text=terms.single+" DELETED / "+o.name.take(24)
                     refresh()
-                } else status.text="OBJECTIVE / DELETE FAILED"
+                } else status.text=terms.single+" / DELETE FAILED"
             }.show().getButton(android.app.AlertDialog.BUTTON_POSITIVE)
             .setTextColor(Color.rgb(227,128,112))
     }
@@ -2524,7 +2524,7 @@ class MainActivity : Activity(), SensorEventListener {
                     map.controller.animateTo(GeoPoint(o.latitude,o.longitude))
                     movePinBar?.visibility=View.VISIBLE
                     pinMoveReticle?.invalidate()
-                    status.text="MOVE OBJECTIVE / TOUCH MAP TO RELOCATE, THEN CONFIRM"
+                    status.text="MOVE "+terms.single+" / TOUCH MAP TO RELOCATE, THEN CONFIRM"
                 } else if(o.source.startsWith("http")) {
                     startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(o.source)))
                 }
