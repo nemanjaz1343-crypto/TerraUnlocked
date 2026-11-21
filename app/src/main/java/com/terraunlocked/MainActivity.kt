@@ -4297,6 +4297,10 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?) {
         super.onActivityResult(requestCode,resultCode,data)
 
+        if(requestCode==92 || requestCode==93) {
+            finishSnapCamera(requestCode,resultCode,data)
+            return
+        }
         if(requestCode==87) {
             val id=objectivePhotoTargetId
             val uri=cameraUri
@@ -4539,7 +4543,14 @@ class MainActivity : Activity(), SensorEventListener {
         if (code == 10 && grants.isNotEmpty() && grants[0] == PackageManager.PERMISSION_GRANTED) startTracking()
         if (code == 13)status.text=if(backgroundGpsGranted())
             "BACKGROUND GPS / PERMISSION GRANTED" else "BACKGROUND GPS / PERMISSION LIMITED"
-        if (code == 11 && grants.isNotEmpty() && grants[0] == PackageManager.PERMISSION_GRANTED) voicePoint?.let {startVoice(it)}
+        if(code==11) {
+            val permitted=grants.isNotEmpty() && grants[0]==PackageManager.PERMISSION_GRANTED
+            if(permitted) {
+                if(snapVoicePermissionPending)startVoice(null,forSnap=true)
+                else voicePoint?.let{startVoice(it)}
+            } else status.text="MICROPHONE PERMISSION REQUIRED"
+            snapVoicePermissionPending=false
+        }
         if(code==12) {
             val id=objectivePhotoPermissionId
             objectivePhotoPermissionId=null
