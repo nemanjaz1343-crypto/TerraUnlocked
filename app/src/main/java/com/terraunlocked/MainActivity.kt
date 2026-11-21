@@ -962,6 +962,10 @@ class MainActivity : Activity(), SensorEventListener {
                 }
             }
             override fun onLongPress(e:MotionEvent,mapView:MapView):Boolean {
+                // Never show the radial menu during SNAP placement or Journey
+                // planning; those modes own map selection gestures exclusively.
+                if(!MapTouchPolicy.canOpenRadialMenu(mode))
+                    return MapTouchPolicy.usesTapToSelect(mode)
                 val p=mapView.projection.fromPixels(e.x.toInt(),e.y.toInt())
                 if(measure) {
                     recordRulerPoint(GeoPoint(p.latitude,p.longitude))
@@ -1016,7 +1020,10 @@ class MainActivity : Activity(), SensorEventListener {
                         return false // Do not resume painting mid-gesture.
                     }
                 } else multitouchGesture=false
-                if(mode=="VIEW")return false
+                // A prior non-VIEW check swallowed ACTION_UP for both SNAP
+                // and Journey before osmdroid could recognize a normal tap.
+                // Only manual drawing tools may consume raw gesture events.
+                if(!MapTouchPolicy.drawsWithRawTouch(mode))return false
                 if(mode=="LASSO") {
                     if(event.pointerCount>1)return true
                     val location=mapView.projection.fromPixels(event.x.toInt(),event.y.toInt())
@@ -1409,18 +1416,24 @@ class MainActivity : Activity(), SensorEventListener {
         // The highest-priority tap listener handles temporary map workflows
         // without changing existing single-tap and long-press interactions.
         map.overlays.add(object:Overlay() {
+            // Installed last: osmdroid dispatches map taps in reverse overlay
+            // order, so selection outranks notes, objectives and transit.
             override fun onSingleTapConfirmed(e:MotionEvent,mapView:MapView):Boolean {
-                if(mode=="SNAP_PICK") {
-                    val geo=mapView.projection.fromPixels(e.x.toInt(),e.y.toInt())
-                    saveSnapAt(GeoPoint(geo.latitude,geo.longitude))
-                    return true
-                }
-                if(mode=="JOURNEY_PLAN") {
-                    toggleJourneyStopOnMap(e.x,e.y,mapView)
-                    return true
+                when(mode) {
+                    "SNAP_PICK" -> {
+                        val geo=mapView.projection.fromPixels(e.x.toInt(),e.y.toInt())
+                        saveSnapAt(GeoPoint(geo.latitude,geo.longitude))
+                        return true
+                    }
+                    "JOURNEY_PLAN" -> {
+                        toggleJourneyStopOnMap(e.x,e.y,mapView)
+                        return true
+                    }
                 }
                 return false
             }
+            override fun onLongPress(e:MotionEvent,mapView:MapView):Boolean =
+                MapTouchPolicy.usesTapToSelect(mode)
         })
         val mapArea=FrameLayout(this)
         mapArea.addView(map,FrameLayout.LayoutParams(-1,-1))
@@ -1928,6 +1941,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun beginSnapMapPick() {
         if(snapDraft==null)return
+        radialMenu?.dismiss()
         snapPickingMap=true
         mode="SNAP_PICK"
         followUser=false
@@ -2022,6 +2036,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun showRadialMenu(x:Int,y:Int,where:GeoPoint) {
+        if(!MapTouchPolicy.canOpenRadialMenu(mode))return
         radialMenu?.dismiss()
         val size=dp(256)
         val ring=RadialMenuView(this) { choice ->
@@ -2499,6 +2514,7 @@ class MainActivity : Activity(), SensorEventListener {
      */
     private fun showJourneyPlanner() {
         objectivesPopup?.dismiss()
+        radialMenu?.dismiss()
         if(mode=="SNAP_PICK") {
             status.text="PLACE OR DISCARD YOUR SNAP FIRST"
             return
