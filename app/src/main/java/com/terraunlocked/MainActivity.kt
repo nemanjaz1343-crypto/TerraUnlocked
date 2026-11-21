@@ -617,6 +617,9 @@ class MainActivity : Activity(), SensorEventListener {
     private var last: DiscoveryPoint? = null
     private var lastPaintTime = 0L
     private val handler = Handler(Looper.getMainLooper())
+    private val repositionBubbleAfterPan=Runnable {updateObjectiveBubblePosition()}
+    private var lastCompassPaintElapsed=0L
+    private var lastCompassHeading=-1
     private var simulationIndex = 0
     private val client by lazy { LocationServices.getFusedLocationProviderClient(this) }
     private val callback = object : LocationCallback() {
@@ -1504,12 +1507,18 @@ class MainActivity : Activity(), SensorEventListener {
         viewButton.setOnClickListener {showLayers(viewButton)}
         map.addMapListener(object:org.osmdroid.events.MapListener {
             override fun onScroll(event:org.osmdroid.events.ScrollEvent?):Boolean {
-                handler.post{updateObjectiveBubblePosition()}
+                // Dragging the map must not rebuild a blurred discovery mask
+                // or queue one bubble calculation per scroll event.
+                fogOverlay.onMapPanned()
+                handler.removeCallbacks(repositionBubbleAfterPan)
+                handler.postDelayed(repositionBubbleAfterPan,85L)
                 scheduleTaxiStandsRefresh()
                 return false
             }
             override fun onZoom(event:org.osmdroid.events.ZoomEvent?):Boolean {
-                handler.post{updateObjectiveBubblePosition()}
+                fogOverlay.onMapPanned()
+                handler.removeCallbacks(repositionBubbleAfterPan)
+                handler.postDelayed(repositionBubbleAfterPan,110L)
                 scheduleTaxiStandsRefresh()
                 return false
             }
@@ -3511,10 +3520,16 @@ class MainActivity : Activity(), SensorEventListener {
         SensorManager.getRotationMatrixFromVector(rotation,event.values)
         SensorManager.getOrientation(rotation,orientation)
         val degrees = ((Math.toDegrees(orientation[0].toDouble())+360.0)%360.0).toInt()
+        val now=android.os.SystemClock.uptimeMillis()
+        val change=if(lastCompassHeading<0)360
+            else kotlin.math.abs((degrees-lastCompassHeading+540)%360-180)
+        if(change<3 && now-lastCompassPaintElapsed<600L)return
+        lastCompassHeading=degrees
+        lastCompassPaintElapsed=now
         compassView.text = "▲ N %03d°".format(degrees)
         expeditionHeader?.bearing=degrees
         fogOverlay.northAzimuth = degrees.toFloat()
-        map.invalidate()
+        if(!map.isInLayout)map.postInvalidateOnAnimation()
     }
     override fun onAccuracyChanged(sensor:Sensor?,accuracy:Int) {}
     private fun startTracking() {
@@ -3632,6 +3647,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
     override fun onPause() {
         handler.removeCallbacks(taxiRefreshTask)
+        handler.removeCallbacks(repositionBubbleAfterPan)
         handler.removeCallbacks(solarTick)
         super.onPause(); sensors.unregisterListener(this); map.onPause()
         if(receiverRegistered) {unregisterReceiver(trackingReceiver);receiverRegistered=false}
