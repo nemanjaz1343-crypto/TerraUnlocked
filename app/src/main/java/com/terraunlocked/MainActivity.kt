@@ -3201,17 +3201,63 @@ class MainActivity : Activity(), SensorEventListener {
             scroller.addView(photoStrip)
             panel.addView(scroller,LinearLayout.LayoutParams(-1,dp(85)))
         }
-        current.attachments.filter {it.endsWith(".m4a")}.forEachIndexed {i,file ->
-            panel.addView(action("▶ VOICE MEMO "+(i+1)).apply {
-                setOnClickListener {
-                    runCatching {
-                        MediaPlayer().apply {
-                            setDataSource(File(filesDir,file).absolutePath)
-                            setOnCompletionListener {it.release()}
-                            prepare();start()
-                        }
-                    }.onFailure {status.text="VOICE PLAYBACK ERROR"}
-                }
+        lateinit var dialog:android.app.AlertDialog
+        fun deleteMedia(filename:String) {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("REMOVE ATTACHMENT?")
+                .setMessage("Permanently remove this local recording from the pin?")
+                .setNegativeButton("KEEP",null)
+                .setPositiveButton("REMOVE") {_,_->
+                    val idx=notes.indexOfFirst{it.time==current.time}
+                    if(idx>=0) {
+                        val entry=notes[idx]
+                        val revised=entry.copy(
+                            attachments=entry.attachments.filterNot{it==filename},
+                            body=if(entry.body==filename)"" else entry.body)
+                        notes[idx]=revised
+                        fieldNotes.save(notes)
+                        audioPlayback?.let{runCatching{it.stop()};it.release()}
+                        audioPlayback=null
+                        File(filesDir,filename).delete()
+                        refresh()
+                        dialog.dismiss()
+                        showExisting(revised)
+                    }
+                }.show()
+        }
+        voiceFiles(current).forEachIndexed{i,file->
+            val row=LinearLayout(this).apply{
+                orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL
+            }
+            val playButton=action("▶ VOICE ${i+1}").apply{
+                applyExpeditionStyle(this)
+                setOnClickListener{playVoiceMemo(file)}
+            }
+            row.addView(playButton,LinearLayout.LayoutParams(0,dp(42),1f))
+            row.addView(action("× REMOVE").apply{
+                applyExpeditionStyle(this)
+                setOnClickListener{deleteMedia(file)}
+            },LinearLayout.LayoutParams(dp(104),dp(42)).apply{
+                leftMargin=dp(5)
+            })
+            panel.addView(row,LinearLayout.LayoutParams(-1,dp(44)).apply{
+                topMargin=dp(4)
+            })
+        }
+        videoFiles(current).forEachIndexed{i,file->
+            val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+            row.addView(action("▸ PLAY VIDEO ${i+1}").apply{
+                applyExpeditionStyle(this)
+                setOnClickListener{playSnapVideo(file)}
+            },LinearLayout.LayoutParams(0,dp(42),1f))
+            row.addView(action("× REMOVE").apply{
+                applyExpeditionStyle(this)
+                setOnClickListener{deleteMedia(file)}
+            },LinearLayout.LayoutParams(dp(104),dp(42)).apply{
+                leftMargin=dp(5)
+            })
+            panel.addView(row,LinearLayout.LayoutParams(-1,dp(44)).apply{
+                topMargin=dp(4)
             })
         }
         val actions=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
@@ -3223,12 +3269,20 @@ class MainActivity : Activity(), SensorEventListener {
             if(index>=0){notes[index]=edited;fieldNotes.save(notes);refresh()}
             return edited
         }
-        val journalScroll=android.widget.ScrollView(this).apply {isFillViewport=false;addView(panel)}
-        val dialog=android.app.AlertDialog.Builder(this).setView(journalScroll)
+        val journalScroll=android.widget.ScrollView(this).apply {
+            isFillViewport=false
+            // Opaque background fixes the transparent dialog that appeared
+            // after returning from voice memo recording or media attachments.
+            setBackgroundColor(Color.rgb(239,219,180))
+            addView(panel)
+        }
+        dialog=android.app.AlertDialog.Builder(this).setView(journalScroll)
             .setNegativeButton("CLOSE",null)
             .setPositiveButton("SAVE") {_,_->updateNote()}
-            .setNeutralButton("DELETE") {_,_->notes.removeAll {it.time==current.time};fieldNotes.save(notes);refresh()}
-            .create()
+            .setNeutralButton("DELETE") {_,_->
+                notes.removeAll{it.time==current.time}
+                fieldNotes.save(notes);refresh()
+            }.create()
         moveButton.setOnClickListener {dialog.dismiss();moveFieldPin(current)}
         actions.addView(action("＋ ATTACH").apply {
             setOnClickListener {
@@ -3265,16 +3319,9 @@ class MainActivity : Activity(), SensorEventListener {
                 dialog.dismiss()
             }
         })
-        if(current.kind=="VOICE") panel.addView(action("▶ PLAY AUDIO").apply {
-            setOnClickListener {runCatching {
-                MediaPlayer().apply {
-                    setDataSource(File(filesDir,current.body).absolutePath)
-                    setOnCompletionListener {it.release()};prepare();start()
-                }
-            }}
-        })
         dialog.show()
-        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+        dialog.window?.setBackgroundDrawable(
+            android.graphics.drawable.ColorDrawable(Color.rgb(239,219,180)))
     }
     /** Record first, review sound and waveform, then explicitly save. */
     private fun startVoice(where:GeoPoint?,forSnap:Boolean=false) {
