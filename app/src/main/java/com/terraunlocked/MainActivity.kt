@@ -3260,6 +3260,42 @@ class MainActivity : Activity(), SensorEventListener {
                 if(items.size==1)row.addView(View(this),LinearLayout.LayoutParams(0,dp(49),1f))
                 optionGrid.addView(row)
             }
+            if(tab=="DISPLAY") {
+                optionGrid.addView(label("INTERFACE COLOR / CHOOSE STYLE",12,sand).apply {
+                    setPadding(dp(5),dp(7),0,dp(4))
+                    setTypeface(Typeface.SERIF,Typeface.BOLD)
+                })
+                val themes=LinearLayout(this).apply {
+                    orientation=LinearLayout.HORIZONTAL
+                }
+                ExpeditionThemes.all().forEach {palette ->
+                    val selected=palette.id==ExpeditionThemes.current.id
+                    val button=action((if(selected)"✓ " else "")+palette.label.uppercase()).apply {
+                        textSize=10f
+                        setTextColor(palette.light)
+                        background=GradientDrawable().apply {
+                            cornerRadius=dp(8).toFloat()
+                            setColor(palette.surface)
+                            setStroke(dp(if(selected)3 else 1),palette.gold)
+                        }
+                        setOnClickListener {
+                            if(!selected) {
+                                ExpeditionThemes.select(this@MainActivity,palette.id)
+                                layersPopup?.dismiss()
+                                recreate()
+                            }
+                        }
+                    }
+                    themes.addView(button,LinearLayout.LayoutParams(0,dp(48),1f).apply {
+                        setMargins(dp(2),dp(2),dp(2),dp(2))
+                    })
+                }
+                optionGrid.addView(themes)
+                optionGrid.addView(label("MILITARY: OLIVE / BRASS   •   EXPLORER: PINE / GOLD   •   CIVIL: NAVY / COPPER",9,sage).apply {
+                    setPadding(dp(4),dp(2),dp(2),dp(5))
+                    maxLines=2
+                })
+            }
         }
         tabs.forEach {tab->
             val button=action(tab).apply{
