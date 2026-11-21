@@ -724,6 +724,16 @@ class MainActivity : Activity(), SensorEventListener {
         if(restored!=null && restoredKind!=null && File(filesDir,restored).isFile)
             snapDraft=SnapDraft(restored,restoredKind,
                 savedInstanceState.getString("snap_draft_title")?:"Quick capture")
+        if(snapDraft==null) {
+            val draft=getSharedPreferences("terra_snap_draft_v1",Context.MODE_PRIVATE)
+            val filename=draft.getString("file",null)
+            val kind=draft.getString("kind",null)
+            if(filename!=null && kind!=null &&
+                !filename.contains("/") && !filename.contains("\\") &&
+                File(filesDir,filename).isFile)
+                snapDraft=SnapDraft(filename,kind,
+                    draft.getString("title","Quick capture")?:"Quick capture")
+        }
         if(savedInstanceState?.containsKey("field_photo_lat")==true &&
            savedInstanceState.containsKey("field_photo_lon")) {
             attachmentPoint=GeoPoint(
@@ -1769,6 +1779,16 @@ class MainActivity : Activity(), SensorEventListener {
      * a stale phone position, and never silently clear a pending recording.
      * Existing notes, visited fog and verified objectives are not affected.
      */
+    private fun persistSnapDraft() {
+        val edit=getSharedPreferences("terra_snap_draft_v1",Context.MODE_PRIVATE)
+            .edit()
+        val draft=snapDraft
+        if(draft==null)edit.clear()
+        else edit.putString("file",draft.filename)
+            .putString("kind",draft.kind).putString("title",draft.title)
+        edit.apply()
+    }
+
     private fun showSnapOptions() {
         if(mode=="JOURNEY_PLAN" || mode=="MOVE") {
             status.text="FINISH THE CURRENT MAP EDIT BEFORE SNAP"
@@ -1862,6 +1882,7 @@ class MainActivity : Activity(), SensorEventListener {
                 require(file.length()>0L) {"SNAP empty"}
                 snapDraft=SnapDraft(file.name,if(video)"VIDEO" else "PHOTO",
                     if(video)"Quick video" else "Quick photo")
+                persistSnapDraft()
                 status.text="SNAP CAPTURED / SELECT LOCATION"
                 showSnapPlacement()
             }.onFailure {
@@ -1942,6 +1963,7 @@ class MainActivity : Activity(), SensorEventListener {
         notes.add(note)
         fieldNotes.save(notes)
         snapDraft=null
+        persistSnapDraft()
         snapPickingMap=false
         snapPickBar?.visibility=View.GONE
         mode="VIEW"
@@ -1953,6 +1975,7 @@ class MainActivity : Activity(), SensorEventListener {
     private fun discardSnap() {
         snapDraft?.let{File(filesDir,it.filename).delete()}
         snapDraft=null
+        persistSnapDraft()
         snapPickingMap=false
         snapPickBar?.visibility=View.GONE
         if(mode=="SNAP_PICK")mode="VIEW"
@@ -3461,6 +3484,7 @@ class MainActivity : Activity(), SensorEventListener {
             val file=audioFile?:return@setOnClickListener
             if(snapVoiceRecording) {
                 snapDraft=SnapDraft(file.name,"VOICE","Quick voice memo")
+                persistSnapDraft()
                 clean(false);dialog.dismiss();showSnapPlacement()
                 return@setOnClickListener
             }
