@@ -360,6 +360,13 @@ class MainActivity : Activity(), SensorEventListener {
                 refresh()
                 return
             }
+            if(intent.action==TrackingService.ACTION_MODE) {
+                val resting=intent.getBooleanExtra("eco",false)
+                status.text=if(resting)"GPS REST / BATTERY SAVER / AUTO WAKE"
+                    else "GPS ACTIVE / REACQUIRING SIGNAL"
+                expeditionBottom?.gpsSearching=!resting
+                return
+            }
             if(intent.action!=TrackingService.ACTION_FIX)return
             val lat=intent.getDoubleExtra("lat",Double.NaN)
             val lon=intent.getDoubleExtra("lon",Double.NaN)
@@ -3554,6 +3561,7 @@ class MainActivity : Activity(), SensorEventListener {
         expeditionBottom?.gpsSearching=tracking && fixAge>25000L
         status.text=when {
             interrupted -> "TRACK INTERRUPTED / TAP TRACK TO RESUME"
+            tracking && TrackingService.resting -> "GPS REST / BATTERY SAVER / AUTO WAKE"
             !hasCachedFix && tracking -> "GPS SEARCHING / AWAITING FIRST FIX"
             hasCachedFix && tracking && fixAge<=25000L ->
                 "GPS RECENT / ${fixAge/1000L}s AGO / ±${fogOverlay.positionAccuracy.toInt()}m"
@@ -3570,6 +3578,7 @@ class MainActivity : Activity(), SensorEventListener {
         }
         val filter=IntentFilter(TrackingService.ACTION_FIX).apply {
             addAction(TrackingService.ACTION_RESET_COMPLETE)
+            addAction(TrackingService.ACTION_MODE)
         }
         if(android.os.Build.VERSION.SDK_INT>=33) registerReceiver(trackingReceiver,filter,Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(trackingReceiver,filter)
