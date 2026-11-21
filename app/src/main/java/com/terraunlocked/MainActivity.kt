@@ -436,6 +436,16 @@ class MainActivity : Activity(), SensorEventListener {
     private var attachmentPoint:GeoPoint?=null
     private var attachmentNoteTime:Long?=null
     private var cameraUri:Uri?=null
+    private var snapCameraUri:Uri?=null
+    private var snapCaptureKind:String?=null
+    private var snapDraft:SnapDraft?=null
+    private var snapPickingMap=false
+    private var snapPickBar:LinearLayout?=null
+    private var snapVoicePermissionPending=false
+    private var snapVoiceRecording=false
+    private val journeyDraft=mutableListOf<String>()
+    private var journeyPlanBar:LinearLayout?=null
+    private var journeyPlanSummary:TextView?=null
     // A mission can only be completed after a fresh GPS check and a new camera photo.
     private var objectivePhotoTargetId:String?=null
     private var objectivePhotoPermissionId:String?=null
@@ -707,6 +717,23 @@ class MainActivity : Activity(), SensorEventListener {
         objectivePhotoTargetId=savedInstanceState?.getString("objective_photo_target")
         objectivePhotoPermissionId=savedInstanceState?.getString("objective_photo_permission")
         savedInstanceState?.getString("objective_camera_uri")?.let { cameraUri=Uri.parse(it) }
+        savedInstanceState?.getString("snap_camera_uri")?.let {snapCameraUri=Uri.parse(it)}
+        snapCaptureKind=savedInstanceState?.getString("snap_capture_kind")
+        val restored=savedInstanceState?.getString("snap_draft_filename")
+        val restoredKind=savedInstanceState?.getString("snap_draft_kind")
+        if(restored!=null && restoredKind!=null && File(filesDir,restored).isFile)
+            snapDraft=SnapDraft(restored,restoredKind,
+                savedInstanceState.getString("snap_draft_title")?:"Quick capture")
+        if(snapDraft==null) {
+            val draft=getSharedPreferences("terra_snap_draft_v1",Context.MODE_PRIVATE)
+            val filename=draft.getString("file",null)
+            val kind=draft.getString("kind",null)
+            if(filename!=null && kind!=null &&
+                !filename.contains("/") && !filename.contains("\\") &&
+                File(filesDir,filename).isFile)
+                snapDraft=SnapDraft(filename,kind,
+                    draft.getString("title","Quick capture")?:"Quick capture")
+        }
         if(savedInstanceState?.containsKey("field_photo_lat")==true &&
            savedInstanceState.containsKey("field_photo_lon")) {
             attachmentPoint=GeoPoint(
@@ -1101,7 +1128,59 @@ class MainActivity : Activity(), SensorEventListener {
                 val width=canvas.width.toFloat()
                 val height=canvas.height.toFloat()
                 val all=(ReconObjectives.all+objectiveStore.customPlaces()).filter{objectiveVisible(it)}
-                val journeyIds=if(journeyStore.enabled)journeyStore.ids() else emptyList()
+                val journeyIds=if(mode=="JOURNEY_PLAN")
+                    journeyDraft.toList() else journeyStore.ids()
+                // Plan line is a straight visual sequence, NOT a navigable road.
+                // Draw beneath all objective markers to keep numbers readable.
+                if(journeyIds.size>=2) {
+                    val objectiveById=all.associateBy{it.id}
+                    val points=journeyIds.mapNotNull{id->
+                        objectiveById[id]?.let{o->
+                            mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
+                        }
+                    }
+                    val dark=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color=Color.argb(235,15,20,21)
+                        strokeWidth=dp(8).toFloat()
+                        strokeCap=Paint.Cap.ROUND
+                        style=Paint.Style.STROKE
+                    }
+                    val bright=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color=ExpeditionThemes.current.gold
+                        strokeWidth=dp(3).toFloat()
+                        strokeCap=Paint.Cap.ROUND
+                        style=Paint.Style.STROKE
+                        pathEffect=android.graphics.DashPathEffect(
+                            floatArrayOf(dp(11).toFloat(),dp(6).toFloat()),0f)
+                    }
+                    points.zipWithNext().forEach{(a,b)->
+                        val ax=a.x.toFloat();val ay=a.y.toFloat()
+                        val bx=b.x.toFloat();val by=b.y.toFloat()
+                        canvas.drawLine(ax,ay,bx,by,dark)
+                        canvas.drawLine(ax,ay,bx,by,bright)
+                        val length=kotlin.math.hypot((bx-ax).toDouble(),
+                            (by-ay).toDouble()).toFloat()
+                        if(length>dp(24)) {
+                            val vx=(bx-ax)/length;val vy=(by-ay)/length
+                            val midX=ax+(bx-ax)*.58f
+                            val midY=ay+(by-ay)*.58f
+                            val size=dp(8).toFloat()
+                            val arrow=android.graphics.Path().apply {
+                                moveTo(midX+vx*size,midY+vy*size)
+                                lineTo(midX-vx*size*.7f-vy*size*.7f,
+                                    midY-vy*size*.7f+vx*size*.7f)
+                                lineTo(midX-vx*size*.7f+vy*size*.7f,
+                                    midY-vy*size*.7f-vx*size*.7f)
+                                close()
+                            }
+                            val fill=Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                                color=ExpeditionThemes.current.light
+                                style=Paint.Style.FILL
+                            }
+                            canvas.drawPath(arrow,fill)
+                        }
+                    }
+                }
                 val occupied=mutableListOf<Pair<Float,Float>>()
                 all.forEach {o->
                     val location=if(o.id==movingObjectiveId) movingPreview else null
@@ -1321,12 +1400,26 @@ class MainActivity : Activity(), SensorEventListener {
                 return true
             }
         })
-        // Last map overlay: the live user pointer must remain visible even
-        // when HOME, OFFICE, a mission or a note occupies identical coordinates.
-        // No duplicate pointer remains inside DiscoveryFogOverlay.draw().
+        // Last drawing layer: user location stays above all other markers.
         map.overlays.add(object:Overlay() {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
                 if(!shadow)fogOverlay.drawCurrentPosition(canvas,mapView)
+            }
+        })
+        // The highest-priority tap listener handles temporary map workflows
+        // without changing existing single-tap and long-press interactions.
+        map.overlays.add(object:Overlay() {
+            override fun onSingleTapConfirmed(e:MotionEvent,mapView:MapView):Boolean {
+                if(mode=="SNAP_PICK") {
+                    val geo=mapView.projection.fromPixels(e.x.toInt(),e.y.toInt())
+                    saveSnapAt(GeoPoint(geo.latitude,geo.longitude))
+                    return true
+                }
+                if(mode=="JOURNEY_PLAN") {
+                    toggleJourneyStopOnMap(e.x,e.y,mapView)
+                    return true
+                }
+                return false
             }
         })
         val mapArea=FrameLayout(this)
@@ -1436,6 +1529,56 @@ class MainActivity : Activity(), SensorEventListener {
         mapArea.addView(moveReticle,FrameLayout.LayoutParams(-1,-1))
         moveReticle.isClickable=false
         mapArea.addView(movingBar,FrameLayout.LayoutParams(-1,dp(54),Gravity.BOTTOM))
+        // SNAP placement stays visible as a small high-contrast overlay.
+        val snapBar=LinearLayout(this).apply {
+            orientation=LinearLayout.HORIZONTAL
+            gravity=Gravity.CENTER_VERTICAL
+            setPadding(dp(8),dp(5),dp(8),dp(5))
+            background=tacticalPanel()
+            visibility=View.GONE
+        }
+        snapPickBar=snapBar
+        snapBar.addView(label("SNAP / TAP A MAP POSITION",11,sand),
+            LinearLayout.LayoutParams(0,dp(42),1f))
+        snapBar.addView(action("× CANCEL").apply {
+            applyExpeditionStyle(this)
+            setOnClickListener{cancelSnapMapPick()}
+        },LinearLayout.LayoutParams(dp(100),dp(40)))
+        mapArea.addView(snapBar,FrameLayout.LayoutParams(-1,dp(54),Gravity.BOTTOM))
+        // A compact floating Journey planning toolbar, not a modal checklist.
+        val planBar=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            gravity=Gravity.CENTER_VERTICAL
+            background=tacticalPanel()
+            setPadding(dp(8),dp(5),dp(8),dp(6))
+            visibility=View.GONE
+        }
+        journeyPlanBar=planBar
+        val planLabel=label("",12,sand).apply{
+            setTypeface(Typeface.DEFAULT,Typeface.BOLD)
+            setSingleLine(true)
+            ellipsize=android.text.TextUtils.TruncateAt.END
+        }
+        journeyPlanSummary=planLabel
+        planBar.addView(planLabel,LinearLayout.LayoutParams(-1,dp(30)))
+        val planButtons=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        fun plannerButton(title:String,run:()->Unit) {
+            planButtons.addView(action(title).apply {
+                textSize=10f
+                applyExpeditionStyle(this)
+                setOnClickListener{run()}
+            },LinearLayout.LayoutParams(0,dp(43),1f).apply {
+                setMargins(dp(2),0,dp(2),0)
+            })
+        }
+        plannerButton("↕ ORDER"){showJourneyReorder()}
+        plannerButton("× CLEAR"){clearJourneyPlan()}
+        plannerButton("✓ SAVE"){saveJourneyPlan()}
+        plannerButton("EXIT"){finishJourneyPlan(false)}
+        planBar.addView(planButtons)
+        mapArea.addView(planBar,FrameLayout.LayoutParams(-1,dp(85),Gravity.BOTTOM).apply{
+            setMargins(dp(6),0,dp(6),dp(5))
+        })
         confirmButton.setOnClickListener {
             if(mode=="LASSO"){commitLasso();confirmButton.visibility=View.GONE;return@setOnClickListener}
             pushMark()
@@ -1511,6 +1654,7 @@ class MainActivity : Activity(), SensorEventListener {
         trackButton=action("TRACK")
         followButton=action("LOCATE")
         val markButton=action("MARK")
+        val snapButton=action("SNAP")
         val eraseButton=action("ERASE")
         val viewButton=action("VIEW")
         lateinit var palette:ExpeditionMarkPanelView
@@ -1518,9 +1662,10 @@ class MainActivity : Activity(), SensorEventListener {
             when(index) {
                 0->trackButton.performClick()
                 1->followButton.performClick()
-                2->markButton.performClick()
-                3->eraseButton.performClick()
-                4->viewButton.performClick()
+                2->snapButton.performClick()
+                3->markButton.performClick()
+                4->eraseButton.performClick()
+                5->viewButton.performClick()
             }
         }
         expeditionBottom=controls
@@ -1592,13 +1737,14 @@ class MainActivity : Activity(), SensorEventListener {
             }else{
                 mode="VIEW";pending.clear();lasso.clear();confirmButton.visibility=View.GONE
             }
-            controls.selected=if(opening)2 else -1
+            controls.selected=if(opening)3 else -1
             refresh()
         }
+        snapButton.setOnClickListener {showSnapOptions()}
         eraseButton.setOnClickListener {
             if(mode!="ERASE"){
                 mode="ERASE";palette.visibility=View.GONE
-                controls.selected=3;status.text="ERASE / REMOVE DISCOVERED AREA"
+                controls.selected=4;status.text="ERASE / REMOVE DISCOVERED AREA"
             }else{
                 mode="VIEW";controls.selected=-1;status.text="MAP READY"
             }
@@ -1627,6 +1773,215 @@ class MainActivity : Activity(), SensorEventListener {
         applyMapSource(getSharedPreferences("terra_map_source",Context.MODE_PRIVATE).getInt("selected",0))
     }
 
+
+    /**
+     * SNAP is capture-first, location-second. Never bind a camera capture to
+     * a stale phone position, and never silently clear a pending recording.
+     * Existing notes, visited fog and verified objectives are not affected.
+     */
+    private fun persistSnapDraft() {
+        val edit=getSharedPreferences("terra_snap_draft_v1",Context.MODE_PRIVATE)
+            .edit()
+        val draft=snapDraft
+        if(draft==null)edit.clear()
+        else edit.putString("file",draft.filename)
+            .putString("kind",draft.kind).putString("title",draft.title)
+        edit.apply()
+    }
+
+    private fun showSnapOptions() {
+        if(mode=="JOURNEY_PLAN" || mode=="MOVE") {
+            status.text="FINISH THE CURRENT MAP EDIT BEFORE SNAP"
+            return
+        }
+        if(snapDraft!=null) {
+            showSnapPlacement()
+            return
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("SNAP / QUICK CAPTURE")
+            .setItems(arrayOf("▣  TAKE PHOTO","▸  RECORD SHORT VIDEO",
+                "●  RECORD VOICE MEMO")) {_,which->
+                when(which) {
+                    0->launchSnapCamera("PHOTO")
+                    1->launchSnapCamera("VIDEO")
+                    2->{
+                        snapVoicePermissionPending=true
+                        voiceNoteTime=null
+                        startVoice(null,forSnap=true)
+                    }
+                }
+            }.setNegativeButton("CANCEL",null).show()
+    }
+
+    private fun launchSnapCamera(kind:String) {
+        snapCaptureKind=kind
+        val video=kind=="VIDEO"
+        val collection=if(video)
+            android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            else android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        val stamp=System.currentTimeMillis()
+        val values=android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME,
+                "terra_snap_$stamp"+if(video)".mp4" else ".jpg")
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE,
+                if(video)"video/mp4" else "image/jpeg")
+        }
+        val uri=contentResolver.insert(collection,values)
+        if(uri==null) {
+            snapCaptureKind=null
+            status.text="SNAP / CAMERA STORAGE UNAVAILABLE"
+            return
+        }
+        snapCameraUri=uri
+        try {
+            val intent=Intent(if(video)android.provider.MediaStore.ACTION_VIDEO_CAPTURE
+                else android.provider.MediaStore.ACTION_IMAGE_CAPTURE).apply {
+                putExtra(android.provider.MediaStore.EXTRA_OUTPUT,uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                if(video) {
+                    putExtra(android.provider.MediaStore.EXTRA_DURATION_LIMIT,30)
+                    putExtra(android.provider.MediaStore.EXTRA_VIDEO_QUALITY,0)
+                    putExtra(android.provider.MediaStore.EXTRA_SIZE_LIMIT,24_000_000L)
+                }
+            }
+            startActivityForResult(intent,if(video)93 else 92)
+            status.text="SNAP / "+(if(video)"RECORD VIDEO" else "TAKE PHOTO")
+        } catch(error:Exception) {
+            runCatching{contentResolver.delete(uri,null,null)}
+            snapCameraUri=null
+            snapCaptureKind=null
+            status.text="SNAP / CAMERA UNAVAILABLE"
+        }
+    }
+
+    private fun finishSnapCamera(
+        requestCode:Int,resultCode:Int,data:Intent?
+    ) {
+        val uri=if(requestCode==93) data?.data?:snapCameraUri else snapCameraUri
+        val storedUri=snapCameraUri
+        if(resultCode==RESULT_OK && uri!=null) {
+            val video=requestCode==93
+            val file=File(filesDir,"snap_"+System.currentTimeMillis()+
+                if(video)".mp4" else ".jpg")
+            runCatching {
+                contentResolver.openInputStream(uri)?.use {input->
+                    file.outputStream().use{output->
+                        val buffer=ByteArray(8192)
+                        var total=0L
+                        while(true) {
+                            val n=input.read(buffer)
+                            if(n<0)break
+                            total+=n
+                            require(total<=24_000_000L) {"SNAP too large"}
+                            output.write(buffer,0,n)
+                        }
+                    }
+                } ?:error("SNAP camera file unavailable")
+                require(file.length()>0L) {"SNAP empty"}
+                snapDraft=SnapDraft(file.name,if(video)"VIDEO" else "PHOTO",
+                    if(video)"Quick video" else "Quick photo")
+                persistSnapDraft()
+                status.text="SNAP CAPTURED / SELECT LOCATION"
+                showSnapPlacement()
+            }.onFailure {
+                file.delete()
+                status.text="SNAP / SAVE FAILED"
+            }
+        } else status.text="SNAP / CAPTURE CANCELLED"
+        storedUri?.let{runCatching{contentResolver.delete(it,null,null)}}
+        snapCameraUri=null
+        snapCaptureKind=null
+    }
+
+    private fun showSnapPlacement() {
+        val draft=snapDraft?:return
+        val loc=fogOverlay.currentPosition
+        val fresh=SnapCapture.canUseMyLocation(System.currentTimeMillis(),
+            lastKnownFixTime,fogOverlay.positionAccuracy,loc!=null)
+        android.app.AlertDialog.Builder(this)
+            .setTitle("SNAP / CHOOSE LOCATION")
+            .setMessage(draft.title+" captured. Choose where to save it in "+
+                terms.journal+". No pin will be created until you choose.")
+            .setItems(arrayOf(
+                if(fresh)"⌖  MY CURRENT GPS LOCATION"
+                    else "⌖  MY LOCATION (WAITING FOR FRESH GPS)",
+                "◎  PICK A POSITION ON THE MAP",
+                "▣  KEEP CAPTURE FOR LATER"
+            )) {_,which->
+                when(which) {
+                    0 -> {
+                        if(fresh && loc!=null)saveSnapAt(loc)
+                        else {
+                            status.text="SNAP / FRESH GPS REQUIRED / PICK ON MAP"
+                            beginSnapMapPick()
+                        }
+                    }
+                    1 ->beginSnapMapPick()
+                    2 ->status.text="SNAP SAVED AS DRAFT / TAP SNAP TO PLACE"
+                }
+            }
+            .setNegativeButton("DISCARD") {_,_->discardSnap()}
+            .setCancelable(false).show()
+    }
+
+    private fun beginSnapMapPick() {
+        if(snapDraft==null)return
+        snapPickingMap=true
+        mode="SNAP_PICK"
+        followUser=false
+        snapPickBar?.visibility=View.VISIBLE
+        status.text="SNAP / TAP MAP TO PLACE THE CAPTURE"
+        refresh()
+    }
+
+    private fun cancelSnapMapPick() {
+        snapPickingMap=false
+        mode="VIEW"
+        snapPickBar?.visibility=View.GONE
+        showSnapPlacement()
+        refresh()
+    }
+
+    private fun saveSnapAt(point:GeoPoint) {
+        val draft=snapDraft?:return
+        val file=File(filesDir,draft.filename)
+        if(!file.isFile || file.length()==0L) {
+            discardSnap()
+            status.text="SNAP / FILE MISSING"
+            return
+        }
+        val icon=when(draft.kind) {
+            "VIDEO"->"▶"
+            "VOICE"->"●"
+            else->"▣"
+        }
+        val note=FieldNote(point.latitude,point.longitude,draft.title,
+            draft.kind,"",System.currentTimeMillis(),icon,
+            listOf(draft.filename))
+        notes.add(note)
+        fieldNotes.save(notes)
+        snapDraft=null
+        persistSnapDraft()
+        snapPickingMap=false
+        snapPickBar?.visibility=View.GONE
+        mode="VIEW"
+        status.text="SNAP / "+draft.kind+" ADDED TO "+terms.journal
+        refresh()
+        showExisting(note)
+    }
+
+    private fun discardSnap() {
+        snapDraft?.let{File(filesDir,it.filename).delete()}
+        snapDraft=null
+        persistSnapDraft()
+        snapPickingMap=false
+        snapPickBar?.visibility=View.GONE
+        if(mode=="SNAP_PICK")mode="VIEW"
+        status.text="SNAP / DISCARDED"
+        refresh()
+    }
 
     private fun showMapPhotoOptions(where:GeoPoint) {
         android.app.AlertDialog.Builder(this)
@@ -1772,12 +2127,51 @@ class MainActivity : Activity(), SensorEventListener {
         dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
     }
 
-    private fun photoFiles(note:FieldNote):List<String> {
-        val photos=note.attachments.filterNot{it.endsWith(".m4a",ignoreCase=true)}
-        return (if(note.kind=="PHOTO" && note.body.isNotBlank())
-            listOf(note.body)+photos else photos).distinct().filter{
-            File(filesDir,it).isFile
+    private fun photoFiles(note:FieldNote):List<String> =
+        (note.attachments+
+            (if(note.kind=="PHOTO" && SnapCapture.isPhoto(note.body))
+                listOf(note.body) else emptyList()))
+            .distinct().filter{SnapCapture.isPhoto(it) && File(filesDir,it).isFile}
+
+    private fun videoFiles(note:FieldNote):List<String> =
+        note.attachments.distinct().filter{
+            SnapCapture.isVideo(it) && File(filesDir,it).isFile
         }
+
+    private fun voiceFiles(note:FieldNote):List<String> =
+        (note.attachments+
+            (if(note.kind=="VOICE" && SnapCapture.isVoice(note.body))
+                listOf(note.body) else emptyList()))
+            .distinct().filter{SnapCapture.isVoice(it) && File(filesDir,it).isFile}
+
+    private var audioPlayback:MediaPlayer?=null
+    private var activeVoiceMeterTick:Runnable?=null
+    private fun playVoiceMemo(filename:String) {
+        audioPlayback?.let{runCatching{it.stop()};it.release()}
+        audioPlayback=null
+        val file=File(filesDir,filename)
+        if(!file.isFile) {status.text="VOICE MEMO / FILE MISSING";return}
+        runCatching {
+            audioPlayback=MediaPlayer().apply {
+                setDataSource(file.absolutePath)
+                setOnCompletionListener{it.release();audioPlayback=null}
+                prepare();start()
+            }
+            status.text="VOICE MEMO / PLAYING"
+        }.onFailure {status.text="VOICE MEMO / PLAYBACK FAILED"}
+    }
+
+    private fun playSnapVideo(filename:String) {
+        val file=File(filesDir,filename)
+        if(!file.isFile)return
+        val uri=androidx.core.content.FileProvider.getUriForFile(
+            this,packageName+".fileprovider",file)
+        runCatching {
+            startActivity(Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri,"video/mp4")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            })
+        }.onFailure{status.text="VIDEO / NO PLAYER AVAILABLE"}
     }
 
     /** Decode a suitably sampled, EXIF-correct image rather than a full-res bitmap. */
@@ -2099,128 +2493,209 @@ class MainActivity : Activity(), SensorEventListener {
      * A Journey is one ordered collection of independently verifiable goals.
      * No changes to GPS/photo completion rules or actual road routing.
      */
+    /**
+     * On-map journey editor: tap objective markers in sequence. Saved objective
+     * state and previously planned Journey are untouched until SAVE.
+     */
     private fun showJourneyPlanner() {
         objectivesPopup?.dismiss()
-        val wording=terms
-        val all=(ReconObjectives.all+objectiveStore.customPlaces())
-            .filter{!objectiveStore.isHidden(it.id)||it.id in journeyStore.ids()}
-        val valid=all.map{it.id}.toSet()
-        val chosen=LinkedHashSet<String>()
-        journeyStore.ids().filterTo(chosen){it in valid}
-        val panel=LinearLayout(this).apply {
+        if(mode=="SNAP_PICK") {
+            status.text="PLACE OR DISCARD YOUR SNAP FIRST"
+            return
+        }
+        if(mode=="MOVE")cancelPinMove()
+        journeyDraft.clear()
+        val valid=validObjectiveIds()
+        journeyDraft.addAll(journeyStore.ids().filter{it in valid})
+        mode="JOURNEY_PLAN"
+        followUser=false
+        expeditionPalette?.visibility=View.GONE
+        journeyPlanBar?.visibility=View.VISIBLE
+        snapPickBar?.visibility=View.GONE
+        updateJourneyPlanBar()
+        status.text="PLAN "+terms.journey+" / TAP DESTINATION ICONS ON MAP"
+        refresh()
+    }
+
+    private fun updateJourneyPlanBar() {
+        val done=journeyDraft.count{objectiveStore.completed(it)}
+        journeyPlanSummary?.text=terms.journey+" / "+journeyDraft.size+
+            " STOPS / "+done+" DONE  •  TAP ICONS / ORDER"
+    }
+
+    private fun toggleJourneyStopOnMap(x:Float,y:Float,mapView:MapView) {
+        val candidate=(ReconObjectives.all+objectiveStore.customPlaces())
+            .filter{objectiveVisible(it)}
+            .map {o->
+                val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
+                val distance=kotlin.math.hypot(
+                    (p.x-x).toDouble(),(p.y-y).toDouble())
+                o to distance
+            }.minByOrNull{it.second}
+        if(candidate==null || candidate.second>dp(50)) {
+            status.text="TAP DIRECTLY ON A DESTINATION MARKER"
+            return
+        }
+        val selected=candidate.first
+        if(selected.id in journeyDraft) {
+            journeyDraft.remove(selected.id)
+            status.text=terms.journey+" / REMOVED "+selected.name.take(24)
+        } else if(journeyDraft.size>=JourneyPlanner.MAX_STOPS) {
+            status.text=terms.journey+" / MAXIMUM 40 STOPS"
+            return
+        } else {
+            journeyDraft.add(selected.id)
+            status.text=terms.journey+" / STOP "+journeyDraft.size+
+                " / "+selected.name.take(24)
+        }
+        updateJourneyPlanBar()
+        refresh()
+    }
+
+    private fun finishJourneyPlan(saved:Boolean) {
+        mode="VIEW"
+        journeyPlanBar?.visibility=View.GONE
+        journeyDraft.clear()
+        status.text=if(saved)terms.journey+" / READY"
+            else terms.journey+" / EDITING CANCELLED"
+        refresh()
+    }
+
+    private fun saveJourneyPlan() {
+        if(journeyDraft.size<2) {
+            status.text=terms.journey+" / SELECT AT LEAST TWO STOPS"
+            journeyPlanSummary?.text="CHOOSE 2+ DESTINATIONS / CURRENT: "+journeyDraft.size
+            return
+        }
+        journeyStore.save(journeyDraft.toList(),validObjectiveIds(),true)
+        objectiveStore.enabled=true
+        val next=journeyStore.next{objectiveStore.completed(it)}
+        objectiveStore.active=next
+        val count=journeyDraft.size
+        finishJourneyPlan(true)
+        status.text=terms.journey+" STARTED / "+count+" STOPS"
+    }
+
+    private fun clearJourneyPlan() {
+        if(journeyDraft.isEmpty() && journeyStore.ids().isEmpty())return
+        android.app.AlertDialog.Builder(this)
+            .setTitle("CLEAR "+terms.journey+"?")
+            .setMessage("Remove the planned stop list? Completed missions, "+
+                terms.journal+" and revealed map areas will be kept.")
+            .setNegativeButton("KEEP",null)
+            .setPositiveButton("CLEAR") {_,_->
+                journeyDraft.clear()
+                journeyStore.clear()
+                updateJourneyPlanBar()
+                status.text=terms.journey+" / STOPS CLEARED"
+                refresh()
+            }.show()
+    }
+
+    private fun showJourneyReorder() {
+        if(mode!="JOURNEY_PLAN")return
+        val all=(ReconObjectives.all+objectiveStore.customPlaces()).associateBy{it.id}
+        val root=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
-            setPadding(dp(17),dp(14),dp(17),dp(14))
+            setPadding(dp(12),dp(8),dp(12),dp(10))
             background=tacticalPanel()
         }
-        panel.addView(label("◈ PLAN "+wording.journey,17,sand).apply {
-            setTypeface(Typeface.SERIF,Typeface.BOLD)
-        })
-        panel.addView(label("Select 2–40 destinations. Tap them in your preferred order. Each stop still requires GPS + photo proof.",11,sage).apply {
-            setPadding(0,dp(4),0,dp(6))
-        })
-        val summary=label("",12,sand)
-        panel.addView(summary)
-        val orderPreview=label("",11,sage).apply{
-            maxLines=3
-            setPadding(0,dp(3),0,dp(3))
-        }
-        panel.addView(orderPreview)
-        val titles=all.associate{it.id to it.name}
-        fun updateSummary() {
-            val alreadyDone=chosen.count{objectiveStore.completed(it)}
-            summary.text=chosen.size.toString()+" STOPS / "+alreadyDone+
-                " COMPLETED / "+(JourneyPlanner.MAX_STOPS-chosen.size)+" SLOTS LEFT"
-            orderPreview.text=if(chosen.isEmpty())"ORDER / SELECT YOUR FIRST STOP"
-                else "ORDER / "+chosen.mapIndexed{index,id->
-                    (index+1).toString()+". "+(titles[id]?:id)
-                }.joinToString("  →  ").take(180)
-        }
-        updateSummary()
-        val list=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
-        all.sortedWith(compareBy<ReconObjective> {if(it.id in chosen)0 else 1}
-            .thenBy{it.name}).forEach {o->
-            val check=android.widget.CheckBox(this).apply {
-                isAllCaps=false
-                text=o.name+(if(objectiveStore.completed(o.id))"  ✓ DONE" else
-                    "  /  "+o.category)
-                textSize=13f
-                setTextColor(sand)
-                buttonTintList=android.content.res.ColorStateList.valueOf(
-                    ExpeditionThemes.current.gold)
-                isChecked=o.id in chosen
-                setPadding(dp(5),dp(4),dp(2),dp(4))
-                minHeight=dp(42)
+        root.addView(label("DRAG AND DROP OR USE ↑ / ↓ TO REORDER",11,sage))
+        val rows=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
+        val scroller=android.widget.ScrollView(this).apply{addView(rows)}
+        root.addView(scroller,LinearLayout.LayoutParams(-1,dp(320)))
+        lateinit var render:()->Unit
+        render={
+            rows.removeAllViews()
+            journeyDraft.toList().forEachIndexed{index,id->
+                val item=all[id]
+                val row=LinearLayout(this).apply {
+                    orientation=LinearLayout.HORIZONTAL
+                    gravity=Gravity.CENTER_VERTICAL
+                    setPadding(dp(4),dp(3),dp(4),dp(3))
+                    background=GradientDrawable().apply {
+                        cornerRadius=dp(6).toFloat()
+                        setColor(ExpeditionThemes.current.surface)
+                        setStroke(dp(1),ExpeditionThemes.current.gold)
+                    }
+                }
+                val name=label("${index+1}.  "+(item?.name?:id).take(23),12,sand)
+                row.addView(name,LinearLayout.LayoutParams(0,dp(43),1f))
+                val handle=action("≡").apply {
+                    textSize=20f
+                    contentDescription="Drag stop ${index+1} to a new position"
+                    setOnLongClickListener {
+                        row.startDragAndDrop(android.content.ClipData.newPlainText(
+                            "journey_stop",id),View.DragShadowBuilder(row),id,0)
+                        true
+                    }
+                }
+                row.addView(handle,LinearLayout.LayoutParams(dp(37),dp(40)))
+                row.addView(action("↑").apply {
+                    textSize=15f
+                    isEnabled=index>0
+                    setOnClickListener {
+                        if(index>0) {
+                            java.util.Collections.swap(journeyDraft,index,index-1)
+                            updateJourneyPlanBar();render();refresh()
+                        }
+                    }
+                },LinearLayout.LayoutParams(dp(35),dp(40)))
+                row.addView(action("↓").apply {
+                    textSize=15f
+                    isEnabled=index<journeyDraft.lastIndex
+                    setOnClickListener {
+                        if(index<journeyDraft.lastIndex) {
+                            java.util.Collections.swap(journeyDraft,index,index+1)
+                            updateJourneyPlanBar();render();refresh()
+                        }
+                    }
+                },LinearLayout.LayoutParams(dp(35),dp(40)))
+                row.addView(action("×").apply {
+                    setOnClickListener {
+                        journeyDraft.remove(id)
+                        updateJourneyPlanBar();render();refresh()
+                    }
+                },LinearLayout.LayoutParams(dp(35),dp(40)))
+                row.setOnLongClickListener {
+                    row.startDragAndDrop(android.content.ClipData.newPlainText(
+                        "journey_stop",id),View.DragShadowBuilder(row),id,0)
+                    true
+                }
+                row.setOnDragListener{_,event->
+                    when(event.action) {
+                        android.view.DragEvent.ACTION_DRAG_STARTED->true
+                        android.view.DragEvent.ACTION_DROP->{
+                            val dragged=event.localState as? String
+                            if(dragged!=null && dragged!=id &&
+                                dragged in journeyDraft && id in journeyDraft) {
+                                journeyDraft.remove(dragged)
+                                journeyDraft.add(journeyDraft.indexOf(id),dragged)
+                                updateJourneyPlanBar();render();refresh()
+                            }
+                            true
+                        }
+                        else->true
+                    }
+                }
+                rows.addView(row,LinearLayout.LayoutParams(-1,dp(50)).apply{
+                    bottomMargin=dp(5)
+                })
             }
-            check.setOnCheckedChangeListener {_,checked->
-                if(checked) {
-                    if(chosen.size>=JourneyPlanner.MAX_STOPS) {
-                        check.isChecked=false
-                        status.text=wording.journey+" / MAX 40 STOPS"
-                    } else chosen.add(o.id)
-                } else chosen.remove(o.id)
-                updateSummary()
-            }
-            list.addView(check)
         }
-        panel.addView(android.widget.ScrollView(this).apply {
-            addView(list)
-            isFillViewport=false
-        },LinearLayout.LayoutParams(-1,dp(340)))
-        panel.addView(label("The numbered map markers show stop order, not a calculated road route.",10,sage))
-        lateinit var dialog:android.app.AlertDialog
-        panel.addView(action("×  CLEAR "+wording.journey).apply {
-            applyExpeditionStyle(this)
-            setOnClickListener {
-                android.app.AlertDialog.Builder(this@MainActivity)
-                    .setTitle("CLEAR "+wording.journey+"?")
-                    .setMessage("Remove this plan's stop list? Completed objectives, notes and explored map will remain saved.")
-                    .setNegativeButton("KEEP",null)
-                    .setPositiveButton("CLEAR") {_,_->
-                        journeyStore.clear()
-                        dialog.dismiss()
-                        status.text=wording.journey+" / CLEARED"
-                        refresh()
-                    }.show()
+        render()
+        val pauseTitle=if(journeyStore.enabled)"PAUSE SAVED PLAN" else "RESUME SAVED PLAN"
+        android.app.AlertDialog.Builder(this)
+            .setTitle(terms.journey+" / STOP ORDER")
+            .setView(root)
+            .setNeutralButton(pauseTitle) {_,_->
+                if(journeyStore.ids().isNotEmpty()) {
+                    journeyStore.enabled=!journeyStore.enabled
+                    status.text=terms.journey+
+                        (if(journeyStore.enabled)" / RESUMED" else " / PAUSED")
+                }
             }
-        },LinearLayout.LayoutParams(-1,dp(42)).apply{topMargin=dp(5)})
-        val pauseAction=when {
-            journeyStore.ids().isEmpty()->"NO PLAN"
-            journeyStore.enabled->"PAUSE"
-            else->"RESUME"
-        }
-        dialog=android.app.AlertDialog.Builder(this)
-            .setView(panel)
-            .setNegativeButton("CLOSE",null)
-            .setNeutralButton(pauseAction,null)
-            .setPositiveButton("SAVE & START",null)
-            .create()
-        dialog.show()
-        dialog.window?.setBackgroundDrawable(
-            android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
-        dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            if(chosen.size<2) {
-                summary.text="CHOOSE AT LEAST TWO DESTINATIONS"
-                status.text=wording.journey+" / SELECT TWO OR MORE STOPS"
-                return@setOnClickListener
-            }
-            journeyStore.save(chosen.toList(),valid,true)
-            val next=journeyStore.next{objectiveStore.completed(it)}
-            if(next!=null)objectiveStore.active=next
-            status.text=wording.journey+" STARTED / "+chosen.size+" STOPS"
-            refresh()
-            dialog.dismiss()
-        }
-        dialog.getButton(android.app.AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-            if(journeyStore.ids().isEmpty()) {
-                summary.text="SAVE AT LEAST TWO STOPS TO ENABLE THIS PLAN"
-                return@setOnClickListener
-            }
-            journeyStore.enabled=!journeyStore.enabled
-            status.text=wording.journey+
-                if(journeyStore.enabled)" / RESUMED" else " / PAUSED"
-            refresh()
-            dialog.dismiss()
-        }
+            .setPositiveButton("DONE",null).show()
     }
 
     private fun focusNextJourneyStop() {
@@ -2248,10 +2723,11 @@ class MainActivity : Activity(), SensorEventListener {
         objectivesPopup?.dismiss()
         val panel=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
-            setPadding(dp(12),dp(12),dp(12),dp(12))
+            setPadding(dp(12),dp(11),dp(12),dp(11))
             background=GradientDrawable().apply {
-                cornerRadius=dp(16).toFloat()
-                setColor(Color.argb(126,31,44,36))
+                cornerRadius=dp(13).toFloat()
+                setColor(ExpeditionThemes.current.surface)
+                setStroke(dp(1),ExpeditionThemes.current.gold)
             }
         }
         panel.addView(label("◎ "+terms.plural+" / "+ExpeditionThemes.current.label.uppercase(),14,sand))
@@ -2422,11 +2898,19 @@ class MainActivity : Activity(), SensorEventListener {
             setPadding(dp(11),dp(10),dp(11),dp(10))
             background=GradientDrawable().apply {
                 cornerRadius=dp(11).toFloat()
-                setColor(Color.rgb(25,34,27))
-                setStroke(dp(1),Color.rgb(195,160,93))
+                setColor(ExpeditionThemes.current.surface)
+                setStroke(dp(1),ExpeditionThemes.current.gold)
             }
         }
-        body.addView(label(terms.single+" / "+o.category,10,sage))
+        val stopIndex=(if(mode=="JOURNEY_PLAN")journeyDraft
+            else journeyStore.ids()).indexOf(o.id)
+        body.addView(label(if(stopIndex>=0)
+            "◈ STOP "+(stopIndex+1)+" / "+terms.journey+
+                "   •   "+o.category
+            else terms.single+" / "+o.category,11,
+            if(stopIndex>=0)ExpeditionThemes.current.gold else sage).apply {
+                setTypeface(Typeface.DEFAULT,Typeface.BOLD)
+            })
         body.addView(label("CHECK-IN / WITHIN 100m + 1 CAMERA PHOTO",10,sage))
         body.addView(label(o.name,16,sand).apply{
             setTypeface(Typeface.SERIF,Typeface.BOLD)
@@ -2502,7 +2986,7 @@ class MainActivity : Activity(), SensorEventListener {
             }
         )
         actionRow(
-            (if(o.id in journeyStore.ids())"✓ IN "+terms.journey
+            (if(stopIndex>=0)"✓ STOP "+(stopIndex+1)+" / "+terms.journey
                 else "＋ ADD TO "+terms.journey) to {
                 val added=journeyStore.addOrRemove(o.id,validObjectiveIds())
                 status.text=if(added)terms.journey+" / STOP ADDED"
@@ -2637,8 +3121,10 @@ class MainActivity : Activity(), SensorEventListener {
         val sepia=Color.rgb(118,84,53)
         val panel=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
-            setPadding(dp(16),dp(16),dp(16),dp(15))
+            setPadding(dp(13),dp(12),dp(13),dp(12))
             background=ExpeditionParchment()
+            isClickable=true
+            alpha=1f
         }
         panel.addView(label(terms.journal+" / PIN DETAILS",14,ink).apply {
             setTypeface(Typeface.SERIF,Typeface.BOLD)
@@ -2650,22 +3136,30 @@ class MainActivity : Activity(), SensorEventListener {
             android.location.Location.distanceBetween(position.latitude,position.longitude,current.latitude,current.longitude,out)
             panel.addView(label("DISTANCE / "+(if(out[0]>=1000f)"%.1f km".format(java.util.Locale.US,out[0]/1000f) else "${out[0].toInt()} m"),12,sepia))
         }
-        val moveButton=action("↔ MOVE PIN")
-        panel.addView(moveButton)
+        val moveButton=action("↔ MOVE PIN").apply {
+            applyExpeditionStyle(this)
+        }
+        panel.addView(moveButton,LinearLayout.LayoutParams(-1,dp(43)).apply{
+            topMargin=dp(7);bottomMargin=dp(6)
+        })
         val name=EditText(this).apply {
             setText(current.title);textSize=15f;setSingleLine(true)
             setTextColor(ink);setHintTextColor(sepia);hint="Marker title"
         }
-        panel.addView(name)
+        panel.addView(name,LinearLayout.LayoutParams(-1,dp(45)))
         val memo=EditText(this).apply {
             setText(if(current.kind=="PHOTO"||current.kind=="VOICE") "" else current.body)
-            minLines=3;maxLines=7;setTextColor(ink);setHintTextColor(sepia)
+            minLines=2;maxLines=4
+            setTextColor(ink);setHintTextColor(sepia)
+            textSize=13f
             hint="Field notes / observations..."
         }
         if(current.kind!="PHOTO"&&current.kind!="VOICE")panel.addView(memo)
         var selected=current.icon
-        val iconPreview=label("PIN ICON / $selected   •   TAP AN ICON TO UPDATE",12,sepia)
-        panel.addView(iconPreview)
+        val iconPreview=label("PIN ICON / $selected   •   TAP TO CHANGE",11,sepia)
+        panel.addView(iconPreview,LinearLayout.LayoutParams(-1,dp(27)).apply{
+            topMargin=dp(4)
+        })
         val choices=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
         val iconButtons=mutableListOf<Pair<String,Button>>()
         fun highlightSelection() {
@@ -2700,13 +3194,18 @@ class MainActivity : Activity(), SensorEventListener {
                 }
             }
             iconButtons.add(glyph to button)
-            choices.addView(button,LinearLayout.LayoutParams(0,dp(40),1f))
+            choices.addView(button,LinearLayout.LayoutParams(0,dp(38),1f).apply{
+                setMargins(dp(1),0,dp(1),0)
+            })
         }
         highlightSelection()
         panel.addView(choices)
         val count=label("PHOTOS / "+photoFiles(current).size+
-            "    ATTACHMENTS / "+current.attachments.size,12,sage)
-        panel.addView(count)
+            "    VIDEO / "+videoFiles(current).size+
+            "    AUDIO / "+voiceFiles(current).size,11,sepia)
+        panel.addView(count,LinearLayout.LayoutParams(-1,dp(29)).apply{
+            topMargin=dp(5)
+        })
         val photoStrip=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
         photoFiles(current).forEach { filename ->
             val thumb=android.widget.ImageView(this).apply {
@@ -2727,23 +3226,72 @@ class MainActivity : Activity(), SensorEventListener {
                         }.show()
                 }
             }
-            photoStrip.addView(thumb,LinearLayout.LayoutParams(dp(90),dp(88)).apply{
+            photoStrip.addView(thumb,LinearLayout.LayoutParams(dp(84),dp(79)).apply{
                 rightMargin=dp(5)
             })
         }
-        val scroller=android.widget.HorizontalScrollView(this)
-        scroller.addView(photoStrip);panel.addView(scroller)
-        current.attachments.filter {it.endsWith(".m4a")}.forEachIndexed {i,file ->
-            panel.addView(action("▶ VOICE MEMO "+(i+1)).apply {
-                setOnClickListener {
-                    runCatching {
-                        MediaPlayer().apply {
-                            setDataSource(File(filesDir,file).absolutePath)
-                            setOnCompletionListener {it.release()}
-                            prepare();start()
-                        }
-                    }.onFailure {status.text="VOICE PLAYBACK ERROR"}
-                }
+        if(photoStrip.childCount>0) {
+            val scroller=android.widget.HorizontalScrollView(this)
+            scroller.addView(photoStrip)
+            panel.addView(scroller,LinearLayout.LayoutParams(-1,dp(85)))
+        }
+        lateinit var dialog:android.app.AlertDialog
+        fun deleteMedia(filename:String) {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("REMOVE ATTACHMENT?")
+                .setMessage("Permanently remove this local recording from the pin?")
+                .setNegativeButton("KEEP",null)
+                .setPositiveButton("REMOVE") {_,_->
+                    val idx=notes.indexOfFirst{it.time==current.time}
+                    if(idx>=0) {
+                        val entry=notes[idx]
+                        val revised=entry.copy(
+                            attachments=entry.attachments.filterNot{it==filename},
+                            body=if(entry.body==filename)"" else entry.body)
+                        notes[idx]=revised
+                        fieldNotes.save(notes)
+                        audioPlayback?.let{runCatching{it.stop()};it.release()}
+                        audioPlayback=null
+                        File(filesDir,filename).delete()
+                        refresh()
+                        dialog.dismiss()
+                        showExisting(revised)
+                    }
+                }.show()
+        }
+        voiceFiles(current).forEachIndexed{i,file->
+            val row=LinearLayout(this).apply{
+                orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL
+            }
+            val playButton=action("▶ VOICE ${i+1}").apply{
+                applyExpeditionStyle(this)
+                setOnClickListener{playVoiceMemo(file)}
+            }
+            row.addView(playButton,LinearLayout.LayoutParams(0,dp(42),1f))
+            row.addView(action("× REMOVE").apply{
+                applyExpeditionStyle(this)
+                setOnClickListener{deleteMedia(file)}
+            },LinearLayout.LayoutParams(dp(104),dp(42)).apply{
+                leftMargin=dp(5)
+            })
+            panel.addView(row,LinearLayout.LayoutParams(-1,dp(44)).apply{
+                topMargin=dp(4)
+            })
+        }
+        videoFiles(current).forEachIndexed{i,file->
+            val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+            row.addView(action("▸ PLAY VIDEO ${i+1}").apply{
+                applyExpeditionStyle(this)
+                setOnClickListener{playSnapVideo(file)}
+            },LinearLayout.LayoutParams(0,dp(42),1f))
+            row.addView(action("× REMOVE").apply{
+                applyExpeditionStyle(this)
+                setOnClickListener{deleteMedia(file)}
+            },LinearLayout.LayoutParams(dp(104),dp(42)).apply{
+                leftMargin=dp(5)
+            })
+            panel.addView(row,LinearLayout.LayoutParams(-1,dp(44)).apply{
+                topMargin=dp(4)
             })
         }
         val actions=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
@@ -2755,12 +3303,20 @@ class MainActivity : Activity(), SensorEventListener {
             if(index>=0){notes[index]=edited;fieldNotes.save(notes);refresh()}
             return edited
         }
-        val journalScroll=android.widget.ScrollView(this).apply {isFillViewport=false;addView(panel)}
-        val dialog=android.app.AlertDialog.Builder(this).setView(journalScroll)
+        val journalScroll=android.widget.ScrollView(this).apply {
+            isFillViewport=false
+            // Opaque background fixes the transparent dialog that appeared
+            // after returning from voice memo recording or media attachments.
+            setBackgroundColor(Color.rgb(239,219,180))
+            addView(panel)
+        }
+        dialog=android.app.AlertDialog.Builder(this).setView(journalScroll)
             .setNegativeButton("CLOSE",null)
             .setPositiveButton("SAVE") {_,_->updateNote()}
-            .setNeutralButton("DELETE") {_,_->notes.removeAll {it.time==current.time};fieldNotes.save(notes);refresh()}
-            .create()
+            .setNeutralButton("DELETE") {_,_->
+                notes.removeAll{it.time==current.time}
+                fieldNotes.save(notes);refresh()
+            }.create()
         moveButton.setOnClickListener {dialog.dismiss();moveFieldPin(current)}
         actions.addView(action("＋ ATTACH").apply {
             setOnClickListener {
@@ -2797,54 +3353,165 @@ class MainActivity : Activity(), SensorEventListener {
                 dialog.dismiss()
             }
         })
-        if(current.kind=="VOICE") panel.addView(action("▶ PLAY AUDIO").apply {
-            setOnClickListener {runCatching {
-                MediaPlayer().apply {
-                    setDataSource(File(filesDir,current.body).absolutePath)
-                    setOnCompletionListener {it.release()};prepare();start()
-                }
-            }}
-        })
         dialog.show()
-        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+        dialog.window?.setBackgroundDrawable(
+            android.graphics.drawable.ColorDrawable(Color.rgb(239,219,180)))
     }
-    private fun startVoice(where:GeoPoint) {
+    /** Record first, review sound and waveform, then explicitly save. */
+    private fun startVoice(where:GeoPoint?,forSnap:Boolean=false) {
         voicePoint=where
+        snapVoiceRecording=forSnap
         if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO),11);return
+            snapVoicePermissionPending=forSnap
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO),11)
+            return
         }
-        try {
+        snapVoicePermissionPending=false
+        val panel=LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(14),dp(13),dp(14),dp(13))
+            background=tacticalPanel()
+        }
+        panel.addView(label("● VOICE MEMO / RECORD & REVIEW",15,sand))
+        val state=label("MIC ACTIVE / 00:00",12,sage)
+        panel.addView(state,LinearLayout.LayoutParams(-1,dp(33)))
+        val meter=VoiceMeterView(this).apply{
+            minimumHeight=dp(64)
+            setBackgroundColor(ExpeditionThemes.current.dark)
+        }
+        panel.addView(meter,LinearLayout.LayoutParams(-1,dp(64)))
+        val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        val extra=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        panel.addView(row,LinearLayout.LayoutParams(-1,dp(46)).apply{topMargin=dp(8)})
+        panel.addView(extra,LinearLayout.LayoutParams(-1,dp(46)).apply{topMargin=dp(5)})
+        val stop=action("■ STOP");val play=action("▶ PLAY")
+        val retry=action("↻ RETAKE");val discard=action("× DELETE")
+        val save=action("✓ SAVE")
+        fun append(parent:LinearLayout,button:Button) {
+            applyExpeditionStyle(button)
+            parent.addView(button,LinearLayout.LayoutParams(0,dp(43),1f).apply{
+                setMargins(dp(2),0,dp(2),0)
+            })
+        }
+        append(row,stop);append(row,play)
+        append(extra,retry);append(extra,discard);append(extra,save)
+        lateinit var dialog:android.app.AlertDialog
+        var recording=false;var recorded=false;var began=0L
+        var player:MediaPlayer?=null
+        var ticker:Runnable?=null
+        fun stopTicker() {
+            ticker?.let{handler.removeCallbacks(it)}
+            activeVoiceMeterTick?.let{handler.removeCallbacks(it)}
+            ticker=null
+            activeVoiceMeterTick=null
+        }
+        fun stopPlayer() {player?.let{runCatching{it.stop()};it.release()};player=null}
+        fun stopTake() {
+            if(!recording)return
+            recording=false;stopTicker()
+            val stopped=runCatching{recorder?.stop()}.isSuccess
+            runCatching{recorder?.release()};recorder=null
+            recorded=stopped && audioFile?.let{it.isFile&&it.length()>100L}==true
+            if(!recorded)audioFile?.delete()
+            state.text=if(recorded)"READY / REVIEW OR SAVE" else "NO AUDIO / RETAKE"
+            stop.visibility=View.GONE
+            play.isEnabled=recorded;save.isEnabled=recorded
+            retry.isEnabled=true
+        }
+        fun startTake() {
+            stopPlayer();stopTake()
+            audioFile?.delete()
             val file=File(filesDir,"voice_"+System.currentTimeMillis()+".m4a")
-            recorder=MediaRecorder().apply {
-                setAudioSource(MediaRecorder.AudioSource.MIC)
-                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setOutputFile(file.absolutePath);prepare();start()
+            val started=runCatching {
+                recorder=MediaRecorder().apply {
+                    setAudioSource(MediaRecorder.AudioSource.MIC)
+                    setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                    setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                    setOutputFile(file.absolutePath);prepare();start()
+                }
+            }.isSuccess
+            if(!started) {
+                runCatching{recorder?.release()};recorder=null
+                file.delete();state.text="MIC ERROR / RETAKE";save.isEnabled=false
+                return
             }
-            audioFile=file
-            android.app.AlertDialog.Builder(this).setTitle("● VOICE MEMO")
-                .setMessage("Recording locally")
-                .setNegativeButton("DISCARD") {_,_->stopVoice(false)}
-                .setPositiveButton("SAVE") {_,_->stopVoice(true)}
-                .setCancelable(false).show()
-        }catch(e:Exception) {recorder?.release();recorder=null;status.text="MIC UNAVAILABLE"}
-    }
-    private fun stopVoice(save:Boolean) {
-        runCatching {recorder?.stop()}
-        recorder?.release();recorder=null
-        val file=audioFile
-        val point=voicePoint
-        if(save && file!=null && file.exists() && file.length()>0 && voiceNoteTime!=null) {
-            val idx=notes.indexOfFirst {it.time==voiceNoteTime}
-            if(idx>=0) {
-                notes[idx]=notes[idx].copy(attachments=notes[idx].attachments+file.name)
-                fieldNotes.save(notes);refresh()
+            audioFile=file;recording=true;recorded=false
+            began=android.os.SystemClock.elapsedRealtime()
+            meter.reset();stop.visibility=View.VISIBLE
+            play.isEnabled=false;save.isEnabled=false;retry.isEnabled=false
+            val tick=object:Runnable {
+                override fun run() {
+                    if(!recording)return
+                    meter.sample(runCatching{recorder?.maxAmplitude?:0}.getOrDefault(0))
+                    val elapsed=(android.os.SystemClock.elapsedRealtime()-began)/1000L
+                    state.text="● RECORDING / %02d:%02d".format(
+                        java.util.Locale.US,elapsed/60,elapsed%60)
+                    handler.postDelayed(this,95L)
+                }
             }
-        } else if(save && file!=null && file.exists() && file.length()>0 && point!=null) {
-            notes.add(FieldNote(point.latitude,point.longitude,"Voice memo","VOICE",file.name,System.currentTimeMillis()))
+            ticker=tick
+            activeVoiceMeterTick=tick
+            handler.post(tick)
+        }
+        fun clean(delete:Boolean) {
+            stopTake();stopTicker();stopPlayer()
+            runCatching{recorder?.release()};recorder=null
+            if(delete)audioFile?.delete()
+            audioFile=null;voicePoint=null;voiceNoteTime=null
+            snapVoiceRecording=false;snapVoicePermissionPending=false
+        }
+        stop.setOnClickListener{stopTake()}
+        retry.setOnClickListener{startTake()}
+        play.setOnClickListener{
+            if(recording)return@setOnClickListener
+            val file=audioFile?:return@setOnClickListener
+            stopPlayer()
+            runCatching {
+                player=MediaPlayer().apply {
+                    setDataSource(file.absolutePath)
+                    setOnCompletionListener{it.release();player=null;state.text="PLAYBACK DONE"}
+                    prepare();start()
+                }
+                state.text="▶ PLAYING"
+            }.onFailure{stopPlayer();state.text="PLAYBACK FAILED / RETAKE"}
+        }
+        discard.setOnClickListener{
+            clean(true);dialog.dismiss()
+            status.text="VOICE MEMO / DISCARDED"
+        }
+        save.setOnClickListener{
+            if(recording || !recorded)return@setOnClickListener
+            val file=audioFile?:return@setOnClickListener
+            if(snapVoiceRecording) {
+                snapDraft=SnapDraft(file.name,"VOICE","Quick voice memo")
+                persistSnapDraft()
+                clean(false);dialog.dismiss();showSnapPlacement()
+                return@setOnClickListener
+            }
+            val index=voiceNoteTime?.let{id->notes.indexOfFirst{it.time==id}}?:-1
+            val updated=if(index>=0) {
+                notes[index]=notes[index].copy(
+                    attachments=notes[index].attachments+file.name)
+                notes[index]
+            } else {
+                voicePoint?.let{point->
+                    FieldNote(point.latitude,point.longitude,"Voice memo",
+                        "VOICE","",System.currentTimeMillis(),"●",listOf(file.name))
+                        .also{notes.add(it)}
+                }
+            }
+            if(updated==null) {state.text="PIN LOCATION MISSING";return@setOnClickListener}
             fieldNotes.save(notes);refresh()
-        }else file?.delete()
-        audioFile=null;voicePoint=null;voiceNoteTime=null
+            clean(false);dialog.dismiss()
+            status.text="VOICE MEMO / SAVED"
+            showExisting(updated)
+        }
+        dialog=android.app.AlertDialog.Builder(this).setView(panel)
+            .setCancelable(false).create()
+        dialog.show()
+        dialog.window?.setBackgroundDrawable(
+            android.graphics.drawable.ColorDrawable(ExpeditionThemes.current.surface))
+        startTake()
     }
     private fun gap(a: GeoPoint, b: GeoPoint): Float {
         val out = FloatArray(1)
@@ -3763,11 +4430,22 @@ class MainActivity : Activity(), SensorEventListener {
         outState.putString("objective_photo_target",objectivePhotoTargetId)
         outState.putString("objective_photo_permission",objectivePhotoPermissionId)
         cameraUri?.let {outState.putString("objective_camera_uri",it.toString())}
+        snapCameraUri?.let{outState.putString("snap_camera_uri",it.toString())}
+        outState.putString("snap_capture_kind",snapCaptureKind)
+        snapDraft?.let{
+            outState.putString("snap_draft_filename",it.filename)
+            outState.putString("snap_draft_kind",it.kind)
+            outState.putString("snap_draft_title",it.title)
+        }
     }
 
     override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?) {
         super.onActivityResult(requestCode,resultCode,data)
 
+        if(requestCode==92 || requestCode==93) {
+            finishSnapCamera(requestCode,resultCode,data)
+            return
+        }
         if(requestCode==87) {
             val id=objectivePhotoTargetId
             val uri=cameraUri
@@ -4001,16 +4679,36 @@ class MainActivity : Activity(), SensorEventListener {
         text = t; textSize = size.toFloat(); setTextColor(color); gravity = Gravity.CENTER_VERTICAL
     }
     private fun action(t: String) = Button(this).apply {
-        text = t; textSize = 10f; isAllCaps = false
-        setTextColor(sand); setBackgroundColor(ExpeditionThemes.current.moss)
-        setPadding(0, 0, 0, 0)
+        text=t
+        textSize=10.5f
+        isAllCaps=false
+        gravity=Gravity.CENTER
+        includeFontPadding=false
+        setTextColor(sand)
+        minHeight=0
+        minimumHeight=0
+        minWidth=0
+        minimumWidth=0
+        setPadding(dp(6),dp(3),dp(6),dp(3))
+        background=GradientDrawable().apply {
+            cornerRadius=dp(7).toFloat()
+            setColor(ExpeditionThemes.current.surface)
+            setStroke(dp(1),ExpeditionThemes.current.raised)
+        }
     }
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, grants: IntArray) {
         super.onRequestPermissionsResult(code, permissions, grants)
         if (code == 10 && grants.isNotEmpty() && grants[0] == PackageManager.PERMISSION_GRANTED) startTracking()
         if (code == 13)status.text=if(backgroundGpsGranted())
             "BACKGROUND GPS / PERMISSION GRANTED" else "BACKGROUND GPS / PERMISSION LIMITED"
-        if (code == 11 && grants.isNotEmpty() && grants[0] == PackageManager.PERMISSION_GRANTED) voicePoint?.let {startVoice(it)}
+        if(code==11) {
+            val permitted=grants.isNotEmpty() && grants[0]==PackageManager.PERMISSION_GRANTED
+            if(permitted) {
+                if(snapVoicePermissionPending)startVoice(null,forSnap=true)
+                else voicePoint?.let{startVoice(it)}
+            } else status.text="MICROPHONE PERMISSION REQUIRED"
+            snapVoicePermissionPending=false
+        }
         if(code==12) {
             val id=objectivePhotoPermissionId
             objectivePhotoPermissionId=null
@@ -4079,6 +4777,15 @@ class MainActivity : Activity(), SensorEventListener {
         if(receiverRegistered) {unregisterReceiver(trackingReceiver);receiverRegistered=false}
     }
     override fun onDestroy() {
+        activeVoiceMeterTick?.let{handler.removeCallbacks(it)}
+        activeVoiceMeterTick=null
+        runCatching{recorder?.stop()}
+        runCatching{recorder?.release()}
+        recorder=null
+        audioFile?.delete()
+        audioFile=null
+        audioPlayback?.let{runCatching{it.stop()};it.release()}
+        audioPlayback=null
         super.onDestroy()
         handler.removeCallbacks(simulationStep)
         handler.removeCallbacks(taxiRefreshTask)
