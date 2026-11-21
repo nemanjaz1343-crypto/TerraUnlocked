@@ -2120,10 +2120,20 @@ class MainActivity : Activity(), SensorEventListener {
         })
         val summary=label("",12,sand)
         panel.addView(summary)
+        val orderPreview=label("",11,sage).apply{
+            maxLines=3
+            setPadding(0,dp(3),0,dp(3))
+        }
+        panel.addView(orderPreview)
+        val titles=all.associate{it.id to it.name}
         fun updateSummary() {
             val alreadyDone=chosen.count{objectiveStore.completed(it)}
             summary.text=chosen.size.toString()+" STOPS / "+alreadyDone+
                 " COMPLETED / "+(JourneyPlanner.MAX_STOPS-chosen.size)+" SLOTS LEFT"
+            orderPreview.text=if(chosen.isEmpty())"ORDER / SELECT YOUR FIRST STOP"
+                else "ORDER / "+chosen.mapIndexed{index,id->
+                    (index+1).toString()+". "+(titles[id]?:id)
+                }.joinToString("  →  ").take(180)
         }
         updateSummary()
         val list=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
