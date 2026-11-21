@@ -15,11 +15,11 @@ internal object SnapCapture {
         accuracyMeters.isFinite() && accuracyMeters in 0f..60f
 
     fun isPhoto(filename:String):Boolean =
-        filename.substringAfterLast('.',missingDelimiterValue="").lowercase() in
-            setOf("jpg","jpeg","png","webp")
+        setOf("jpg","jpeg","png","webp").contains(
+            filename.substringAfterLast('.',missingDelimiterValue="").lowercase())
     fun isVideo(filename:String):Boolean =
-        filename.substringAfterLast('.',missingDelimiterValue="").lowercase() in
-            setOf("mp4","mov","3gp","mkv")
+        setOf("mp4","mov","3gp","mkv").contains(
+            filename.substringAfterLast('.',missingDelimiterValue="").lowercase())
     fun isVoice(filename:String):Boolean =
         filename.substringAfterLast('.',missingDelimiterValue="").lowercase()=="m4a"
 }
