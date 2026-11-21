@@ -2413,13 +2413,45 @@ class MainActivity : Activity(), SensorEventListener {
         }
         if(current.kind!="PHOTO"&&current.kind!="VOICE")panel.addView(memo)
         var selected=current.icon
+        val iconPreview=label("PIN ICON / $selected   •   TAP AN ICON TO UPDATE",12,sepia)
+        panel.addView(iconPreview)
         val choices=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
-        listOf("◆","⚑","★","✎","▲","●","⌖","▣").forEach {glyph->
-            choices.addView(action(glyph).apply {
-                textSize=17f
-                setOnClickListener {selected=glyph;this@MainActivity.status.text="ICON "+glyph}
-            },LinearLayout.LayoutParams(0,dp(32),1f))
+        val iconButtons=mutableListOf<Pair<String,Button>>()
+        fun highlightSelection() {
+            iconButtons.forEach { (glyph,button) ->
+                button.background=GradientDrawable().apply {
+                    cornerRadius=dp(5).toFloat()
+                    setColor(if(glyph==selected)Color.rgb(123,88,52)
+                        else ExpeditionThemes.current.surface)
+                    setStroke(dp(if(glyph==selected)2 else 1),
+                        if(glyph==selected)Color.rgb(240,217,174)
+                        else ExpeditionThemes.current.gold)
+                }
+                button.setTextColor(if(glyph==selected)Color.WHITE
+                    else ExpeditionThemes.current.light)
+            }
         }
+        listOf("◆","⚑","★","✎","▲","●","⌖","▣").forEach {glyph->
+            val button=action(glyph).apply {
+                textSize=17f
+                setOnClickListener {
+                    selected=glyph
+                    val idx=notes.indexOfFirst{it.time==current.time}
+                    if(idx>=0) {
+                        // Persist icon immediately; the user need not find SAVE.
+                        notes[idx]=notes[idx].copy(icon=glyph)
+                        fieldNotes.save(notes)
+                        refresh()
+                    }
+                    iconPreview.text="PIN ICON / $glyph   ✓ SAVED"
+                    status.text="PIN ICON UPDATED / $glyph"
+                    highlightSelection()
+                }
+            }
+            iconButtons.add(glyph to button)
+            choices.addView(button,LinearLayout.LayoutParams(0,dp(40),1f))
+        }
+        highlightSelection()
         panel.addView(choices)
         val count=label("PHOTOS / "+photoFiles(current).size+
             "    ATTACHMENTS / "+current.attachments.size,12,sage)
