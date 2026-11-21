@@ -1941,6 +1941,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun beginSnapMapPick() {
         if(snapDraft==null)return
+        radialMenu?.dismiss()
         snapPickingMap=true
         mode="SNAP_PICK"
         followUser=false
@@ -2035,6 +2036,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun showRadialMenu(x:Int,y:Int,where:GeoPoint) {
+        if(!MapTouchPolicy.canOpenRadialMenu(mode))return
         radialMenu?.dismiss()
         val size=dp(256)
         val ring=RadialMenuView(this) { choice ->
@@ -2512,6 +2514,7 @@ class MainActivity : Activity(), SensorEventListener {
      */
     private fun showJourneyPlanner() {
         objectivesPopup?.dismiss()
+        radialMenu?.dismiss()
         if(mode=="SNAP_PICK") {
             status.text="PLACE OR DISCARD YOUR SNAP FIRST"
             return
