@@ -51,7 +51,8 @@ import org.osmdroid.views.overlay.Overlay
 class MainActivity : Activity(), SensorEventListener {
     private val markerArt by lazy { ObjectiveMarkerArt(this) }
     private val olive:Int get()=ExpeditionThemes.current.screen
-    private val sand:Int get()=ExpeditionThemes.current.light
+    private val sand:Int get()=if(ExpeditionThemes.current.id=="MILITARY")
+        Color.rgb(218,201,156) else ExpeditionThemes.current.light
     private val sage:Int get()=ExpeditionThemes.current.secondary
     private lateinit var map: MapView
     private lateinit var compassView: TextView
@@ -1789,8 +1790,11 @@ class MainActivity : Activity(), SensorEventListener {
     }
     private fun tacticalPanel():GradientDrawable = GradientDrawable().apply {
         cornerRadius=dp(16).toFloat()
-        setColor(ExpeditionThemes.current.surface)
-        setStroke(dp(1),ExpeditionThemes.current.gold)
+        val military=ExpeditionThemes.current.id=="MILITARY"
+        setColor(if(military)Color.argb(238,38,47,38)
+            else ExpeditionThemes.current.surface)
+        setStroke(dp(1),if(military)Color.argb(190,155,181,134)
+            else ExpeditionThemes.current.gold)
     }
     private data class MapPlaceSuggestion(
         val title:String,val subtitle:String,val lat:Double,val lon:Double
@@ -3321,7 +3325,8 @@ class MainActivity : Activity(), SensorEventListener {
         button.background=GradientDrawable().apply {
             cornerRadius=dp(6).toFloat()
             setColor(if(selected)ExpeditionThemes.current.raised else ExpeditionThemes.current.surface)
-            setStroke(dp(1),ExpeditionThemes.current.gold)
+            setStroke(dp(1),if(ExpeditionThemes.current.id=="MILITARY")
+                Color.rgb(151,125,76) else ExpeditionThemes.current.gold)
         }
     }
 
