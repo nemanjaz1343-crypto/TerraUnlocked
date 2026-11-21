@@ -50,9 +50,9 @@ import org.osmdroid.views.overlay.Overlay
 
 class MainActivity : Activity(), SensorEventListener {
     private val markerArt by lazy { ObjectiveMarkerArt(this) }
-    private val olive = Color.rgb(31, 40, 32)
-    private val sand = Color.rgb(218, 201, 156)
-    private val sage = Color.rgb(155, 181, 134)
+    private val olive:Int get()=ExpeditionThemes.current.screen
+    private val sand:Int get()=ExpeditionThemes.current.light
+    private val sage:Int get()=ExpeditionThemes.current.secondary
     private lateinit var map: MapView
     private lateinit var compassView: TextView
     private lateinit var weatherView: TextView
@@ -696,6 +696,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ExpeditionThemes.load(this)
         attachmentNoteTime=savedInstanceState?.getLong("attachment_note_time")?.takeIf{it!=0L}
         objectivePhotoTargetId=savedInstanceState?.getString("objective_photo_target")
         objectivePhotoPermissionId=savedInstanceState?.getString("objective_photo_permission")
@@ -726,8 +727,8 @@ class MainActivity : Activity(), SensorEventListener {
         segments.addAll(pathStore.load())
         records.addAll(store.load())
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(olive); fitsSystemWindows = true }
-        window.statusBarColor=Color.rgb(14,20,16)
-        window.navigationBarColor=Color.rgb(12,16,13)
+        window.statusBarColor=ExpeditionThemes.current.dark
+        window.navigationBarColor=ExpeditionThemes.current.dark
         sensors=getSystemService(Context.SENSOR_SERVICE) as SensorManager
         compassEnabled=sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)!=null
         compassView=label("N ---°",10,sand)
@@ -745,14 +746,14 @@ class MainActivity : Activity(), SensorEventListener {
         // The status text remains available to services; no extra row obscures the map.
         status=label("GPS OFFLINE  |  FOG 82%  |  R 20m",10,sage).apply{
             setPadding(dp(12),dp(1),dp(8),dp(3))
-            setBackgroundColor(Color.rgb(14,20,16))
+            setBackgroundColor(ExpeditionThemes.current.dark)
         }
         status.isSingleLine=true
         status.ellipsize=android.text.TextUtils.TruncateAt.END
         val statusRow=LinearLayout(this).apply{
             orientation=LinearLayout.HORIZONTAL
             gravity=Gravity.CENTER_VERTICAL
-            setBackgroundColor(Color.rgb(14,20,16))
+            setBackgroundColor(ExpeditionThemes.current.dark)
         }
         statusRow.addView(status,LinearLayout.LayoutParams(0,dp(23),1f))
         statusRow.addView(action("▤ LAYERS").apply{
@@ -760,8 +761,8 @@ class MainActivity : Activity(), SensorEventListener {
             setTextColor(sand)
             background=GradientDrawable().apply{
                 cornerRadius=dp(4).toFloat()
-                setColor(Color.rgb(32,45,34))
-                setStroke(dp(1),Color.rgb(165,143,92))
+                setColor(ExpeditionThemes.current.surface)
+                setStroke(dp(1),ExpeditionThemes.current.gold)
             }
             setOnClickListener{showOverlayFilters()}
         },LinearLayout.LayoutParams(dp(84),dp(22)).apply{
@@ -1726,8 +1727,8 @@ class MainActivity : Activity(), SensorEventListener {
     }
     private fun tacticalPanel():GradientDrawable = GradientDrawable().apply {
         cornerRadius=dp(16).toFloat()
-        setColor(Color.argb(238,38,47,38))
-        setStroke(dp(1),Color.argb(190,155,181,134))
+        setColor(ExpeditionThemes.current.surface)
+        setStroke(dp(1),ExpeditionThemes.current.gold)
     }
     private data class MapPlaceSuggestion(
         val title:String,val subtitle:String,val lat:Double,val lon:Double
@@ -3141,12 +3142,12 @@ class MainActivity : Activity(), SensorEventListener {
         }.start()
     }
     private fun applyExpeditionStyle(button:Button,selected:Boolean=false) {
-        button.setTextColor(if(selected)Color.rgb(245,218,156) else sand)
+        button.setTextColor(if(selected)ExpeditionThemes.current.light else sand)
         button.setTypeface(Typeface.SERIF,Typeface.BOLD)
         button.background=GradientDrawable().apply {
             cornerRadius=dp(6).toFloat()
-            setColor(if(selected)Color.rgb(69,64,40) else Color.rgb(29,36,27))
-            setStroke(dp(1),Color.rgb(151,125,76))
+            setColor(if(selected)ExpeditionThemes.current.raised else ExpeditionThemes.current.surface)
+            setStroke(dp(1),ExpeditionThemes.current.gold)
         }
     }
 
@@ -3156,17 +3157,17 @@ class MainActivity : Activity(), SensorEventListener {
             orientation=LinearLayout.VERTICAL
             background=GradientDrawable().apply {
                 cornerRadius=dp(12).toFloat()
-                setColor(Color.rgb(23,31,25))
-                setStroke(dp(1),Color.rgb(190,154,89))
+                setColor(ExpeditionThemes.current.surface)
+                setStroke(dp(1),ExpeditionThemes.current.gold)
             }
             setPadding(dp(11),dp(10),dp(11),dp(10))
         }
-        panel.addView(label("FIELD KIT",19,sand).apply {
+        panel.addView(label("SETTINGS",19,sand).apply {
             gravity=Gravity.CENTER
             setTypeface(Typeface.SERIF,Typeface.BOLD)
             letterSpacing=.11f
         },LinearLayout.LayoutParams(-1,dp(30)))
-        panel.addView(label("EXPEDITION / TOOLS & SETTINGS",10,sage).apply {
+        panel.addView(label("EXPEDITION / TOOLS & DISPLAY",10,sage).apply {
             gravity=Gravity.CENTER
         },LinearLayout.LayoutParams(-1,dp(20)))
         val tabBar=LinearLayout(this).apply {orientation=LinearLayout.HORIZONTAL}
@@ -3524,7 +3525,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
     private fun action(t: String) = Button(this).apply {
         text = t; textSize = 10f; isAllCaps = false
-        setTextColor(sand); setBackgroundColor(Color.rgb(58, 69, 52))
+        setTextColor(sand); setBackgroundColor(ExpeditionThemes.current.moss)
         setPadding(0, 0, 0, 0)
     }
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, grants: IntArray) {
