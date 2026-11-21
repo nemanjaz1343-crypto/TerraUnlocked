@@ -45,8 +45,13 @@ internal object ExpeditionArt {
     }
     fun label(c:Canvas,txt:String,x:Float,y:Float,px:Float=13f,col:Int=light,serif:Boolean=false,spacing:Float=0f) {
         p.style=Paint.Style.FILL;p.color=col;p.textAlign=Paint.Align.CENTER;p.textSize=px
-        p.typeface=if(serif)Typeface.create(Typeface.SERIF,Typeface.BOLD)
-            else Typeface.create("sans-serif-condensed",Typeface.BOLD)
+        p.typeface=when(ExpeditionThemes.current.id) {
+            "EXPLORER" -> Typeface.create(Typeface.SERIF,
+                if(serif)Typeface.BOLD else Typeface.NORMAL)
+            "CIVIL" -> Typeface.create("sans-serif-medium",Typeface.BOLD)
+            else -> if(serif)Typeface.create(Typeface.SERIF,Typeface.BOLD)
+                else Typeface.create("sans-serif-condensed",Typeface.BOLD)
+        }
         if(spacing==0f)c.drawText(txt,x,y,p)
         else {
             val n=txt.length
