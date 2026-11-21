@@ -2876,7 +2876,15 @@ class MainActivity : Activity(), SensorEventListener {
                 setStroke(dp(1),Color.rgb(195,160,93))
             }
         }
-        body.addView(label(terms.single+" / "+o.category,10,sage))
+        val stopIndex=(if(mode=="JOURNEY_PLAN")journeyDraft
+            else journeyStore.ids()).indexOf(o.id)
+        body.addView(label(if(stopIndex>=0)
+            "◈ STOP "+(stopIndex+1)+" / "+terms.journey+
+                "   •   "+o.category
+            else terms.single+" / "+o.category,11,
+            if(stopIndex>=0)ExpeditionThemes.current.gold else sage).apply {
+                setTypeface(Typeface.DEFAULT,Typeface.BOLD)
+            })
         body.addView(label("CHECK-IN / WITHIN 100m + 1 CAMERA PHOTO",10,sage))
         body.addView(label(o.name,16,sand).apply{
             setTypeface(Typeface.SERIF,Typeface.BOLD)
@@ -2952,7 +2960,7 @@ class MainActivity : Activity(), SensorEventListener {
             }
         )
         actionRow(
-            (if(o.id in journeyStore.ids())"✓ IN "+terms.journey
+            (if(stopIndex>=0)"✓ STOP "+(stopIndex+1)+" / "+terms.journey
                 else "＋ ADD TO "+terms.journey) to {
                 val added=journeyStore.addOrRemove(o.id,validObjectiveIds())
                 status.text=if(added)terms.journey+" / STOP ADDED"
