@@ -2379,128 +2379,209 @@ class MainActivity : Activity(), SensorEventListener {
      * A Journey is one ordered collection of independently verifiable goals.
      * No changes to GPS/photo completion rules or actual road routing.
      */
+    /**
+     * On-map journey editor: tap objective markers in sequence. Saved objective
+     * state and previously planned Journey are untouched until SAVE.
+     */
     private fun showJourneyPlanner() {
         objectivesPopup?.dismiss()
-        val wording=terms
-        val all=(ReconObjectives.all+objectiveStore.customPlaces())
-            .filter{!objectiveStore.isHidden(it.id)||it.id in journeyStore.ids()}
-        val valid=all.map{it.id}.toSet()
-        val chosen=LinkedHashSet<String>()
-        journeyStore.ids().filterTo(chosen){it in valid}
-        val panel=LinearLayout(this).apply {
+        if(mode=="SNAP_PICK") {
+            status.text="PLACE OR DISCARD YOUR SNAP FIRST"
+            return
+        }
+        if(mode=="MOVE")cancelPinMove()
+        journeyDraft.clear()
+        val valid=validObjectiveIds()
+        journeyDraft.addAll(journeyStore.ids().filter{it in valid})
+        mode="JOURNEY_PLAN"
+        followUser=false
+        expeditionPalette?.visibility=View.GONE
+        journeyPlanBar?.visibility=View.VISIBLE
+        snapPickBar?.visibility=View.GONE
+        updateJourneyPlanBar()
+        status.text="PLAN "+terms.journey+" / TAP DESTINATION ICONS ON MAP"
+        refresh()
+    }
+
+    private fun updateJourneyPlanBar() {
+        val done=journeyDraft.count{objectiveStore.completed(it)}
+        journeyPlanSummary?.text=terms.journey+" / "+journeyDraft.size+
+            " STOPS / "+done+" DONE  •  TAP ICONS / ORDER"
+    }
+
+    private fun toggleJourneyStopOnMap(x:Float,y:Float,mapView:MapView) {
+        val candidate=(ReconObjectives.all+objectiveStore.customPlaces())
+            .filter{objectiveVisible(it)}
+            .map {o->
+                val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
+                val distance=kotlin.math.hypot(
+                    (p.x-x).toDouble(),(p.y-y).toDouble())
+                o to distance
+            }.minByOrNull{it.second}
+        if(candidate==null || candidate.second>dp(50)) {
+            status.text="TAP DIRECTLY ON A DESTINATION MARKER"
+            return
+        }
+        val selected=candidate.first
+        if(selected.id in journeyDraft) {
+            journeyDraft.remove(selected.id)
+            status.text=terms.journey+" / REMOVED "+selected.name.take(24)
+        } else if(journeyDraft.size>=JourneyPlanner.MAX_STOPS) {
+            status.text=terms.journey+" / MAXIMUM 40 STOPS"
+            return
+        } else {
+            journeyDraft.add(selected.id)
+            status.text=terms.journey+" / STOP "+journeyDraft.size+
+                " / "+selected.name.take(24)
+        }
+        updateJourneyPlanBar()
+        refresh()
+    }
+
+    private fun finishJourneyPlan(saved:Boolean) {
+        mode="VIEW"
+        journeyPlanBar?.visibility=View.GONE
+        journeyDraft.clear()
+        status.text=if(saved)terms.journey+" / READY"
+            else terms.journey+" / EDITING CANCELLED"
+        refresh()
+    }
+
+    private fun saveJourneyPlan() {
+        if(journeyDraft.size<2) {
+            status.text=terms.journey+" / SELECT AT LEAST TWO STOPS"
+            journeyPlanSummary?.text="CHOOSE 2+ DESTINATIONS / CURRENT: "+journeyDraft.size
+            return
+        }
+        journeyStore.save(journeyDraft.toList(),validObjectiveIds(),true)
+        objectiveStore.enabled=true
+        val next=journeyStore.next{objectiveStore.completed(it)}
+        objectiveStore.active=next
+        val count=journeyDraft.size
+        finishJourneyPlan(true)
+        status.text=terms.journey+" STARTED / "+count+" STOPS"
+    }
+
+    private fun clearJourneyPlan() {
+        if(journeyDraft.isEmpty() && journeyStore.ids().isEmpty())return
+        android.app.AlertDialog.Builder(this)
+            .setTitle("CLEAR "+terms.journey+"?")
+            .setMessage("Remove the planned stop list? Completed missions, "+
+                terms.journal+" and revealed map areas will be kept.")
+            .setNegativeButton("KEEP",null)
+            .setPositiveButton("CLEAR") {_,_->
+                journeyDraft.clear()
+                journeyStore.clear()
+                updateJourneyPlanBar()
+                status.text=terms.journey+" / STOPS CLEARED"
+                refresh()
+            }.show()
+    }
+
+    private fun showJourneyReorder() {
+        if(mode!="JOURNEY_PLAN")return
+        val all=(ReconObjectives.all+objectiveStore.customPlaces()).associateBy{it.id}
+        val root=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
-            setPadding(dp(17),dp(14),dp(17),dp(14))
+            setPadding(dp(12),dp(8),dp(12),dp(10))
             background=tacticalPanel()
         }
-        panel.addView(label("◈ PLAN "+wording.journey,17,sand).apply {
-            setTypeface(Typeface.SERIF,Typeface.BOLD)
-        })
-        panel.addView(label("Select 2–40 destinations. Tap them in your preferred order. Each stop still requires GPS + photo proof.",11,sage).apply {
-            setPadding(0,dp(4),0,dp(6))
-        })
-        val summary=label("",12,sand)
-        panel.addView(summary)
-        val orderPreview=label("",11,sage).apply{
-            maxLines=3
-            setPadding(0,dp(3),0,dp(3))
-        }
-        panel.addView(orderPreview)
-        val titles=all.associate{it.id to it.name}
-        fun updateSummary() {
-            val alreadyDone=chosen.count{objectiveStore.completed(it)}
-            summary.text=chosen.size.toString()+" STOPS / "+alreadyDone+
-                " COMPLETED / "+(JourneyPlanner.MAX_STOPS-chosen.size)+" SLOTS LEFT"
-            orderPreview.text=if(chosen.isEmpty())"ORDER / SELECT YOUR FIRST STOP"
-                else "ORDER / "+chosen.mapIndexed{index,id->
-                    (index+1).toString()+". "+(titles[id]?:id)
-                }.joinToString("  →  ").take(180)
-        }
-        updateSummary()
-        val list=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
-        all.sortedWith(compareBy<ReconObjective> {if(it.id in chosen)0 else 1}
-            .thenBy{it.name}).forEach {o->
-            val check=android.widget.CheckBox(this).apply {
-                isAllCaps=false
-                text=o.name+(if(objectiveStore.completed(o.id))"  ✓ DONE" else
-                    "  /  "+o.category)
-                textSize=13f
-                setTextColor(sand)
-                buttonTintList=android.content.res.ColorStateList.valueOf(
-                    ExpeditionThemes.current.gold)
-                isChecked=o.id in chosen
-                setPadding(dp(5),dp(4),dp(2),dp(4))
-                minHeight=dp(42)
+        root.addView(label("DRAG AND DROP OR USE ↑ / ↓ TO REORDER",11,sage))
+        val rows=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
+        val scroller=android.widget.ScrollView(this).apply{addView(rows)}
+        root.addView(scroller,LinearLayout.LayoutParams(-1,dp(320)))
+        lateinit var render:()->Unit
+        render={
+            rows.removeAllViews()
+            journeyDraft.toList().forEachIndexed{index,id->
+                val item=all[id]
+                val row=LinearLayout(this).apply {
+                    orientation=LinearLayout.HORIZONTAL
+                    gravity=Gravity.CENTER_VERTICAL
+                    setPadding(dp(4),dp(3),dp(4),dp(3))
+                    background=GradientDrawable().apply {
+                        cornerRadius=dp(6).toFloat()
+                        setColor(ExpeditionThemes.current.surface)
+                        setStroke(dp(1),ExpeditionThemes.current.gold)
+                    }
+                }
+                val name=label("${index+1}.  "+(item?.name?:id).take(23),12,sand)
+                row.addView(name,LinearLayout.LayoutParams(0,dp(43),1f))
+                val handle=action("≡").apply {
+                    textSize=20f
+                    contentDescription="Drag stop ${index+1} to a new position"
+                    setOnLongClickListener {
+                        row.startDragAndDrop(android.content.ClipData.newPlainText(
+                            "journey_stop",id),View.DragShadowBuilder(row),id,0)
+                        true
+                    }
+                }
+                row.addView(handle,LinearLayout.LayoutParams(dp(37),dp(40)))
+                row.addView(action("↑").apply {
+                    textSize=15f
+                    isEnabled=index>0
+                    setOnClickListener {
+                        if(index>0) {
+                            java.util.Collections.swap(journeyDraft,index,index-1)
+                            updateJourneyPlanBar();render();refresh()
+                        }
+                    }
+                },LinearLayout.LayoutParams(dp(35),dp(40)))
+                row.addView(action("↓").apply {
+                    textSize=15f
+                    isEnabled=index<journeyDraft.lastIndex
+                    setOnClickListener {
+                        if(index<journeyDraft.lastIndex) {
+                            java.util.Collections.swap(journeyDraft,index,index+1)
+                            updateJourneyPlanBar();render();refresh()
+                        }
+                    }
+                },LinearLayout.LayoutParams(dp(35),dp(40)))
+                row.addView(action("×").apply {
+                    setOnClickListener {
+                        journeyDraft.remove(id)
+                        updateJourneyPlanBar();render();refresh()
+                    }
+                },LinearLayout.LayoutParams(dp(35),dp(40)))
+                row.setOnLongClickListener {
+                    row.startDragAndDrop(android.content.ClipData.newPlainText(
+                        "journey_stop",id),View.DragShadowBuilder(row),id,0)
+                    true
+                }
+                row.setOnDragListener{_,event->
+                    when(event.action) {
+                        android.view.DragEvent.ACTION_DRAG_STARTED->true
+                        android.view.DragEvent.ACTION_DROP->{
+                            val dragged=event.localState as? String
+                            if(dragged!=null && dragged!=id &&
+                                dragged in journeyDraft && id in journeyDraft) {
+                                journeyDraft.remove(dragged)
+                                journeyDraft.add(journeyDraft.indexOf(id),dragged)
+                                updateJourneyPlanBar();render();refresh()
+                            }
+                            true
+                        }
+                        else->true
+                    }
+                }
+                rows.addView(row,LinearLayout.LayoutParams(-1,dp(50)).apply{
+                    bottomMargin=dp(5)
+                })
             }
-            check.setOnCheckedChangeListener {_,checked->
-                if(checked) {
-                    if(chosen.size>=JourneyPlanner.MAX_STOPS) {
-                        check.isChecked=false
-                        status.text=wording.journey+" / MAX 40 STOPS"
-                    } else chosen.add(o.id)
-                } else chosen.remove(o.id)
-                updateSummary()
-            }
-            list.addView(check)
         }
-        panel.addView(android.widget.ScrollView(this).apply {
-            addView(list)
-            isFillViewport=false
-        },LinearLayout.LayoutParams(-1,dp(340)))
-        panel.addView(label("The numbered map markers show stop order, not a calculated road route.",10,sage))
-        lateinit var dialog:android.app.AlertDialog
-        panel.addView(action("×  CLEAR "+wording.journey).apply {
-            applyExpeditionStyle(this)
-            setOnClickListener {
-                android.app.AlertDialog.Builder(this@MainActivity)
-                    .setTitle("CLEAR "+wording.journey+"?")
-                    .setMessage("Remove this plan's stop list? Completed objectives, notes and explored map will remain saved.")
-                    .setNegativeButton("KEEP",null)
-                    .setPositiveButton("CLEAR") {_,_->
-                        journeyStore.clear()
-                        dialog.dismiss()
-                        status.text=wording.journey+" / CLEARED"
-                        refresh()
-                    }.show()
+        render()
+        val pauseTitle=if(journeyStore.enabled)"PAUSE SAVED PLAN" else "RESUME SAVED PLAN"
+        android.app.AlertDialog.Builder(this)
+            .setTitle(terms.journey+" / STOP ORDER")
+            .setView(root)
+            .setNeutralButton(pauseTitle) {_,_->
+                if(journeyStore.ids().isNotEmpty()) {
+                    journeyStore.enabled=!journeyStore.enabled
+                    status.text=terms.journey+
+                        (if(journeyStore.enabled)" / RESUMED" else " / PAUSED")
+                }
             }
-        },LinearLayout.LayoutParams(-1,dp(42)).apply{topMargin=dp(5)})
-        val pauseAction=when {
-            journeyStore.ids().isEmpty()->"NO PLAN"
-            journeyStore.enabled->"PAUSE"
-            else->"RESUME"
-        }
-        dialog=android.app.AlertDialog.Builder(this)
-            .setView(panel)
-            .setNegativeButton("CLOSE",null)
-            .setNeutralButton(pauseAction,null)
-            .setPositiveButton("SAVE & START",null)
-            .create()
-        dialog.show()
-        dialog.window?.setBackgroundDrawable(
-            android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
-        dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            if(chosen.size<2) {
-                summary.text="CHOOSE AT LEAST TWO DESTINATIONS"
-                status.text=wording.journey+" / SELECT TWO OR MORE STOPS"
-                return@setOnClickListener
-            }
-            journeyStore.save(chosen.toList(),valid,true)
-            val next=journeyStore.next{objectiveStore.completed(it)}
-            if(next!=null)objectiveStore.active=next
-            status.text=wording.journey+" STARTED / "+chosen.size+" STOPS"
-            refresh()
-            dialog.dismiss()
-        }
-        dialog.getButton(android.app.AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-            if(journeyStore.ids().isEmpty()) {
-                summary.text="SAVE AT LEAST TWO STOPS TO ENABLE THIS PLAN"
-                return@setOnClickListener
-            }
-            journeyStore.enabled=!journeyStore.enabled
-            status.text=wording.journey+
-                if(journeyStore.enabled)" / RESUMED" else " / PAUSED"
-            refresh()
-            dialog.dismiss()
-        }
+            .setPositiveButton("DONE",null).show()
     }
 
     private fun focusNextJourneyStop() {
