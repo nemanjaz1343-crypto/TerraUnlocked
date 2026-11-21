@@ -1400,7 +1400,7 @@ class MainActivity : Activity(), SensorEventListener {
                 System.currentTimeMillis(),"◆"))
             fieldNotes.save(notes)
             clearMapPreview()
-            status.text="PIN SAVED / FIELD JOURNAL"
+            status.text="PIN SAVED / "+terms.journal
             refresh()
         }},LinearLayout.LayoutParams(0,dp(48),1f))
         mapArea.addView(previewControls,FrameLayout.LayoutParams(-1,dp(54),Gravity.BOTTOM))
@@ -2275,15 +2275,21 @@ class MainActivity : Activity(), SensorEventListener {
             journeyInfo.text=if(total==0) "NO "+terms.journey+" / BUILD A MULTI-STOP PLAN"
                 else terms.journey+" / "+completed+"/"+total+
                     " COMPLETE / "+(if(journeyStore.enabled)"ACTIVE" else "PAUSED")
+            val journeyIndices=if(journeyStore.enabled)journeyStore.ids()
+                .withIndex().associate{it.value to it.index} else emptyMap()
             (ReconObjectives.all+objectiveStore.customPlaces())
                 .filterNot {objectiveStore.isHidden(it.id)}
                 .filter {it.name.contains(query,true)||it.category.contains(query,true)}
-                .sortedWith(compareBy<ReconObjective> {if(objectiveStore.completed(it.id))2 else if(objectiveStore.active==it.id)0 else 1}.thenBy{it.name})
+                .sortedWith(compareBy<ReconObjective> {
+                    if(it.id in journeyIndices)0
+                    else if(objectiveStore.completed(it.id))3
+                    else if(objectiveStore.active==it.id)1 else 2
+                }.thenBy{journeyIndices[it.id]?:Int.MAX_VALUE}.thenBy{it.name})
                 .forEach {o ->
                     val state=when {
                         objectiveStore.completed(o.id)->"✓ DONE"
-                        journeyStore.enabled && o.id in journeyStore.ids()->
-                            "◈ STOP "+(journeyStore.ids().indexOf(o.id)+1)
+                        o.id in journeyIndices->
+                            "◈ STOP "+(journeyIndices.getValue(o.id)+1)
                         objectiveStore.active==o.id->"● ACTIVE"
                         else->"◇ NEW"
                     }
