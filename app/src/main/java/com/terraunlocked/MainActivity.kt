@@ -3773,17 +3773,26 @@ class MainActivity : Activity(), SensorEventListener {
                                 objective.name,"CHECKPOINT",objective.brief,
                                 System.currentTimeMillis(),"⚑",listOf(file.name)))
                         }
-                        // Mark completion only after the photo was saved to field journal.
+                        // Completion is still gated by fresh GPS + a newly
+                        // captured, successfully saved photo for EACH stop.
                         fieldNotes.save(notes)
                         objectiveStore.complete(id)
-                        status.text="MISSION COMPLETED / GPS + PHOTO VERIFIED"
+                        if(journeyStore.enabled && id in journeyStore.ids()) {
+                            val next=journeyStore.next{objectiveStore.completed(it)}
+                            objectiveStore.active=next
+                            val (done,total)=journeyStore.progress{objectiveStore.completed(it)}
+                            status.text=if(next==null)
+                                terms.journey+" COMPLETE / "+done+"/"+total+" STOPS"
+                            else terms.single+" COMPLETE / "+terms.journey+
+                                " "+done+"/"+total+" / NEXT READY"
+                        } else status.text=terms.single+" COMPLETED / GPS + PHOTO VERIFIED"
                         refresh()
                     }.onFailure {
                         file.delete()
-                        status.text="MISSION NOT COMPLETED / PHOTO SAVE FAILED"
+                        status.text=terms.single+" NOT COMPLETED / PHOTO SAVE FAILED"
                     }
-                } else status.text="MISSION NOT COMPLETED / OBJECTIVE NOT FOUND"
-            } else status.text="MISSION NOT COMPLETED / PHOTO CANCELLED"
+                } else status.text=terms.single+" NOT COMPLETED / DESTINATION NOT FOUND"
+            } else status.text=terms.single+" NOT COMPLETED / PHOTO CANCELLED"
             uri?.let {runCatching{contentResolver.delete(it,null,null)}}
             cameraUri=null
             objectivePhotoTargetId=null
@@ -3992,7 +4001,7 @@ class MainActivity : Activity(), SensorEventListener {
             if(grants.isNotEmpty() && grants[0]==PackageManager.PERMISSION_GRANTED && id!=null) {
                 (ReconObjectives.all+objectiveStore.customPlaces()).firstOrNull{it.id==id}
                     ?.let {requestObjectiveProofPhoto(it)}
-            } else status.text="MISSION / LOCATION PERMISSION REQUIRED"
+            } else status.text=terms.single+" / LOCATION PERMISSION REQUIRED"
         }
     }
     override fun onResume() {
