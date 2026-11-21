@@ -1118,11 +1118,8 @@ class MainActivity : Activity(), SensorEventListener {
                 val width=canvas.width.toFloat()
                 val height=canvas.height.toFloat()
                 val all=(ReconObjectives.all+objectiveStore.customPlaces()).filter{objectiveVisible(it)}
-                val journeyIds=when {
-                    mode=="JOURNEY_PLAN"->journeyDraft.toList()
-                    journeyStore.enabled->journeyStore.ids()
-                    else->emptyList()
-                }
+                val journeyIds=if(mode=="JOURNEY_PLAN")
+                    journeyDraft.toList() else journeyStore.ids()
                 // Plan line is a straight visual sequence, NOT a navigable road.
                 // Draw beneath all objective markers to keep numbers readable.
                 if(journeyIds.size>=2) {
@@ -2121,6 +2118,7 @@ class MainActivity : Activity(), SensorEventListener {
             .distinct().filter{SnapCapture.isVoice(it) && File(filesDir,it).isFile}
 
     private var audioPlayback:MediaPlayer?=null
+    private var activeVoiceMeterTick:Runnable?=null
     private fun playVoiceMemo(filename:String) {
         audioPlayback?.let{runCatching{it.stop()};it.release()}
         audioPlayback=null
@@ -3374,7 +3372,12 @@ class MainActivity : Activity(), SensorEventListener {
         var recording=false;var recorded=false;var began=0L
         var player:MediaPlayer?=null
         var ticker:Runnable?=null
-        fun stopTicker() {ticker?.let{handler.removeCallbacks(it)};ticker=null}
+        fun stopTicker() {
+            ticker?.let{handler.removeCallbacks(it)}
+            activeVoiceMeterTick?.let{handler.removeCallbacks(it)}
+            ticker=null
+            activeVoiceMeterTick=null
+        }
         fun stopPlayer() {player?.let{runCatching{it.stop()};it.release()};player=null}
         fun stopTake() {
             if(!recording)return
@@ -3419,7 +3422,9 @@ class MainActivity : Activity(), SensorEventListener {
                     handler.postDelayed(this,95L)
                 }
             }
-            ticker=tick;handler.post(tick)
+            ticker=tick
+            activeVoiceMeterTick=tick
+            handler.post(tick)
         }
         fun clean(delete:Boolean) {
             stopTake();stopTicker();stopPlayer()
@@ -4744,6 +4749,15 @@ class MainActivity : Activity(), SensorEventListener {
         if(receiverRegistered) {unregisterReceiver(trackingReceiver);receiverRegistered=false}
     }
     override fun onDestroy() {
+        activeVoiceMeterTick?.let{handler.removeCallbacks(it)}
+        activeVoiceMeterTick=null
+        runCatching{recorder?.stop()}
+        runCatching{recorder?.release()}
+        recorder=null
+        audioFile?.delete()
+        audioFile=null
+        audioPlayback?.let{runCatching{it.stop()};it.release()}
+        audioPlayback=null
         super.onDestroy()
         handler.removeCallbacks(simulationStep)
         handler.removeCallbacks(taxiRefreshTask)
