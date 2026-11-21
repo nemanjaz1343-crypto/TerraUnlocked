@@ -115,12 +115,14 @@ class ObjectiveMarkerArt(context:Context) {
         val transit=kind=="TRANSIT"
         val anchor=kind=="HOME" || kind=="OFFICE"
         val circular=transit || anchor
-        val gold=Color.rgb(218,181,113)
+        val theme=ExpeditionThemes.current
+        val military=theme.id=="MILITARY"
+        val gold=if(military)Color.rgb(218,181,113) else theme.gold
         val color=when {
             done -> Color.rgb(144,206,151)
             transit -> Color.rgb(126,205,235)
-            active -> Color.rgb(249,216,145)
-            anchor -> Color.rgb(225,202,157)
+            active -> if(military)Color.rgb(249,216,145) else theme.light
+            anchor -> if(military)Color.rgb(225,202,157) else theme.secondary
             else -> gold
         }
         val visibleColor=if(muted)Color.argb(145,200,200,195) else color
@@ -129,7 +131,9 @@ class ObjectiveMarkerArt(context:Context) {
         val radius=d(if(active)21f else 19.5f)
         paint.style=Paint.Style.FILL
         paint.clearShadowLayer()
-        paint.color=if(transit)Color.argb(242,15,32,43) else Color.argb(240,20,32,27)
+        paint.color=if(military)
+            (if(transit)Color.argb(242,15,32,43) else Color.argb(240,20,32,27))
+            else theme.dark
 
         fun diamond(r:Float):Path = Path().apply {
             moveTo(x,y-r)
