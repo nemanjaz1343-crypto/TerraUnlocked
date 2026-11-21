@@ -352,6 +352,9 @@ class DiscoveryFogOverlay(
                 canvas.drawLine(a.x.toFloat(),a.y.toFloat(),b.x.toFloat(),b.y.toFloat(),paint)
             }
         }
+    }
+    /** Called by the final map overlay so the user's marker always wins z-order. */
+    fun drawCurrentPosition(canvas:Canvas,mapView:MapView) {
         currentPosition?.let { loc ->
             val pixel=toPoint(mapView,loc.latitude,loc.longitude)
             val x=pixel.x.toFloat();val y=pixel.y.toFloat()
