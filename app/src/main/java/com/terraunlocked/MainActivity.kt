@@ -1645,6 +1645,198 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
 
+    /**
+     * SNAP is capture-first, location-second. Never bind a camera capture to
+     * a stale phone position, and never silently clear a pending recording.
+     * Existing notes, visited fog and verified objectives are not affected.
+     */
+    private fun showSnapOptions() {
+        if(snapDraft!=null) {
+            showSnapPlacement()
+            return
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("SNAP / QUICK CAPTURE")
+            .setItems(arrayOf("▣  TAKE PHOTO","▸  RECORD SHORT VIDEO",
+                "●  RECORD VOICE MEMO")) {_,which->
+                when(which) {
+                    0->launchSnapCamera("PHOTO")
+                    1->launchSnapCamera("VIDEO")
+                    2->{
+                        snapVoicePermissionPending=true
+                        voiceNoteTime=null
+                        startVoice(null,forSnap=true)
+                    }
+                }
+            }.setNegativeButton("CANCEL",null).show()
+    }
+
+    private fun launchSnapCamera(kind:String) {
+        snapCaptureKind=kind
+        val video=kind=="VIDEO"
+        val collection=if(video)
+            android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            else android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        val stamp=System.currentTimeMillis()
+        val values=android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME,
+                "terra_snap_$stamp"+if(video)".mp4" else ".jpg")
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE,
+                if(video)"video/mp4" else "image/jpeg")
+        }
+        val uri=contentResolver.insert(collection,values)
+        if(uri==null) {
+            snapCaptureKind=null
+            status.text="SNAP / CAMERA STORAGE UNAVAILABLE"
+            return
+        }
+        snapCameraUri=uri
+        try {
+            val intent=Intent(if(video)android.provider.MediaStore.ACTION_VIDEO_CAPTURE
+                else android.provider.MediaStore.ACTION_IMAGE_CAPTURE).apply {
+                putExtra(android.provider.MediaStore.EXTRA_OUTPUT,uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                if(video) {
+                    putExtra(android.provider.MediaStore.EXTRA_DURATION_LIMIT,30)
+                    putExtra(android.provider.MediaStore.EXTRA_VIDEO_QUALITY,0)
+                    putExtra(android.provider.MediaStore.EXTRA_SIZE_LIMIT,24_000_000L)
+                }
+            }
+            startActivityForResult(intent,if(video)93 else 92)
+            status.text="SNAP / "+(if(video)"RECORD VIDEO" else "TAKE PHOTO")
+        } catch(error:Exception) {
+            runCatching{contentResolver.delete(uri,null,null)}
+            snapCameraUri=null
+            snapCaptureKind=null
+            status.text="SNAP / CAMERA UNAVAILABLE"
+        }
+    }
+
+    private fun finishSnapCamera(
+        requestCode:Int,resultCode:Int,data:Intent?
+    ) {
+        val uri=if(requestCode==93) data?.data?:snapCameraUri else snapCameraUri
+        val storedUri=snapCameraUri
+        if(resultCode==RESULT_OK && uri!=null) {
+            val video=requestCode==93
+            val file=File(filesDir,"snap_"+System.currentTimeMillis()+
+                if(video)".mp4" else ".jpg")
+            runCatching {
+                contentResolver.openInputStream(uri)?.use {input->
+                    file.outputStream().use{output->
+                        val buffer=ByteArray(8192)
+                        var total=0L
+                        while(true) {
+                            val n=input.read(buffer)
+                            if(n<0)break
+                            total+=n
+                            require(total<=24_000_000L) {"SNAP too large"}
+                            output.write(buffer,0,n)
+                        }
+                    }
+                } ?:error("SNAP camera file unavailable")
+                require(file.length()>0L) {"SNAP empty"}
+                snapDraft=SnapDraft(file.name,if(video)"VIDEO" else "PHOTO",
+                    if(video)"Quick video" else "Quick photo")
+                status.text="SNAP CAPTURED / SELECT LOCATION"
+                showSnapPlacement()
+            }.onFailure {
+                file.delete()
+                status.text="SNAP / SAVE FAILED"
+            }
+        } else status.text="SNAP / CAPTURE CANCELLED"
+        storedUri?.let{runCatching{contentResolver.delete(it,null,null)}}
+        snapCameraUri=null
+        snapCaptureKind=null
+    }
+
+    private fun showSnapPlacement() {
+        val draft=snapDraft?:return
+        val loc=fogOverlay.currentPosition
+        val fresh=SnapCapture.canUseMyLocation(System.currentTimeMillis(),
+            lastKnownFixTime,fogOverlay.positionAccuracy,loc!=null)
+        android.app.AlertDialog.Builder(this)
+            .setTitle("SNAP / CHOOSE LOCATION")
+            .setMessage(draft.title+" captured. Choose where to save it in "+
+                terms.journal+". No pin will be created until you choose.")
+            .setItems(arrayOf(
+                if(fresh)"⌖  MY CURRENT GPS LOCATION"
+                    else "⌖  MY LOCATION (WAITING FOR FRESH GPS)",
+                "◎  PICK A POSITION ON THE MAP",
+                "▣  KEEP CAPTURE FOR LATER"
+            )) {_,which->
+                when(which) {
+                    0 -> {
+                        if(fresh && loc!=null)saveSnapAt(loc)
+                        else {
+                            status.text="SNAP / FRESH GPS REQUIRED / PICK ON MAP"
+                            beginSnapMapPick()
+                        }
+                    }
+                    1 ->beginSnapMapPick()
+                    2 ->status.text="SNAP SAVED AS DRAFT / TAP SNAP TO PLACE"
+                }
+            }
+            .setNegativeButton("DISCARD") {_,_->discardSnap()}
+            .setCancelable(false).show()
+    }
+
+    private fun beginSnapMapPick() {
+        if(snapDraft==null)return
+        snapPickingMap=true
+        mode="SNAP_PICK"
+        followUser=false
+        snapPickBar?.visibility=View.VISIBLE
+        status.text="SNAP / TAP MAP TO PLACE THE CAPTURE"
+        refresh()
+    }
+
+    private fun cancelSnapMapPick() {
+        snapPickingMap=false
+        mode="VIEW"
+        snapPickBar?.visibility=View.GONE
+        showSnapPlacement()
+        refresh()
+    }
+
+    private fun saveSnapAt(point:GeoPoint) {
+        val draft=snapDraft?:return
+        val file=File(filesDir,draft.filename)
+        if(!file.isFile || file.length()==0L) {
+            discardSnap()
+            status.text="SNAP / FILE MISSING"
+            return
+        }
+        val icon=when(draft.kind) {
+            "VIDEO"->"▶"
+            "VOICE"->"●"
+            else->"▣"
+        }
+        val note=FieldNote(point.latitude,point.longitude,draft.title,
+            draft.kind,"",System.currentTimeMillis(),icon,
+            listOf(draft.filename))
+        notes.add(note)
+        fieldNotes.save(notes)
+        snapDraft=null
+        snapPickingMap=false
+        snapPickBar?.visibility=View.GONE
+        mode="VIEW"
+        status.text="SNAP / "+draft.kind+" ADDED TO "+terms.journal
+        refresh()
+        showExisting(note)
+    }
+
+    private fun discardSnap() {
+        snapDraft?.let{File(filesDir,it.filename).delete()}
+        snapDraft=null
+        snapPickingMap=false
+        snapPickBar?.visibility=View.GONE
+        if(mode=="SNAP_PICK")mode="VIEW"
+        status.text="SNAP / DISCARDED"
+        refresh()
+    }
+
     private fun showMapPhotoOptions(where:GeoPoint) {
         android.app.AlertDialog.Builder(this)
             .setTitle("PHOTO / FIELD LOCATION")
