@@ -253,9 +253,18 @@ class MainActivity : Activity(), SensorEventListener {
             isFillViewport=false
             addView(panel)
         }
+        val popupWidth=dp(310).coerceAtMost(resources.displayMetrics.widthPixels-dp(20))
+        // Extra places row and scan actions must not extend beyond the bottom
+        // of smaller screens. Measure content, cap the popup and let the
+        // ScrollView handle any overflow, with no unnecessary blank panel.
+        panel.measure(
+            View.MeasureSpec.makeMeasureSpec(popupWidth,View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED)
+        )
+        val popupHeight=panel.measuredHeight.coerceAtMost(
+            (resources.displayMetrics.heightPixels-dp(142)).coerceAtLeast(dp(260)))
         overlayFiltersPopup=PopupWindow(
-            scroll,dp(310).coerceAtMost(resources.displayMetrics.widthPixels-dp(20)),
-            -2,true).apply{
+            scroll,popupWidth,popupHeight,true).apply{
             isOutsideTouchable=true
             setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
             elevation=dp(8).toFloat()
