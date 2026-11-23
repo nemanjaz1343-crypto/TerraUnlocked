@@ -3736,6 +3736,193 @@ class MainActivity : Activity(), SensorEventListener {
             }
         }.start()
     }
+    /**
+     * Mall pin visibility is zoom aware: distinct landmarks at city level,
+     * all mapped centres on neighborhood scale, de-cluttered by screen space.
+     * No approximation of customer traffic or mall popularity is made.
+     */
+    private fun visibleMalls(mapView:MapView):List<MallPlace> {
+        if(!layerVisible("MALLS") || mapView.zoomLevelDouble<11.8)return emptyList()
+        val all=if(mapView.zoomLevelDouble<13.4)
+            malls.filter{MallCatalog.featured(it.name)} else malls
+        val occupied=ArrayList<Pair<Float,Float>>()
+        val visible=ArrayList<MallPlace>()
+        for(mall in all.sortedWith(
+            compareByDescending<MallPlace>{MallCatalog.featured(it.name)}
+                .thenBy{it.name}
+        )) {
+            val pt=mapView.projection.toPixels(
+                GeoPoint(mall.latitude,mall.longitude),Point())
+            val x=pt.x.toFloat()
+            val y=pt.y.toFloat()
+            if(x<0f||y<0f||x>mapView.width||y>mapView.height)continue
+            val minGap=if(mapView.zoomLevelDouble<14.5)dp(31)
+                else dp(22)
+            if(occupied.any{
+                kotlin.math.hypot((it.first-x).toDouble(),
+                    (it.second-y).toDouble())<minGap
+            })continue
+            visible.add(mall)
+            occupied.add(x to y)
+        }
+        return visible
+    }
+
+    private fun scheduleMallRefresh() {
+        handler.removeCallbacks(mallRefreshTask)
+        if(layerVisible("MALLS"))handler.postDelayed(mallRefreshTask,2300L)
+    }
+
+    private fun maybeRefreshMalls(force:Boolean=false) {
+        if(!::map.isInitialized||mallLoading)return
+        if(!layerVisible("MALLS")) {
+            if(force)status.text="MALLS / ENABLE THE LAYER FIRST"
+            return
+        }
+        if(offline) {
+            if(force)status.text="MALLS / OFFLINE / USING CACHED PLACES"
+            return
+        }
+        if(map.zoomLevelDouble<12.2 && !force)return
+        val now=System.currentTimeMillis()
+        // Never hammer public OSM services during map drags or repeated scans.
+        if(now-lastMallAttempt<(if(force)20000L else 180000L)) {
+            if(force)status.text="MALLS / NEXT SCAN AVAILABLE SHORTLY"
+            return
+        }
+        val center=GeoPoint(map.mapCenter.latitude,map.mapCenter.longitude)
+        val previous=mallStore.cachedCenter()
+        val recent=now-mallStore.lastFetchedAt()<8L*60L*60L*1000L
+        if(!force && previous!=null && recent) {
+            val distance=FloatArray(1)
+            android.location.Location.distanceBetween(
+                previous.latitude,previous.longitude,
+                center.latitude,center.longitude,distance)
+            if(distance[0]<4800f)return
+        }
+        mallLoading=true
+        lastMallAttempt=now
+        if(force)status.text="MALLS / SCANNING OPENSTREETMAP..."
+        Thread {
+            val result=runCatching{mallStore.fetch(center)}
+            runOnUiThread {
+                mallLoading=false
+                if(isFinishing||isDestroyed)return@runOnUiThread
+                result.onSuccess{found->
+                    malls.clear()
+                    malls.addAll(found)
+                    refresh()
+                    if(force)status.text="MALLS / "+found.size+
+                        " MAPPED CENTRES CACHED"
+                    if(force && found.isEmpty())android.app.AlertDialog.Builder(this)
+                        .setTitle("MALLS / NO MAP DATA")
+                        .setMessage("No shopping centres were returned by OpenStreetMap. This may reflect incomplete community mapping. Pan to a different district or retry.")
+                        .setPositiveButton("OK",null).show()
+                }
+                result.onFailure{error->
+                    if(force)android.app.AlertDialog.Builder(this)
+                        .setTitle("MALLS / CONNECTION UNAVAILABLE")
+                        .setMessage("Couldn't update OpenStreetMap malls. "+
+                            "Previously cached places stay available.\n\n"+
+                            (error.message?:"Network unavailable"))
+                        .setPositiveButton("OK",null).show()
+                    if(force)status.text="MALLS / OFFLINE CACHE: "+malls.size
+                }
+            }
+        }.start()
+    }
+
+    private fun showMallPlace(mall:MallPlace) {
+        val point=GeoPoint(mall.latitude,mall.longitude)
+        val signature=MallCatalog.signature(mall.name)
+        val panel=LinearLayout(this).apply{
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(14),dp(12),dp(14),dp(12))
+            background=tacticalPanel()
+        }
+        panel.addView(label("▤ MALLS / "+
+            (if(signature!=null)"FEATURED DESTINATION" else "MAPPED SHOPPING CENTRE"),
+            11,sage))
+        panel.addView(label(mall.name,18,sand).apply{
+            setTypeface(Typeface.SERIF,Typeface.BOLD)
+        })
+        if(mall.district.isNotBlank())
+            panel.addView(label("AREA / "+mall.district.take(80),11,sage))
+        panel.addView(label(signature?:
+            "Each shopping destination has its own character. Explore the place and capture what makes it memorable.",
+            12,sand).apply{
+            setPadding(0,dp(7),0,dp(8))
+        })
+        fogOverlay.currentPosition?.let{here->
+            val distance=FloatArray(1)
+            android.location.Location.distanceBetween(
+                here.latitude,here.longitude,
+                mall.latitude,mall.longitude,distance)
+            panel.addView(label("DISTANCE / "+(if(distance[0]>=1000f)
+                "%.1f km".format(java.util.Locale.US,distance[0]/1000f)
+                else "%.0f m".format(java.util.Locale.US,distance[0])),11,sage))
+        }
+        val memoCount=notes.count{note->
+            note.kind=="MALL" && run{
+                val d=FloatArray(1)
+                android.location.Location.distanceBetween(
+                    note.latitude,note.longitude,mall.latitude,mall.longitude,d)
+                d[0]<250f
+            }
+        }
+        panel.addView(label("YOUR FIELD NOTES NEARBY / "+memoCount,11,sage))
+        lateinit var dialog:android.app.AlertDialog
+        fun option(title:String,click:()->Unit) {
+            panel.addView(action(title).apply{
+                applyExpeditionStyle(this)
+                setOnClickListener{
+                    dialog.dismiss()
+                    click()
+                }
+            },LinearLayout.LayoutParams(-1,dp(44)).apply{
+                topMargin=dp(5)
+            })
+        }
+        option("✎  WRITE A MALL FIELD NOTE") {
+            showNoteEditor(point,"MALL")
+        }
+        option("◈  SAVE AS A DESTINATION") {
+            val already=objectiveStore.customPlaces().firstOrNull{
+                it.name.equals(mall.name,true) &&
+                    kotlin.math.abs(it.latitude-mall.latitude)<.002 &&
+                    kotlin.math.abs(it.longitude-mall.longitude)<.002
+            }
+            val destination=already?:objectiveStore.addPlace(
+                mall.name,mall.latitude,mall.longitude,
+                "MALL / "+(signature?:"Shopping destination"))
+            objectiveStore.enabled=true
+            status.text=if(already==null)"MALL / SAVED AS DESTINATION"
+                else "MALL / ALREADY SAVED"
+            refresh()
+            showObjective(destination)
+        }
+        option("⌖  VIEW IN MAPS") {
+            val query=android.net.Uri.encode(mall.name)
+            val uri=Uri.parse("geo:0,0?q="+mall.latitude+","+mall.longitude+
+                "("+query+")")
+            runCatching{startActivity(Intent(Intent.ACTION_VIEW,uri))}
+                .onFailure{status.text="MALL / NO EXTERNAL MAP APP"}
+        }
+        if(mall.website.isNotEmpty())option("↗  MALL WEBSITE") {
+            runCatching{startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(mall.website)))}
+                .onFailure{status.text="MALL / CANNOT OPEN WEBSITE"}
+        }
+        panel.addView(label("Place geometry from © OpenStreetMap contributors. "+
+            "A map point may represent the centre of a complex, not its entrance.",
+            9,sage).apply{setPadding(0,dp(7),0,0)})
+        dialog=android.app.AlertDialog.Builder(this).setView(panel)
+            .setNegativeButton("CLOSE",null).create()
+        dialog.show()
+        dialog.window?.setBackgroundDrawable(
+            android.graphics.drawable.ColorDrawable(
+                ExpeditionThemes.current.surface))
+    }
+
     private fun scheduleTaxiStandsRefresh() {
         handler.removeCallbacks(taxiRefreshTask)
         handler.postDelayed(taxiRefreshTask,1800L)
