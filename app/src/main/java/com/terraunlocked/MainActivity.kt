@@ -95,6 +95,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun layerVisible(category:String):Boolean=when(category) {
         "TAXI" -> taxiStandsEnabled
+        "MALLS" -> layerFilters["MALLS"]!=false
         "JOURNAL" -> ::fogOverlay.isInitialized && fogOverlay.showCheckpoints
         else -> layerFilters[category]!=false
     }
@@ -114,6 +115,13 @@ class MainActivity : Activity(), SensorEventListener {
                 if(show)scheduleTaxiStandsRefresh()
             }
             "JOURNAL" -> fogOverlay.showCheckpoints=show
+            "MALLS" -> {
+                layerFilters["MALLS"]=show
+                getSharedPreferences("terra_layer_filters",Context.MODE_PRIVATE)
+                    .edit().putBoolean("MALLS",show).apply()
+                if(show)scheduleMallRefresh()
+                else handler.removeCallbacks(mallRefreshTask)
+            }
             else -> {
                 layerFilters[category]=show
                 getSharedPreferences("terra_layer_filters",Context.MODE_PRIVATE)
@@ -152,6 +160,8 @@ class MainActivity : Activity(), SensorEventListener {
                 "ART" to "✧  ART",
                 "SAVED" to "◆  SAVED",
                 "OTHER" to "◇  OTHER"),
+            "PLACES" to listOf(
+                "MALLS" to "▤  MALLS (${malls.size})"),
             "TRANSPORT" to listOf(
                 "METRO" to "Ⓜ  METRO",
                 "TAXI" to "▣  TAXI (${taxiStands.size})"),
@@ -211,6 +221,17 @@ class MainActivity : Activity(), SensorEventListener {
         quickAction("SHOW ALL",true)
         quickAction("HIDE ALL",false)
         panel.addView(controls)
+        panel.addView(action("⌕  SCAN MALLS IN THIS AREA").apply {
+            applyExpeditionStyle(this)
+            textSize=11f
+            setOnClickListener {
+                overlayFiltersPopup?.dismiss()
+                setLayerVisible("MALLS",true)
+                maybeRefreshMalls(force=true)
+            }
+        },LinearLayout.LayoutParams(-1,dp(42)).apply {
+            setMargins(dp(2),dp(4),dp(2),0)
+        })
         panel.addView(action("⌕  SCAN TAXI STANDS IN THIS AREA").apply{
             applyExpeditionStyle(this)
             textSize=11f
@@ -222,7 +243,7 @@ class MainActivity : Activity(), SensorEventListener {
         },LinearLayout.LayoutParams(-1,dp(42)).apply{
             setMargins(dp(2),dp(4),dp(2),0)
         })
-        panel.addView(label("Taxi places come from OSM: not all ranks are mapped.",9,sage).apply{
+        panel.addView(label("Malls and taxi ranks use OpenStreetMap; smaller centres may be missing.",9,sage).apply{
             gravity=Gravity.CENTER
         })
         panel.addView(label("Visibility only / your data stays saved",9,sage).apply{
@@ -232,9 +253,18 @@ class MainActivity : Activity(), SensorEventListener {
             isFillViewport=false
             addView(panel)
         }
+        val popupWidth=dp(310).coerceAtMost(resources.displayMetrics.widthPixels-dp(20))
+        // Extra places row and scan actions must not extend beyond the bottom
+        // of smaller screens. Measure content, cap the popup and let the
+        // ScrollView handle any overflow, with no unnecessary blank panel.
+        panel.measure(
+            View.MeasureSpec.makeMeasureSpec(popupWidth,View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED)
+        )
+        val popupHeight=panel.measuredHeight.coerceAtMost(
+            (resources.displayMetrics.heightPixels-dp(142)).coerceAtLeast(dp(260)))
         overlayFiltersPopup=PopupWindow(
-            scroll,dp(310).coerceAtMost(resources.displayMetrics.widthPixels-dp(20)),
-            -2,true).apply{
+            scroll,popupWidth,popupHeight,true).apply{
             isOutsideTouchable=true
             setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
             elevation=dp(8).toFloat()
@@ -524,6 +554,11 @@ class MainActivity : Activity(), SensorEventListener {
     private val taxiStandStore by lazy { TaxiStandStore(this) }
     private val taxiStands=mutableListOf<TaxiStand>()
     private var taxiStandsEnabled=true
+    private val mallStore by lazy {MallStore(this)}
+    private val malls=mutableListOf<MallPlace>()
+    private var mallLoading=false
+    private var lastMallAttempt=0L
+    private val mallRefreshTask=Runnable{maybeRefreshMalls()}
     private var taxiStandLoading=false
     private var lastTaxiStandAttempt=0L
     private val taxiRefreshTask=Runnable { maybeRefreshTaxiStands() }
@@ -751,9 +786,10 @@ class MainActivity : Activity(), SensorEventListener {
         taxiStandsEnabled=getSharedPreferences("terra_taxi_settings",Context.MODE_PRIVATE)
             .getBoolean("enabled",true)
         taxiStands.addAll(taxiStandStore.load())
+        malls.addAll(mallStore.load())
         objectiveStore.enabled=true
         getSharedPreferences("terra_layer_filters",Context.MODE_PRIVATE).let {prefs->
-            listOf("NATURE","HERITAGE","ARCH","ART","SAVED","OTHER","METRO","ANCHORS","ESTIMATES")
+            listOf("NATURE","HERITAGE","ARCH","ART","SAVED","OTHER","METRO","MALLS","ANCHORS","ESTIMATES")
                 .forEach{layerFilters[it]=prefs.getBoolean(it,true)}
         }
         notes.addAll(fieldNotes.load())
@@ -1305,6 +1341,71 @@ class MainActivity : Activity(), SensorEventListener {
                 return true
             }
         })
+        // OpenStreetMap shopping destinations: landmark malls appear at
+        // city scale, mapped community centres become visible when zoomed in.
+        // Only cached POIs are drawn; no network or geometry work per frame.
+        map.overlays.add(object:Overlay() {
+            private val ink=Paint(Paint.ANTI_ALIAS_FLAG)
+            override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
+                if(shadow || !layerVisible("MALLS"))return
+                val visible=visibleMalls(mapView)
+                val density=resources.displayMetrics.density
+                for(mall in visible) {
+                    val at=mapView.projection.toPixels(
+                        GeoPoint(mall.latitude,mall.longitude),Point())
+                    val x=at.x.toFloat();val y=at.y.toFloat()
+                    val signature=MallCatalog.featured(mall.name)
+                    val size=(if(signature)13f else 11f)*density
+                    // Solid icon ensures contrast on both fog and bright tiles.
+                    ink.style=Paint.Style.FILL
+                    ink.color=ExpeditionThemes.current.dark
+                    canvas.drawRoundRect(x-size,y-size,x+size,y+size,
+                        5f*density,5f*density,ink)
+                    ink.style=Paint.Style.STROKE
+                    ink.strokeWidth=if(signature)2.2f*density else 1.5f*density
+                    ink.color=if(signature)ExpeditionThemes.current.gold
+                        else ExpeditionThemes.current.secondary
+                    canvas.drawRoundRect(x-size,y-size,x+size,y+size,
+                        5f*density,5f*density,ink)
+                    // Shopping-bag body and handle rather than a vague dot.
+                    val bagWidth=size*.49f
+                    canvas.drawRect(x-bagWidth,y-1f*density,
+                        x+bagWidth,y+size*.56f,ink)
+                    canvas.drawArc(x-bagWidth*.5f,y-size*.49f,
+                        x+bagWidth*.5f,y+size*.15f,
+                        180f,180f,false,ink)
+                    if(mapView.zoomLevelDouble>=15.2) {
+                        val title=mall.name.take(27)
+                        ink.style=Paint.Style.FILL
+                        ink.textSize=10f*density
+                        ink.typeface=Typeface.create("sans-serif-medium",Typeface.BOLD)
+                        ink.textAlign=Paint.Align.CENTER
+                        val half=ink.measureText(title)/2f+5f*density
+                        ink.color=ExpeditionThemes.current.dark
+                        canvas.drawRoundRect(x-half,y+size+2f*density,
+                            x+half,y+size+17f*density,
+                            3f*density,3f*density,ink)
+                        ink.color=ExpeditionThemes.current.light
+                        canvas.drawText(title,x,y+size+13f*density,ink)
+                    }
+                }
+            }
+            override fun onSingleTapConfirmed(e:MotionEvent,mapView:MapView):Boolean {
+                if(mode!="VIEW" || !layerVisible("MALLS"))return false
+                val hit=visibleMalls(mapView).minByOrNull {mall->
+                    val at=mapView.projection.toPixels(
+                        GeoPoint(mall.latitude,mall.longitude),Point())
+                    kotlin.math.hypot((at.x-e.x).toDouble(),(at.y-e.y).toDouble())
+                } ?:return false
+                val at=mapView.projection.toPixels(
+                    GeoPoint(hit.latitude,hit.longitude),Point())
+                if(kotlin.math.hypot((at.x-e.x).toDouble(),(at.y-e.y).toDouble())>dp(26))
+                    return false
+                if(measure)recordRulerPoint(GeoPoint(hit.latitude,hit.longitude))
+                else showMallPlace(hit)
+                return true
+            }
+        })
         map.overlays.add(object:Overlay() {
             private val ink=Paint(Paint.ANTI_ALIAS_FLAG)
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
@@ -1771,6 +1872,7 @@ class MainActivity : Activity(), SensorEventListener {
                 handler.removeCallbacks(repositionBubbleAfterPan)
                 handler.postDelayed(repositionBubbleAfterPan,85L)
                 scheduleTaxiStandsRefresh()
+                scheduleMallRefresh()
                 return false
             }
             override fun onZoom(event:org.osmdroid.events.ZoomEvent?):Boolean {
@@ -1778,6 +1880,7 @@ class MainActivity : Activity(), SensorEventListener {
                 handler.removeCallbacks(repositionBubbleAfterPan)
                 handler.postDelayed(repositionBubbleAfterPan,110L)
                 scheduleTaxiStandsRefresh()
+                scheduleMallRefresh()
                 return false
             }
         })
@@ -3644,6 +3747,197 @@ class MainActivity : Activity(), SensorEventListener {
             }
         }.start()
     }
+    /**
+     * Mall pin visibility is zoom aware: distinct landmarks at city level,
+     * all mapped centres on neighborhood scale, de-cluttered by screen space.
+     * No approximation of customer traffic or mall popularity is made.
+     */
+    private fun visibleMalls(mapView:MapView):List<MallPlace> {
+        if(!layerVisible("MALLS") || mapView.zoomLevelDouble<11.8)return emptyList()
+        val all=if(mapView.zoomLevelDouble<13.4)
+            malls.filter{MallCatalog.featured(it.name)} else malls
+        val occupied=ArrayList<Pair<Float,Float>>()
+        val visible=ArrayList<MallPlace>()
+        for(mall in all.sortedWith(
+            compareByDescending<MallPlace>{MallCatalog.featured(it.name)}
+                .thenBy{it.name}
+        )) {
+            val pt=mapView.projection.toPixels(
+                GeoPoint(mall.latitude,mall.longitude),Point())
+            val x=pt.x.toFloat()
+            val y=pt.y.toFloat()
+            if(x<0f||y<0f||x>mapView.width||y>mapView.height)continue
+            val minGap=if(mapView.zoomLevelDouble<14.5)dp(31)
+                else dp(22)
+            if(occupied.any{
+                kotlin.math.hypot((it.first-x).toDouble(),
+                    (it.second-y).toDouble())<minGap
+            })continue
+            visible.add(mall)
+            occupied.add(x to y)
+        }
+        return visible
+    }
+
+    private fun scheduleMallRefresh() {
+        handler.removeCallbacks(mallRefreshTask)
+        if(layerVisible("MALLS"))handler.postDelayed(mallRefreshTask,2300L)
+    }
+
+    private fun maybeRefreshMalls(force:Boolean=false) {
+        if(!::map.isInitialized||mallLoading)return
+        if(!layerVisible("MALLS")) {
+            if(force)status.text="MALLS / ENABLE THE LAYER FIRST"
+            return
+        }
+        if(offline) {
+            if(force)status.text="MALLS / OFFLINE / USING CACHED PLACES"
+            return
+        }
+        if(map.zoomLevelDouble<12.2 && !force)return
+        val now=System.currentTimeMillis()
+        // Never hammer public OSM services during map drags or repeated scans.
+        if(now-lastMallAttempt<(if(force)20000L else 180000L)) {
+            if(force)status.text="MALLS / NEXT SCAN AVAILABLE SHORTLY"
+            return
+        }
+        val center=GeoPoint(map.mapCenter.latitude,map.mapCenter.longitude)
+        val previous=mallStore.cachedCenter()
+        val recent=now-mallStore.lastFetchedAt()<8L*60L*60L*1000L
+        if(!force && previous!=null && recent) {
+            val distance=FloatArray(1)
+            android.location.Location.distanceBetween(
+                previous.latitude,previous.longitude,
+                center.latitude,center.longitude,distance)
+            if(distance[0]<4800f)return
+        }
+        mallLoading=true
+        lastMallAttempt=now
+        if(force)status.text="MALLS / SCANNING OPENSTREETMAP..."
+        Thread {
+            val result=runCatching{mallStore.fetch(center)}
+            runOnUiThread {
+                mallLoading=false
+                if(isFinishing||isDestroyed)return@runOnUiThread
+                result.onSuccess{found->
+                    malls.clear()
+                    malls.addAll(found)
+                    refresh()
+                    if(force)status.text="MALLS / "+found.size+
+                        " MAPPED CENTRES CACHED"
+                    if(force && found.isEmpty())android.app.AlertDialog.Builder(this)
+                        .setTitle("MALLS / NO MAP DATA")
+                        .setMessage("No shopping centres were returned by OpenStreetMap. This may reflect incomplete community mapping. Pan to a different district or retry.")
+                        .setPositiveButton("OK",null).show()
+                }
+                result.onFailure{error->
+                    if(force)android.app.AlertDialog.Builder(this)
+                        .setTitle("MALLS / CONNECTION UNAVAILABLE")
+                        .setMessage("Couldn't update OpenStreetMap malls. "+
+                            "Previously cached places stay available.\n\n"+
+                            (error.message?:"Network unavailable"))
+                        .setPositiveButton("OK",null).show()
+                    if(force)status.text="MALLS / OFFLINE CACHE: "+malls.size
+                }
+            }
+        }.start()
+    }
+
+    private fun showMallPlace(mall:MallPlace) {
+        val point=GeoPoint(mall.latitude,mall.longitude)
+        val signature=MallCatalog.signature(mall.name)
+        val panel=LinearLayout(this).apply{
+            orientation=LinearLayout.VERTICAL
+            setPadding(dp(14),dp(12),dp(14),dp(12))
+            background=tacticalPanel()
+        }
+        panel.addView(label("▤ MALLS / "+
+            (if(signature!=null)"FEATURED DESTINATION" else "MAPPED SHOPPING CENTRE"),
+            11,sage))
+        panel.addView(label(mall.name,18,sand).apply{
+            setTypeface(Typeface.SERIF,Typeface.BOLD)
+        })
+        if(mall.district.isNotBlank())
+            panel.addView(label("AREA / "+mall.district.take(80),11,sage))
+        panel.addView(label(signature?:
+            "Each shopping destination has its own character. Explore the place and capture what makes it memorable.",
+            12,sand).apply{
+            setPadding(0,dp(7),0,dp(8))
+        })
+        fogOverlay.currentPosition?.let{here->
+            val distance=FloatArray(1)
+            android.location.Location.distanceBetween(
+                here.latitude,here.longitude,
+                mall.latitude,mall.longitude,distance)
+            panel.addView(label("DISTANCE / "+(if(distance[0]>=1000f)
+                "%.1f km".format(java.util.Locale.US,distance[0]/1000f)
+                else "%.0f m".format(java.util.Locale.US,distance[0])),11,sage))
+        }
+        val memoCount=notes.count{note->
+            note.kind=="MALL" && run{
+                val d=FloatArray(1)
+                android.location.Location.distanceBetween(
+                    note.latitude,note.longitude,mall.latitude,mall.longitude,d)
+                d[0]<250f
+            }
+        }
+        panel.addView(label("YOUR FIELD NOTES NEARBY / "+memoCount,11,sage))
+        lateinit var dialog:android.app.AlertDialog
+        fun option(title:String,click:()->Unit) {
+            panel.addView(action(title).apply{
+                applyExpeditionStyle(this)
+                setOnClickListener{
+                    dialog.dismiss()
+                    click()
+                }
+            },LinearLayout.LayoutParams(-1,dp(44)).apply{
+                topMargin=dp(5)
+            })
+        }
+        option("✎  WRITE A MALL FIELD NOTE") {
+            showNoteEditor(point,"MALL")
+        }
+        option("◈  SAVE AS A DESTINATION") {
+            // Check built-in landmarks too; Dubai Marina Mall is already
+            // a curated objective, and should not be duplicated.
+            val already=(ReconObjectives.all+objectiveStore.customPlaces())
+                .firstOrNull{existing->
+                    existing.name.equals(mall.name,true) &&
+                        kotlin.math.abs(existing.latitude-mall.latitude)<.002 &&
+                        kotlin.math.abs(existing.longitude-mall.longitude)<.002
+                }
+            val destination=already?:objectiveStore.addPlace(
+                mall.name,mall.latitude,mall.longitude,
+                "MALL / "+(signature?:"Shopping destination"))
+            objectiveStore.hide(destination.id,false)
+            objectiveStore.enabled=true
+            status.text=if(already==null)"MALL / SAVED AS DESTINATION"
+                else "MALL / EXISTING DESTINATION OPENED"
+            refresh()
+            showObjective(destination)
+        }
+        option("⌖  VIEW IN MAPS") {
+            val query=android.net.Uri.encode(mall.name)
+            val uri=Uri.parse("geo:0,0?q="+mall.latitude+","+mall.longitude+
+                "("+query+")")
+            runCatching{startActivity(Intent(Intent.ACTION_VIEW,uri))}
+                .onFailure{status.text="MALL / NO EXTERNAL MAP APP"}
+        }
+        if(mall.website.isNotEmpty())option("↗  MALL WEBSITE") {
+            runCatching{startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(mall.website)))}
+                .onFailure{status.text="MALL / CANNOT OPEN WEBSITE"}
+        }
+        panel.addView(label("Place geometry from © OpenStreetMap contributors. "+
+            "A map point may represent the centre of a complex, not its entrance.",
+            9,sage).apply{setPadding(0,dp(7),0,0)})
+        dialog=android.app.AlertDialog.Builder(this).setView(panel)
+            .setNegativeButton("CLOSE",null).create()
+        dialog.show()
+        dialog.window?.setBackgroundDrawable(
+            android.graphics.drawable.ColorDrawable(
+                ExpeditionThemes.current.surface))
+    }
+
     private fun scheduleTaxiStandsRefresh() {
         handler.removeCallbacks(taxiRefreshTask)
         handler.postDelayed(taxiRefreshTask,1800L)
@@ -4325,6 +4619,9 @@ class MainActivity : Activity(), SensorEventListener {
                     "ROUTE  ${if(fogOverlay.showRoute) "ON" else "OFF"}" to {
                         fogOverlay.showRoute=!fogOverlay.showRoute;refresh()
                     },
+                    "MALLS  ${if(layerVisible("MALLS"))"ON" else "OFF"}" to {
+                        setLayerVisible("MALLS",!layerVisible("MALLS"))
+                    },
                     "TAXI STANDS  ${if(taxiStandsEnabled) "ON" else "OFF"}" to {
                         taxiStandsEnabled=!taxiStandsEnabled
                         getSharedPreferences("terra_taxi_settings",Context.MODE_PRIVATE)
@@ -4740,6 +5037,7 @@ class MainActivity : Activity(), SensorEventListener {
         updateSolarDial()
         loadDubaiTemperature()
         scheduleTaxiStandsRefresh()
+        scheduleMallRefresh()
         handler.postDelayed(solarTick,60000L)
         tracking=TrackingService.running
         val interrupted=!tracking &&
@@ -4786,6 +5084,7 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
     override fun onPause() {
+        handler.removeCallbacks(mallRefreshTask)
         handler.removeCallbacks(taxiRefreshTask)
         handler.removeCallbacks(repositionBubbleAfterPan)
         handler.removeCallbacks(solarTick)
@@ -4805,6 +5104,7 @@ class MainActivity : Activity(), SensorEventListener {
         super.onDestroy()
         handler.removeCallbacks(simulationStep)
         handler.removeCallbacks(taxiRefreshTask)
+        handler.removeCallbacks(mallRefreshTask)
         handler.removeCallbacks(solarTick)
         solarPopup?.dismiss()
         overlayFiltersPopup?.dismiss()
