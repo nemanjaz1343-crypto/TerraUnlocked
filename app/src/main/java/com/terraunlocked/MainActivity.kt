@@ -3898,17 +3898,21 @@ class MainActivity : Activity(), SensorEventListener {
             showNoteEditor(point,"MALL")
         }
         option("◈  SAVE AS A DESTINATION") {
-            val already=objectiveStore.customPlaces().firstOrNull{
-                it.name.equals(mall.name,true) &&
-                    kotlin.math.abs(it.latitude-mall.latitude)<.002 &&
-                    kotlin.math.abs(it.longitude-mall.longitude)<.002
-            }
+            // Check built-in landmarks too; Dubai Marina Mall is already
+            // a curated objective, and should not be duplicated.
+            val already=(ReconObjectives.all+objectiveStore.customPlaces())
+                .firstOrNull{existing->
+                    existing.name.equals(mall.name,true) &&
+                        kotlin.math.abs(existing.latitude-mall.latitude)<.002 &&
+                        kotlin.math.abs(existing.longitude-mall.longitude)<.002
+                }
             val destination=already?:objectiveStore.addPlace(
                 mall.name,mall.latitude,mall.longitude,
                 "MALL / "+(signature?:"Shopping destination"))
+            objectiveStore.hide(destination.id,false)
             objectiveStore.enabled=true
             status.text=if(already==null)"MALL / SAVED AS DESTINATION"
-                else "MALL / ALREADY SAVED"
+                else "MALL / EXISTING DESTINATION OPENED"
             refresh()
             showObjective(destination)
         }
