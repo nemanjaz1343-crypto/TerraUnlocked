@@ -11,7 +11,8 @@ import kotlin.math.cos
 
 /**
  * A mapped shopping destination; never inferred from a review/rating or from
- * a nearby supermarket. Coordinates and names come from OpenStreetMap only.
+ * a nearby supermarket. Live positions come from OpenStreetMap. A small set
+ * of documented Dubai landmarks is bundled for immediate/offline visibility.
  */
 internal data class MallPlace(
     val id:String,
@@ -70,6 +71,36 @@ internal object MallCatalog {
         }
     }
 
+    /**
+     * Fixed, publicly verifiable *approximate centre points* for Dubai malls.
+     * The original 0.4.75 layer could show ZERO icons while Overpass was
+     * unavailable, or before its first network fetch. Bundled landmarks make
+     * the feature useful immediately, then live OSM data expands coverage.
+     *
+     * Sources: mapcarta.com/W200915107 (Dubai Marina Mall),
+     * mapcarta.com/W175115425 (Mall of the Emirates),
+     * mapcarta.com/W797700047 (Dubai Hills Mall),
+     * geonames.org (Ibn Battuta Mall), Kredium Dubai malls map (Dubai Mall),
+     * mapcarta.com/28796812 (Wafi City), latlong.net (Festival City Mall).
+     * Map centres are not entrances or precise indoor navigation points.
+     */
+    val bundledDubaiLandmarks:List<MallPlace> = listOf(
+        MallPlace("landmark_dubai_marina_mall","Dubai Marina Mall",
+            25.07665,55.14021,"MALL","Dubai Marina"),
+        MallPlace("landmark_ibn_battuta_mall","Ibn Battuta Mall",
+            25.044444,55.120556,"MALL","Jebel Ali"),
+        MallPlace("landmark_mall_emirates","Mall of the Emirates",
+            25.11793,55.20051,"MALL","Al Barsha"),
+        MallPlace("landmark_dubai_hills_mall","Dubai Hills Mall",
+            25.10160,55.23968,"MALL","Dubai Hills"),
+        MallPlace("landmark_dubai_mall","Dubai Mall",
+            25.197245,55.279745,"MALL","Downtown Dubai"),
+        MallPlace("landmark_wafi_city","Wafi City",
+            25.22962,55.31891,"MALL","Umm Hurair"),
+        MallPlace("landmark_festival_city_mall","Dubai Festival City Mall",
+            25.221903,55.352703,"MALL","Festival City")
+    )
+
     fun featured(name:String):Boolean=signature(name)!=null
 
     /** OSM ways, relations and nodes can all map the same named centre. */
@@ -125,8 +156,8 @@ internal class MallStore(context:Context) {
                 j.optString("kind","MALL"),j.optString("district"),
                 j.optString("website"),j.optString("hours")))
         }
-        MallCatalog.distinct(result)
-    }.getOrDefault(emptyList())
+        MallCatalog.distinct(result+MallCatalog.bundledDubaiLandmarks)
+    }.getOrElse { MallCatalog.bundledDubaiLandmarks }
 
     fun fetch(center:GeoPoint):List<MallPlace> {
         require(center.latitude in -89.0..89.0 && center.longitude in -179.0..179.0)

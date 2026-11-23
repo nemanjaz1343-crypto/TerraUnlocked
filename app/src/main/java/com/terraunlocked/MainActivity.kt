@@ -1353,40 +1353,55 @@ class MainActivity : Activity(), SensorEventListener {
                 for(mall in visible) {
                     val at=mapView.projection.toPixels(
                         GeoPoint(mall.latitude,mall.longitude),Point())
-                    val x=at.x.toFloat();val y=at.y.toFloat()
-                    val signature=MallCatalog.featured(mall.name)
-                    val size=(if(signature)13f else 11f)*density
-                    // Solid icon ensures contrast on both fog and bright tiles.
+                    val x=at.x.toFloat()
+                    val y=at.y.toFloat()
+                    val featured=MallCatalog.featured(mall.name)
+                    val size=(if(featured)17f else 14f)*density
+                    val border=if(featured)3f*density else 2.4f*density
+                    val fill=ExpeditionThemes.current.dark
+                    val outline=if(featured)ExpeditionThemes.current.gold
+                        else ExpeditionThemes.current.light
+                    // Diamond marker, high contrast on both bright map tiles
+                    // and dark fog. Full fill prevents icons disappearing
+                    // against satellite imagery.
+                    val diamond=android.graphics.Path().apply{
+                        moveTo(x,y-size)
+                        lineTo(x+size,y)
+                        lineTo(x,y+size)
+                        lineTo(x-size,y)
+                        close()
+                    }
                     ink.style=Paint.Style.FILL
-                    ink.color=ExpeditionThemes.current.dark
-                    canvas.drawRoundRect(x-size,y-size,x+size,y+size,
-                        5f*density,5f*density,ink)
+                    ink.color=fill
+                    canvas.drawPath(diamond,ink)
                     ink.style=Paint.Style.STROKE
-                    ink.strokeWidth=if(signature)2.2f*density else 1.5f*density
-                    ink.color=if(signature)ExpeditionThemes.current.gold
-                        else ExpeditionThemes.current.secondary
-                    canvas.drawRoundRect(x-size,y-size,x+size,y+size,
-                        5f*density,5f*density,ink)
-                    // Shopping-bag body and handle rather than a vague dot.
-                    val bagWidth=size*.49f
-                    canvas.drawRect(x-bagWidth,y-1f*density,
-                        x+bagWidth,y+size*.56f,ink)
-                    canvas.drawArc(x-bagWidth*.5f,y-size*.49f,
-                        x+bagWidth*.5f,y+size*.15f,
-                        180f,180f,false,ink)
-                    if(mapView.zoomLevelDouble>=15.2) {
+                    ink.strokeWidth=border
+                    ink.strokeJoin=Paint.Join.ROUND
+                    ink.color=outline
+                    canvas.drawPath(diamond,ink)
+                    // Simple central facet differentiates it from objective
+                    // diamonds and makes smaller community malls legible.
+                    ink.style=Paint.Style.FILL
+                    ink.color=outline
+                    val facet=size*.28f
+                    canvas.drawRect(x-facet,y-facet,x+facet,y+facet,ink)
+
+                    // Names appear earlier at mid-range zoom. Avoid labels
+                    // at country/city zoom where they would overlap.
+                    if(mapView.zoomLevelDouble>=14.4 ||
+                        (featured && mapView.zoomLevelDouble>=13.4)) {
                         val title=mall.name.take(27)
                         ink.style=Paint.Style.FILL
                         ink.textSize=10f*density
                         ink.typeface=Typeface.create("sans-serif-medium",Typeface.BOLD)
                         ink.textAlign=Paint.Align.CENTER
-                        val half=ink.measureText(title)/2f+5f*density
+                        val half=ink.measureText(title)/2f+6f*density
                         ink.color=ExpeditionThemes.current.dark
-                        canvas.drawRoundRect(x-half,y+size+2f*density,
-                            x+half,y+size+17f*density,
-                            3f*density,3f*density,ink)
+                        canvas.drawRoundRect(x-half,y+size+4f*density,
+                            x+half,y+size+20f*density,
+                            4f*density,4f*density,ink)
                         ink.color=ExpeditionThemes.current.light
-                        canvas.drawText(title,x,y+size+13f*density,ink)
+                        canvas.drawText(title,x,y+size+15f*density,ink)
                     }
                 }
             }
@@ -1399,7 +1414,7 @@ class MainActivity : Activity(), SensorEventListener {
                 } ?:return false
                 val at=mapView.projection.toPixels(
                     GeoPoint(hit.latitude,hit.longitude),Point())
-                if(kotlin.math.hypot((at.x-e.x).toDouble(),(at.y-e.y).toDouble())>dp(26))
+                if(kotlin.math.hypot((at.x-e.x).toDouble(),(at.y-e.y).toDouble())>dp(38))
                     return false
                 if(measure)recordRulerPoint(GeoPoint(hit.latitude,hit.longitude))
                 else showMallPlace(hit)
@@ -3753,8 +3768,8 @@ class MainActivity : Activity(), SensorEventListener {
      * No approximation of customer traffic or mall popularity is made.
      */
     private fun visibleMalls(mapView:MapView):List<MallPlace> {
-        if(!layerVisible("MALLS") || mapView.zoomLevelDouble<11.8)return emptyList()
-        val all=if(mapView.zoomLevelDouble<13.4)
+        if(!layerVisible("MALLS") || mapView.zoomLevelDouble<10.8)return emptyList()
+        val all=if(mapView.zoomLevelDouble<12.8)
             malls.filter{MallCatalog.featured(it.name)} else malls
         val occupied=ArrayList<Pair<Float,Float>>()
         val visible=ArrayList<MallPlace>()
@@ -3767,8 +3782,8 @@ class MainActivity : Activity(), SensorEventListener {
             val x=pt.x.toFloat()
             val y=pt.y.toFloat()
             if(x<0f||y<0f||x>mapView.width||y>mapView.height)continue
-            val minGap=if(mapView.zoomLevelDouble<14.5)dp(31)
-                else dp(22)
+            val minGap=if(mapView.zoomLevelDouble<14.5)dp(24)
+                else dp(18)
             if(occupied.any{
                 kotlin.math.hypot((it.first-x).toDouble(),
                     (it.second-y).toDouble())<minGap
@@ -3794,7 +3809,7 @@ class MainActivity : Activity(), SensorEventListener {
             if(force)status.text="MALLS / OFFLINE / USING CACHED PLACES"
             return
         }
-        if(map.zoomLevelDouble<12.2 && !force)return
+        if(map.zoomLevelDouble<11.2 && !force)return
         val now=System.currentTimeMillis()
         // Never hammer public OSM services during map drags or repeated scans.
         if(now-lastMallAttempt<(if(force)20000L else 180000L)) {

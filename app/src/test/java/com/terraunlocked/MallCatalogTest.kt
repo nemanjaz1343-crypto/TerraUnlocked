@@ -4,6 +4,18 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class MallCatalogTest {
+    @Test fun bundledLandmarksAreUniqueAndWithinDubai() {
+        val reference=MallCatalog.bundledDubaiLandmarks
+        assertTrue(reference.size>=6)
+        assertEquals(reference.size,reference.map{it.name}.toSet().size)
+        assertTrue(reference.all{it.latitude in 24.9..25.4 &&
+            it.longitude in 55.0..55.5})
+        assertTrue(reference.any{it.name=="Dubai Marina Mall"})
+        assertTrue(reference.any{it.name=="Ibn Battuta Mall"})
+        assertTrue(reference.all{MallCatalog.featured(it.name)})
+        assertEquals(reference.size,MallCatalog.distinct(reference).size)
+    }
+
     @Test fun uniqueOsmGeometryAndNodeNames() {
         val items=listOf(
             MallPlace("node_1","Dubai Marina Mall",25.0765,55.1398),
