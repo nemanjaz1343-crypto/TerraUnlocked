@@ -37,3 +37,23 @@ including community centres rather than only internationally famous malls.
 - No changes to existing discoveries, fog, routes, missions, tracking
   permissions or ZIP format.
 - PR unit and debug builds plus signed release are required.
+
+## v0.4.76 — visible diamond markers and offline landmarks
+
+- The MALLS icon is now a solid, high-contrast diamond with a thick theme-aware
+  border and contrasting central facet. Important destinations use a larger
+  17dp diamond; other mapped centres use 14dp.
+- Hit targets are enlarged to 38dp, featured names become visible at zoom 13.4,
+  and markers start appearing at zoom 10.8; lower de-cluttering keeps more
+  destinations on screen.
+- Before the first successful live Overpass scan, seven Dubai landmarks are
+  preloaded from published coordinate references (Dubai Marina Mall, Ibn Battuta
+  Mall, Mall of the Emirates, Dubai Hills Mall, Dubai Mall, Wafi City and
+  Dubai Festival City Mall). Coordinates are approximate complex centres, not
+  entrances. Live OSM places still supplement these and the local cache is
+  preserved; the bundled set prevents an empty screen if Overpass is down.
+- Overpass background scanning can begin from zoom 11.2, avoiding a dead zone
+  where the mall layer was switched on yet still had no scanned centres.
+- Regression unit test verifies the bundled landmarks are unique and fall
+  within the Dubai area. Map appearance and tap targets also need a real-device
+  check because JVM unit tests cannot verify Canvas drawing.
