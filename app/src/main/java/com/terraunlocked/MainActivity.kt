@@ -1863,6 +1863,7 @@ class MainActivity : Activity(), SensorEventListener {
                 handler.removeCallbacks(repositionBubbleAfterPan)
                 handler.postDelayed(repositionBubbleAfterPan,85L)
                 scheduleTaxiStandsRefresh()
+                scheduleMallRefresh()
                 return false
             }
             override fun onZoom(event:org.osmdroid.events.ZoomEvent?):Boolean {
@@ -1870,6 +1871,7 @@ class MainActivity : Activity(), SensorEventListener {
                 handler.removeCallbacks(repositionBubbleAfterPan)
                 handler.postDelayed(repositionBubbleAfterPan,110L)
                 scheduleTaxiStandsRefresh()
+                scheduleMallRefresh()
                 return false
             }
         })
@@ -4604,6 +4606,9 @@ class MainActivity : Activity(), SensorEventListener {
                     "ROUTE  ${if(fogOverlay.showRoute) "ON" else "OFF"}" to {
                         fogOverlay.showRoute=!fogOverlay.showRoute;refresh()
                     },
+                    "MALLS  ${if(layerVisible("MALLS"))"ON" else "OFF"}" to {
+                        setLayerVisible("MALLS",!layerVisible("MALLS"))
+                    },
                     "TAXI STANDS  ${if(taxiStandsEnabled) "ON" else "OFF"}" to {
                         taxiStandsEnabled=!taxiStandsEnabled
                         getSharedPreferences("terra_taxi_settings",Context.MODE_PRIVATE)
@@ -5019,6 +5024,7 @@ class MainActivity : Activity(), SensorEventListener {
         updateSolarDial()
         loadDubaiTemperature()
         scheduleTaxiStandsRefresh()
+        scheduleMallRefresh()
         handler.postDelayed(solarTick,60000L)
         tracking=TrackingService.running
         val interrupted=!tracking &&
@@ -5065,6 +5071,7 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
     override fun onPause() {
+        handler.removeCallbacks(mallRefreshTask)
         handler.removeCallbacks(taxiRefreshTask)
         handler.removeCallbacks(repositionBubbleAfterPan)
         handler.removeCallbacks(solarTick)
@@ -5084,6 +5091,7 @@ class MainActivity : Activity(), SensorEventListener {
         super.onDestroy()
         handler.removeCallbacks(simulationStep)
         handler.removeCallbacks(taxiRefreshTask)
+        handler.removeCallbacks(mallRefreshTask)
         handler.removeCallbacks(solarTick)
         solarPopup?.dismiss()
         overlayFiltersPopup?.dismiss()
