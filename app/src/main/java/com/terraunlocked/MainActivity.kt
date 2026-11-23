@@ -1332,6 +1332,71 @@ class MainActivity : Activity(), SensorEventListener {
                 return true
             }
         })
+        // OpenStreetMap shopping destinations: landmark malls appear at
+        // city scale, mapped community centres become visible when zoomed in.
+        // Only cached POIs are drawn; no network or geometry work per frame.
+        map.overlays.add(object:Overlay() {
+            private val ink=Paint(Paint.ANTI_ALIAS_FLAG)
+            override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
+                if(shadow || !layerVisible("MALLS"))return
+                val visible=visibleMalls(mapView)
+                val density=resources.displayMetrics.density
+                for(mall in visible) {
+                    val at=mapView.projection.toPixels(
+                        GeoPoint(mall.latitude,mall.longitude),Point())
+                    val x=at.x.toFloat();val y=at.y.toFloat()
+                    val signature=MallCatalog.featured(mall.name)
+                    val size=(if(signature)13f else 11f)*density
+                    // Solid icon ensures contrast on both fog and bright tiles.
+                    ink.style=Paint.Style.FILL
+                    ink.color=ExpeditionThemes.current.dark
+                    canvas.drawRoundRect(x-size,y-size,x+size,y+size,
+                        5f*density,5f*density,ink)
+                    ink.style=Paint.Style.STROKE
+                    ink.strokeWidth=if(signature)2.2f*density else 1.5f*density
+                    ink.color=if(signature)ExpeditionThemes.current.gold
+                        else ExpeditionThemes.current.secondary
+                    canvas.drawRoundRect(x-size,y-size,x+size,y+size,
+                        5f*density,5f*density,ink)
+                    // Shopping-bag body and handle rather than a vague dot.
+                    val bagWidth=size*.49f
+                    canvas.drawRect(x-bagWidth,y-1f*density,
+                        x+bagWidth,y+size*.56f,ink)
+                    canvas.drawArc(x-bagWidth*.5f,y-size*.49f,
+                        x+bagWidth*.5f,y+size*.15f,
+                        180f,180f,false,ink)
+                    if(mapView.zoomLevelDouble>=15.2) {
+                        val title=mall.name.take(27)
+                        ink.style=Paint.Style.FILL
+                        ink.textSize=10f*density
+                        ink.typeface=Typeface.create("sans-serif-medium",Typeface.BOLD)
+                        ink.textAlign=Paint.Align.CENTER
+                        val half=ink.measureText(title)/2f+5f*density
+                        ink.color=ExpeditionThemes.current.dark
+                        canvas.drawRoundRect(x-half,y+size+2f*density,
+                            x+half,y+size+17f*density,
+                            3f*density,3f*density,ink)
+                        ink.color=ExpeditionThemes.current.light
+                        canvas.drawText(title,x,y+size+13f*density,ink)
+                    }
+                }
+            }
+            override fun onSingleTapConfirmed(e:MotionEvent,mapView:MapView):Boolean {
+                if(mode!="VIEW" || !layerVisible("MALLS"))return false
+                val hit=visibleMalls(mapView).minByOrNull {mall->
+                    val at=mapView.projection.toPixels(
+                        GeoPoint(mall.latitude,mall.longitude),Point())
+                    kotlin.math.hypot((at.x-e.x).toDouble(),(at.y-e.y).toDouble())
+                } ?:return false
+                val at=mapView.projection.toPixels(
+                    GeoPoint(hit.latitude,hit.longitude),Point())
+                if(kotlin.math.hypot((at.x-e.x).toDouble(),(at.y-e.y).toDouble())>dp(26))
+                    return false
+                if(measure)recordRulerPoint(GeoPoint(hit.latitude,hit.longitude))
+                else showMallPlace(hit)
+                return true
+            }
+        })
         map.overlays.add(object:Overlay() {
             private val ink=Paint(Paint.ANTI_ALIAS_FLAG)
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
