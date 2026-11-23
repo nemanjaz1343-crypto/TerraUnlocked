@@ -95,6 +95,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun layerVisible(category:String):Boolean=when(category) {
         "TAXI" -> taxiStandsEnabled
+        "MALLS" -> layerFilters["MALLS"]!=false
         "JOURNAL" -> ::fogOverlay.isInitialized && fogOverlay.showCheckpoints
         else -> layerFilters[category]!=false
     }
@@ -114,6 +115,13 @@ class MainActivity : Activity(), SensorEventListener {
                 if(show)scheduleTaxiStandsRefresh()
             }
             "JOURNAL" -> fogOverlay.showCheckpoints=show
+            "MALLS" -> {
+                layerFilters["MALLS"]=show
+                getSharedPreferences("terra_layer_filters",Context.MODE_PRIVATE)
+                    .edit().putBoolean("MALLS",show).apply()
+                if(show)scheduleMallRefresh()
+                else handler.removeCallbacks(mallRefreshTask)
+            }
             else -> {
                 layerFilters[category]=show
                 getSharedPreferences("terra_layer_filters",Context.MODE_PRIVATE)
@@ -152,6 +160,8 @@ class MainActivity : Activity(), SensorEventListener {
                 "ART" to "✧  ART",
                 "SAVED" to "◆  SAVED",
                 "OTHER" to "◇  OTHER"),
+            "PLACES" to listOf(
+                "MALLS" to "▤  MALLS (${malls.size})"),
             "TRANSPORT" to listOf(
                 "METRO" to "Ⓜ  METRO",
                 "TAXI" to "▣  TAXI (${taxiStands.size})"),
@@ -211,6 +221,17 @@ class MainActivity : Activity(), SensorEventListener {
         quickAction("SHOW ALL",true)
         quickAction("HIDE ALL",false)
         panel.addView(controls)
+        panel.addView(action("⌕  SCAN MALLS IN THIS AREA").apply {
+            applyExpeditionStyle(this)
+            textSize=11f
+            setOnClickListener {
+                overlayFiltersPopup?.dismiss()
+                setLayerVisible("MALLS",true)
+                maybeRefreshMalls(force=true)
+            }
+        },LinearLayout.LayoutParams(-1,dp(42)).apply {
+            setMargins(dp(2),dp(4),dp(2),0)
+        })
         panel.addView(action("⌕  SCAN TAXI STANDS IN THIS AREA").apply{
             applyExpeditionStyle(this)
             textSize=11f
@@ -222,7 +243,7 @@ class MainActivity : Activity(), SensorEventListener {
         },LinearLayout.LayoutParams(-1,dp(42)).apply{
             setMargins(dp(2),dp(4),dp(2),0)
         })
-        panel.addView(label("Taxi places come from OSM: not all ranks are mapped.",9,sage).apply{
+        panel.addView(label("Malls and taxi ranks use OpenStreetMap; smaller centres may be missing.",9,sage).apply{
             gravity=Gravity.CENTER
         })
         panel.addView(label("Visibility only / your data stays saved",9,sage).apply{
@@ -524,6 +545,11 @@ class MainActivity : Activity(), SensorEventListener {
     private val taxiStandStore by lazy { TaxiStandStore(this) }
     private val taxiStands=mutableListOf<TaxiStand>()
     private var taxiStandsEnabled=true
+    private val mallStore by lazy {MallStore(this)}
+    private val malls=mutableListOf<MallPlace>()
+    private var mallLoading=false
+    private var lastMallAttempt=0L
+    private val mallRefreshTask=Runnable{maybeRefreshMalls()}
     private var taxiStandLoading=false
     private var lastTaxiStandAttempt=0L
     private val taxiRefreshTask=Runnable { maybeRefreshTaxiStands() }
@@ -751,9 +777,10 @@ class MainActivity : Activity(), SensorEventListener {
         taxiStandsEnabled=getSharedPreferences("terra_taxi_settings",Context.MODE_PRIVATE)
             .getBoolean("enabled",true)
         taxiStands.addAll(taxiStandStore.load())
+        malls.addAll(mallStore.load())
         objectiveStore.enabled=true
         getSharedPreferences("terra_layer_filters",Context.MODE_PRIVATE).let {prefs->
-            listOf("NATURE","HERITAGE","ARCH","ART","SAVED","OTHER","METRO","ANCHORS","ESTIMATES")
+            listOf("NATURE","HERITAGE","ARCH","ART","SAVED","OTHER","METRO","MALLS","ANCHORS","ESTIMATES")
                 .forEach{layerFilters[it]=prefs.getBoolean(it,true)}
         }
         notes.addAll(fieldNotes.load())
