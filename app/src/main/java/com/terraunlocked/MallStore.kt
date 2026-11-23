@@ -140,11 +140,11 @@ internal class MallStore(context:Context) {
         val east=(lon+halfWidth).coerceAtMost(180.0)
         val bbox="$south,$west,$north,$east"
         val query="[out:json][timeout:25];("+
-            "nwr[\\"shop\\"=\\"mall\\"]($bbox);"+
-            "nwr[\\"shop\\"=\\"shopping_centre\\"]($bbox);"+
-            "nwr[\\"shop\\"=\\"shopping_center\\"]($bbox);"+
-            "nwr[\\"building\\"=\\"mall\\"][\\"name\\"]($bbox);"+
-            "nwr[\\"landuse\\"=\\"retail\\"][\\"name\\"~\\"Mall|Centre|Center|Souk|Galleria\\",i]($bbox);"+
+            "nwr[\"shop\"=\"mall\"]($bbox);"+
+            "nwr[\"shop\"=\"shopping_centre\"]($bbox);"+
+            "nwr[\"shop\"=\"shopping_center\"]($bbox);"+
+            "nwr[\"building\"=\"mall\"][\"name\"]($bbox);"+
+            "nwr[\"landuse\"=\"retail\"][\"name\"~\"Mall|Centre|Center|Souk|Galleria\",i]($bbox);"+
             ");out center 400;"
         val payload="data="+java.net.URLEncoder.encode(query,"UTF-8")
         val hosts=listOf(
