@@ -458,6 +458,12 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
     private var followUser = true
+    private var headingUp=false
+    private var headingButton:Button?=null
+    private var trueNorthDeclination=0f
+    private var lastDeclinationLookup=0L
+    private var lastHeadingRotationAt=0L
+    private val correctedRotation=FloatArray(9)
     private lateinit var followButton:Button
     private var paintPopup:PopupWindow?=null
     private lateinit var radarDrawer:LinearLayout
@@ -801,6 +807,8 @@ class MainActivity : Activity(), SensorEventListener {
         window.navigationBarColor=ExpeditionThemes.current.dark
         sensors=getSystemService(Context.SENSOR_SERVICE) as SensorManager
         compassEnabled=sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)!=null
+        headingUp=getSharedPreferences("terra_map_orientation_v1",Context.MODE_PRIVATE)
+            .getBoolean("heading_up",false) && compassEnabled
         compassView=label("N ---°",10,sand)
         weatherView=label("--°",10,sage)
         val cachedTemperature=weatherPrefs.getInt("last_temperature",Int.MIN_VALUE)
@@ -808,7 +816,7 @@ class MainActivity : Activity(), SensorEventListener {
             onMissions={showObjectives()},
             onMap={chooseMapSource()},
             onSolar={showSolarDetails()},
-            onNorth={map.mapOrientation=0f}
+            onNorth={toggleHeadingLock()}
         ).also {
             if(cachedTemperature!=Int.MIN_VALUE)it.temperature=cachedTemperature
             root.addView(it,LinearLayout.LayoutParams(-1,dp(45)))
@@ -1812,6 +1820,23 @@ class MainActivity : Activity(), SensorEventListener {
         journalDrawer.translationX=journalWidth.toFloat()
         mapArea.addView(journalDrawer,FrameLayout.LayoutParams(
             journalWidth+journalTabWidth,dp(272),Gravity.END or Gravity.CENTER_VERTICAL))
+        // Always accessible on-map compass lock: N = north-up, arrow =
+        // follow the phone heading and keep the user centered.
+        val headingToggle=action("N").apply {
+            gravity=Gravity.CENTER
+            textSize=14f
+            setSingleLine(false)
+            contentDescription="Toggle map orientation: north up or follow phone heading"
+            setOnClickListener{toggleHeadingLock()}
+        }
+        headingButton=headingToggle
+        mapArea.addView(headingToggle,
+            FrameLayout.LayoutParams(dp(49),dp(49),
+                Gravity.TOP or Gravity.END).apply {
+                topMargin=dp(58)
+                rightMargin=dp(8)
+            })
+        updateHeadingLockUi()
         root.addView(mapArea,LinearLayout.LayoutParams(-1,0,1f))
         // Hidden adapter buttons preserve existing activity actions; visual chrome is Canvas based.
         trackButton=action("TRACK")
@@ -4981,20 +5006,103 @@ class MainActivity : Activity(), SensorEventListener {
             status.text = "MAP IMPORT FAILED / ${e.javaClass.simpleName}"
         }
     }
-    override fun onSensorChanged(event: SensorEvent) {
-        if(event.sensor.type != Sensor.TYPE_ROTATION_VECTOR) return
+    private fun updateHeadingLockUi() {
+        headingButton?.apply {
+            text=if(headingUp)"⇧\nUP" else "N"
+            contentDescription=if(headingUp)
+                "Map locked to phone direction. Tap to return north up"
+                else "Map north up. Tap to lock map to phone direction"
+            setTextColor(ExpeditionThemes.current.light)
+            background=GradientDrawable().apply{
+                cornerRadius=dp(10).toFloat()
+                setColor(ExpeditionThemes.current.surface)
+                setStroke(dp(if(headingUp)3 else 1),
+                    if(headingUp)ExpeditionThemes.current.gold
+                    else ExpeditionThemes.current.secondary)
+            }
+        }
+        expeditionHeader?.headingUp=headingUp
+    }
+
+    private fun toggleHeadingLock() {
+        if(!compassEnabled) {
+            status.text="HEADING-UP / COMPASS SENSOR NOT AVAILABLE"
+            return
+        }
+        headingUp=!headingUp
+        getSharedPreferences("terra_map_orientation_v1",Context.MODE_PRIVATE)
+            .edit().putBoolean("heading_up",headingUp).apply()
+        if(headingUp) {
+            followUser=true
+            fogOverlay.currentPosition?.let{map.controller.setCenter(it)}
+            lastHeadingRotationAt=0L
+            status.text=if(fogOverlay.currentPosition==null)
+                "HEADING-UP / WAITING FOR GPS FIX"
+                else "HEADING-UP / MAP FOLLOWS YOUR DIRECTION"
+        } else {
+            map.mapOrientation=0f
+            status.text="NORTH-UP / FIXED COMPASS"
+        }
+        updateHeadingLockUi()
+        map.postInvalidateOnAnimation()
+    }
+
+    private fun trueHeading(magneticDegrees:Float,now:Long):Float {
+        val position=fogOverlay.currentPosition
+        if(position!=null && (now-lastDeclinationLookup>15L*60_000L ||
+                lastDeclinationLookup==0L)) {
+            trueNorthDeclination=android.hardware.GeomagneticField(
+                position.latitude.toFloat(),position.longitude.toFloat(),0f,
+                System.currentTimeMillis()).declination
+            lastDeclinationLookup=now
+        }
+        return MapHeadingPolicy.normalize(magneticDegrees+trueNorthDeclination)
+    }
+
+    override fun onSensorChanged(event:SensorEvent) {
+        if(event.sensor.type!=Sensor.TYPE_ROTATION_VECTOR)return
         SensorManager.getRotationMatrixFromVector(rotation,event.values)
-        SensorManager.getOrientation(rotation,orientation)
-        val degrees = ((Math.toDegrees(orientation[0].toDouble())+360.0)%360.0).toInt()
+        // Compass azimuth is in device coordinates. Remap it to screen-top
+        // when Android rotates the UI, so left/right remain intuitive.
+        val displayRotation=window.decorView.display?.rotation
+            ?:android.view.Surface.ROTATION_0
+        val adjusted=when(displayRotation) {
+            android.view.Surface.ROTATION_90 ->
+                SensorManager.remapCoordinateSystem(rotation,
+                    SensorManager.AXIS_Y,SensorManager.AXIS_MINUS_X,correctedRotation)
+            android.view.Surface.ROTATION_180 ->
+                SensorManager.remapCoordinateSystem(rotation,
+                    SensorManager.AXIS_MINUS_X,SensorManager.AXIS_MINUS_Y,correctedRotation)
+            android.view.Surface.ROTATION_270 ->
+                SensorManager.remapCoordinateSystem(rotation,
+                    SensorManager.AXIS_MINUS_Y,SensorManager.AXIS_X,correctedRotation)
+            else->false
+        }
+        SensorManager.getOrientation(if(adjusted)correctedRotation else rotation,orientation)
+        val magnetic=MapHeadingPolicy.normalize(
+            Math.toDegrees(orientation[0].toDouble()).toFloat())
         val now=android.os.SystemClock.uptimeMillis()
+        val current=trueHeading(magnetic,now)
+        val degrees=current.toInt()
         val change=if(lastCompassHeading<0)360
             else kotlin.math.abs((degrees-lastCompassHeading+540)%360-180)
-        if(change<3 && now-lastCompassPaintElapsed<600L)return
+        if(change<2 && now-lastCompassPaintElapsed<240L)return
         lastCompassHeading=degrees
         lastCompassPaintElapsed=now
-        compassView.text = "▲ N %03d°".format(degrees)
+        compassView.text="▲ N %03d°".format(degrees)
         expeditionHeader?.bearing=degrees
-        fogOverlay.northAzimuth = degrees.toFloat()
+        fogOverlay.northAzimuth=current
+        if(headingUp) {
+            val target=MapHeadingPolicy.headingUpOrientation(current)
+            if(MapHeadingPolicy.shouldUpdate(map.mapOrientation,target,
+                    now-lastHeadingRotationAt)) {
+                lastHeadingRotationAt=now
+                // The short-angle smoother avoids compass jitter and 360°
+                // spins, while osmdroid rotates its own map projection.
+                map.setMapOrientation(
+                    MapHeadingPolicy.easeTowards(map.mapOrientation,target),false)
+            }
+        }
         if(!map.isInLayout)map.postInvalidateOnAnimation()
     }
     override fun onAccuracyChanged(sensor:Sensor?,accuracy:Int) {}
