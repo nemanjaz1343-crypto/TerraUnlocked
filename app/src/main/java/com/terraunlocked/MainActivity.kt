@@ -1151,16 +1151,22 @@ class MainActivity : Activity(), SensorEventListener {
                             if(savedPoints.isNotEmpty() && gap(savedPoints.last(),last)>1f)
                                 savedPoints.add(last)
                             val stamp=System.currentTimeMillis()
+                            val committed=ArrayList<DiscoveryPoint>(savedPoints.size)
                             savedPoints.forEachIndexed{index,p->
-                                records.add(DiscoveryPoint(p.latitude,p.longitude,true,
-                                    stamp+index))
+                                committed.add(DiscoveryPoint(
+                                    p.latitude,p.longitude,true,stamp+index))
                                 if(index>0) {
                                     val previous=savedPoints[index-1]
                                     segments.add(ManualSegment(previous.latitude,
                                         previous.longitude,p.latitude,p.longitude))
                                 }
                             }
-                            if(savedPoints.isNotEmpty())store.replaceAll(records)
+                            // One atomic append preserves GPS fixes written
+                            // by the tracking service while the pen is moving.
+                            if(committed.isNotEmpty()) {
+                                store.addAll(committed)
+                                records.addAll(committed)
+                            }
                             if(savedPoints.size>1)pathStore.save(segments)
                         }
                         brushPreview.clear()
