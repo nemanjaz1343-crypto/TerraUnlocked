@@ -83,6 +83,16 @@ class DiscoveryFogOverlay(
     private var cachedShiftY=0f
     private var cachedZoom=Double.NaN
     private var cachedScale=1f
+    private var cachedPad=160
+    /** Temporary stroke is rendered as a cheap GPU mask and committed only on finger-up. */
+    var liveBrushStroke:List<GeoPoint> = emptyList()
+    private val liveBrushPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{
+        color=Color.WHITE
+        style=Paint.Style.STROKE
+        strokeCap=Paint.Cap.ROUND
+        strokeJoin=Paint.Join.ROUND
+        xfermode=android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT)
+    }
     private var lastZoomChange=0L
     private var observedZoom=Double.NaN
     private var lastPanElapsed=0L
@@ -98,13 +108,18 @@ class DiscoveryFogOverlay(
     private fun organicMaskFor(map:MapView,width:Int,height:Int,
         points:List<DiscoveryPoint>,manualSegments:List<ManualSegment>):android.graphics.Bitmap {
         // Overscan prevents blur kernels and liquid bridges being clipped by screen edges.
-        val pad=160
+        // Original 160px bitmap overhang became exposed mid-drag; it
+        // caused abrupt fog edges before the next expensive recomposition.
+        // Overscan roughly half the screen and reuse during gestures.
+        val pad=(maxOf(width,height)/2).coerceAtLeast(320)
         val mw=((width+2*pad)/6).coerceAtLeast(1)
         val mh=((height+2*pad)/6).coerceAtLeast(1)
         val center=map.mapCenter
         val last=points.lastOrNull()
         val end=manualSegments.lastOrNull()
-        val key="$mw:$mh:${map.mapOrientation}:"+
+        // MapView applies its own orientation to the overlay canvas. A
+        // heading change should NOT recompute thousands of discs or blur.
+        val key="$mw:$mh:$pad:"+
             "${points.size}:${last?.latitude}:${last?.longitude}:${last?.timestamp}:"+
             "${manualSegments.size}:${end?.aLat}:${end?.bLon}:$radiusMeters"
         val now=android.os.SystemClock.uptimeMillis()
@@ -128,9 +143,13 @@ class DiscoveryFogOverlay(
                 // Original 80px threshold forced a blur/mask rebuild every
                 // few pan frames on the UI thread. Translate the last mask
                 // during the gesture, then rebuild after the map settles.
-                if(stillZooming || panning ||
-                    (kotlin.math.abs(scale-1f)<0.001f &&
-                    kotlin.math.abs(dx)<pad*0.7f && kotlin.math.abs(dy)<pad*0.7f)) {
+                val withinOverscan=kotlin.math.abs(dx)<pad*0.72f &&
+                    kotlin.math.abs(dy)<pad*0.72f && scale in .65f..1.55f
+                if(withinOverscan &&
+                    (stillZooming || panning ||
+                        (kotlin.math.abs(scale-1f)<0.001f &&
+                            kotlin.math.abs(dx)<pad*.50f &&
+                            kotlin.math.abs(dy)<pad*.50f))) {
                     cachedScale=scale
                     cachedShiftX=dx
                     cachedShiftY=dy
@@ -144,6 +163,7 @@ class DiscoveryFogOverlay(
             }
         }
         cachedShiftX=0f;cachedShiftY=0f;cachedScale=1f
+        cachedPad=pad
         val bitmap=android.graphics.Bitmap.createBitmap(mw,mh,android.graphics.Bitmap.Config.ARGB_8888)
         val maskCanvas=Canvas(bitmap)
         val ink=Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -263,13 +283,42 @@ class DiscoveryFogOverlay(
         val points=if(simulated.isEmpty())live else live+simulated
         if (fogVisible) {
             val blended=organicMaskFor(mapView,canvas.width,canvas.height,points,segments())
-            val layer=canvas.saveLayer(0f,0f,canvas.width.toFloat(),canvas.height.toFloat(),null)
+            val angle=Math.toRadians(mapView.mapOrientation.toDouble())
+            val w=canvas.width.toFloat();val h=canvas.height.toFloat()
+            val ca=kotlin.math.abs(kotlin.math.cos(angle)).toFloat()
+            val sa=kotlin.math.abs(kotlin.math.sin(angle)).toFloat()
+            // Rotated MapView canvases have visible corners beyond the old
+            // 0..width/height layer. Extend only by the required diagonal.
+            val dx=((ca*w+sa*h-w)*.5f).coerceAtLeast(0f)+8f
+            val dy=((ca*h+sa*w-h)*.5f).coerceAtLeast(0f)+8f
+            val layer=canvas.saveLayer(-dx,-dy,w+dx,h+dy,null)
             fogPaint.alpha=opacity.coerceIn(0,255)
-            canvas.drawRect(0f,0f,canvas.width.toFloat(),canvas.height.toFloat(),fogPaint)
+            canvas.drawRect(-dx,-dy,w+dx,h+dy,fogPaint)
             canvas.drawBitmap(blended,null,
-                android.graphics.RectF(cachedShiftX-160f*cachedScale,cachedShiftY-160f*cachedScale,
-                    cachedShiftX+(canvas.width+160f)*cachedScale,
-                    cachedShiftY+(canvas.height+160f)*cachedScale),maskPaint)
+                android.graphics.RectF(cachedShiftX-cachedPad*cachedScale,
+                    cachedShiftY-cachedPad*cachedScale,
+                    cachedShiftX+(canvas.width+cachedPad)*cachedScale,
+                    cachedShiftY+(canvas.height+cachedPad)*cachedScale),maskPaint)
+            // Draw live pen strokes directly into the fog-composition layer;
+            // no JSON serialization, bitmap blur or CPU pixel loops per MOVE.
+            if(liveBrushStroke.isNotEmpty()) {
+                val brush=liveBrushStroke
+                val p=brush.first()
+                val xy=toPoint(mapView,p.latitude,p.longitude)
+                liveBrushPaint.strokeWidth=radiusPx(mapView,p.latitude,p.longitude)*2f
+                if(brush.size==1) {
+                    canvas.drawCircle(xy.x.toFloat(),xy.y.toFloat(),
+                        liveBrushPaint.strokeWidth*.5f,liveBrushPaint)
+                } else {
+                    val path=Path().apply{moveTo(xy.x.toFloat(),xy.y.toFloat())}
+                    for(i in 1 until brush.size) {
+                        val at=brush[i]
+                        val q=toPoint(mapView,at.latitude,at.longitude)
+                        path.lineTo(q.x.toFloat(),q.y.toFloat())
+                    }
+                    canvas.drawPath(path,liveBrushPaint)
+                }
+            }
             canvas.restoreToCount(layer)
         }
         // Gentle expanding liquid edge, rendered above the revealed map.
