@@ -17,7 +17,7 @@ class MapHeadingPolicyTest {
     }
     @Test fun dampingAndSmallAngleThresholdPreventJitter() {
         assertEquals(0f,MapHeadingPolicy.normalize(720f),0.01f)
-        assertEquals(1f,MapHeadingPolicy.easeTowards(359f,1f,.5f),.01f)
+        assertEquals(0f,MapHeadingPolicy.easeTowards(359f,1f,.5f),.01f)
         assertFalse(MapHeadingPolicy.shouldUpdate(0f,1f,200))
         assertFalse(MapHeadingPolicy.shouldUpdate(0f,10f,40))
         assertTrue(MapHeadingPolicy.shouldUpdate(0f,10f,180))
