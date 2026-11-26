@@ -12,6 +12,7 @@ data class DiscoveryPoint(
 )
 
 class DiscoveryStore(context:Context) {
+    companion object { private val sharedWriteLock=Any() }
     private val preferences=context.getSharedPreferences("terra_discoveries_v1",Context.MODE_PRIVATE)
     // A single cached JSONArray avoids parsing the ENTIRE exploration history
     // on every GPS fix. Detect cross-instance edits before appending.
@@ -45,16 +46,24 @@ class DiscoveryStore(context:Context) {
                 it.put("speed",point.speed.toDouble())
             if(point.confidence>0)it.put("confidence",point.confidence)
         }
-    fun replaceAll(points:List<DiscoveryPoint>) {
+    fun replaceAll(points:List<DiscoveryPoint>) = synchronized(sharedWriteLock) {
         val data=JSONArray()
         points.forEach {data.put(json(it))}
         val raw=data.toString()
         preferences.edit().putString("points",raw).apply()
         cachedRaw=raw;cachedArray=data
     }
-    fun add(point:DiscoveryPoint) {
+    fun add(point:DiscoveryPoint) = addAll(listOf(point))
+
+    /**
+     * Append a complete pen stroke in one JSON pass. Synchronize across
+     * DiscoveryStore instances (UI + GPS foreground service) so the brush
+     * cannot overwrite a fix saved by the tracker during the same drag.
+     */
+    fun addAll(points:List<DiscoveryPoint>) = synchronized(sharedWriteLock) {
+        if(points.isEmpty())return@synchronized
         val data=array()
-        data.put(json(point))
+        points.forEach{data.put(json(it))}
         val raw=data.toString()
         preferences.edit().putString("points",raw).apply()
         cachedRaw=raw;cachedArray=data
