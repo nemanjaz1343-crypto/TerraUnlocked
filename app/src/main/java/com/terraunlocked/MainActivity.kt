@@ -1020,10 +1020,29 @@ class MainActivity : Activity(), SensorEventListener {
             }
         })
         map.overlays.add(object : Overlay() {
+            private var touchStartX=0f
+            private var touchStartY=0f
             override fun onTouchEvent(event:MotionEvent,mapView:MapView):Boolean {
-                if(mode=="VIEW" && event.actionMasked==MotionEvent.ACTION_MOVE && event.pointerCount==1 && followUser) {
+                if(mode!="VIEW")return false
+                if(event.actionMasked==MotionEvent.ACTION_DOWN) {
+                    touchStartX=event.x
+                    touchStartY=event.y
+                }
+                // A tiny hand wobble while tapping the map must not disable
+                // position lock. Only a real drag releases the follow mode.
+                if(event.actionMasked==MotionEvent.ACTION_MOVE &&
+                    event.pointerCount==1 && followUser &&
+                    kotlin.math.hypot((event.x-touchStartX).toDouble(),
+                        (event.y-touchStartY).toDouble())>dp(22)) {
                     followUser=false
-                    if(::followButton.isInitialized) followButton.text="LOCATE ○"
+                    if(headingUp) {
+                        headingUp=false
+                        getSharedPreferences("terra_map_orientation_v1",
+                            Context.MODE_PRIVATE).edit().putBoolean("heading_up",false).apply()
+                        map.setMapOrientation(0f,false)
+                        updateHeadingLockUi()
+                    }
+                    if(::followButton.isInitialized)followButton.text="LOCATE ○"
                 }
                 return false
             }
@@ -1861,6 +1880,7 @@ class MainActivity : Activity(), SensorEventListener {
         controls.trackingActive=tracking
         controls.gpsSearching=tracking && fogOverlay.currentPosition==null
         fun chooseMark(next:String) {
+            fogOverlay.liveBrushStroke=emptyList()
             mode=next
             pending.clear();lasso.clear();lassoFinished=false
             confirmButton.visibility=View.GONE
