@@ -1042,6 +1042,7 @@ class MainActivity : Activity(), SensorEventListener {
             private var multitouchGesture = false
             private var paintStart: GeoPoint? = null
             private var paintStarted = false
+            private val brushPreview=ArrayList<GeoPoint>(128)
             override fun onTouchEvent(event: MotionEvent, mapView: MapView): Boolean {
                 if(mode=="PAINT" || mode=="ERASE") {
                     if(event.actionMasked==MotionEvent.ACTION_POINTER_DOWN || event.pointerCount>1) {
@@ -1049,6 +1050,9 @@ class MainActivity : Activity(), SensorEventListener {
                         strokeLast=null
                         paintStart=null
                         paintStarted=false
+                        brushPreview.clear()
+                        fogOverlay.liveBrushStroke=emptyList()
+                        mapView.postInvalidateOnAnimation()
                         return false // Let osmdroid handle two-finger pan and pinch zoom.
                     }
                     if(multitouchGesture) {
@@ -1094,12 +1098,47 @@ class MainActivity : Activity(), SensorEventListener {
                     }
                     return true
                 }
-                if(event.actionMasked==MotionEvent.ACTION_UP || event.actionMasked==MotionEvent.ACTION_CANCEL) {
-                    if(mode=="PAINT" && event.actionMasked==MotionEvent.ACTION_UP && !paintStarted && paintStart!=null) {
-                        pushMark()
-                        val at=paintStart!!
-                        val p=DiscoveryPoint(at.latitude,at.longitude,true,System.currentTimeMillis())
-                        records.add(p);store.add(p);refresh()
+                if(event.actionMasked==MotionEvent.ACTION_UP ||
+                    event.actionMasked==MotionEvent.ACTION_CANCEL) {
+                    if(mode=="PAINT" && paintStart!=null) {
+                        if(event.actionMasked==MotionEvent.ACTION_UP) {
+                            val pt=mapView.projection.fromPixels(
+                                event.x.toInt(),event.y.toInt())
+                            val endPoint=GeoPoint(pt.latitude,pt.longitude)
+                            if(brushPreview.isEmpty())brushPreview.add(paintStart!!)
+                            if(gap(brushPreview.last(),endPoint)>1f)
+                                brushPreview.add(endPoint)
+                            // The original code serialized the entire history
+                            // and reblurred all fog points for EVERY drag event.
+                            // Commit the undo snapshot + both stores ONCE per
+                            // complete stroke, not on each MotionEvent.
+                            pushMark()
+                            val spacing=(radius*.28f).coerceAtLeast(2.5f)
+                            val savedPoints=ArrayList<GeoPoint>()
+                            for(point in brushPreview) {
+                                if(savedPoints.isEmpty() ||
+                                    gap(savedPoints.last(),point)>=spacing)
+                                    savedPoints.add(point)
+                            }
+                            val last=brushPreview.last()
+                            if(savedPoints.isNotEmpty() && gap(savedPoints.last(),last)>1f)
+                                savedPoints.add(last)
+                            val stamp=System.currentTimeMillis()
+                            savedPoints.forEachIndexed{index,p->
+                                records.add(DiscoveryPoint(p.latitude,p.longitude,true,
+                                    stamp+index))
+                                if(index>0) {
+                                    val previous=savedPoints[index-1]
+                                    segments.add(ManualSegment(previous.latitude,
+                                        previous.longitude,p.latitude,p.longitude))
+                                }
+                            }
+                            if(savedPoints.isNotEmpty())store.replaceAll(records)
+                            if(savedPoints.size>1)pathStore.save(segments)
+                        }
+                        brushPreview.clear()
+                        fogOverlay.liveBrushStroke=emptyList()
+                        refresh()
                     }
                     paintStart=null;paintStarted=false;strokeLast=null
                     return true
@@ -1118,30 +1157,25 @@ class MainActivity : Activity(), SensorEventListener {
                 }
                 if (mode == "PAINT") {
                     if(event.actionMasked==MotionEvent.ACTION_DOWN) {
-                        paintStart=geo;paintStarted=false;strokeLast=null
+                        paintStart=geo
+                        paintStarted=false
+                        strokeLast=null
+                        brushPreview.clear()
+                        brushPreview.add(geo)
+                        fogOverlay.liveBrushStroke=brushPreview
+                        mapView.postInvalidateOnAnimation()
                         return true
                     }
-                    if(!paintStarted && paintStart!=null) {
-                        val start=paintStart!!
-                        if(gap(start,geo)<3f)return true
-                        pushMark()
-                        val p=DiscoveryPoint(start.latitude,start.longitude,true,System.currentTimeMillis())
-                        records.add(p);store.add(p)
-                        strokeLast=start;paintStarted=true
-                    }
-                    val current = GeoPoint(geo.latitude, geo.longitude)
-                    val previous = strokeLast
-                    if (previous == null || gap(previous, current) > radius * 0.30f) {
-                        if(strokeLast==null)pushMark()
-                        val p = DiscoveryPoint(current.latitude, current.longitude, true, System.currentTimeMillis())
-                        records.add(p)
-                        store.add(p)
-                        if (previous != null) {
-                            segments.add(ManualSegment(previous.latitude, previous.longitude, current.latitude, current.longitude))
-                            pathStore.save(segments)
+                    // Preview in the map's existing fog layer without touching
+                    // permanent discoveries or JSON. The whole stroke is
+                    // persisted only on ACTION_UP.
+                    if(paintStart!=null) {
+                        val last=brushPreview.lastOrNull()
+                        if(last==null || gap(last,geo)>=1.5f) {
+                            if(brushPreview.size<1800)brushPreview.add(geo)
+                            paintStarted=true
+                            mapView.postInvalidateOnAnimation()
                         }
-                        strokeLast = current
-                        refresh()
                     }
                     return true
                 }
