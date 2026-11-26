@@ -189,6 +189,7 @@ internal class ExpeditionHeaderView(context:Context,
     val onMissions:()->Unit,val onMap:()->Unit,val onSolar:()->Unit,
     val onNorth:()->Unit):View(context) {
     var bearing:Int?=null;set(value){field=value;invalidate()}
+    var headingUp:Boolean=false;set(value){field=value;invalidate()}
     var temperature:Int?=null;set(value){field=value;invalidate()}
     var solarSnapshot:SolarCycle.Snapshot?=null;set(value){field=value;invalidate()}
     private val d=resources.displayMetrics.density
@@ -211,8 +212,11 @@ internal class ExpeditionHeaderView(context:Context,
         ExpeditionArt.label(c,"T E R R A",213f,hh/2f+6f,19f,ExpeditionArt.light,true,.4f)
         ExpeditionArt.rule(c,182f,hh/2f+11f,247f,hh/2f+11f,ExpeditionArt.gold,.9f)
         ExpeditionArt.rule(c,265f,hh/2f,273f,hh/2f)
-        ExpeditionArt.icon(c,"compass",288f,hh/2f-7f,20f)
-        ExpeditionArt.label(c,"N "+(bearing?.let{"%03d°".format(it)} ?: "---°"),288f,hh/2f+19f,10f)
+        ExpeditionArt.icon(c,"compass",288f,hh/2f-7f,20f,
+            if(headingUp)ExpeditionThemes.current.gold else ExpeditionArt.light)
+        ExpeditionArt.label(c,if(headingUp)"⇧ UP"
+            else "N "+(bearing?.let{"%03d°".format(it)} ?: "---°"),
+            288f,hh/2f+19f,10f)
         ExpeditionArt.rule(c,313f,7f,313f,hh-7f,ExpeditionArt.muted)
         // Compact offline Solar Dial. Gold daylight arc, moss night arc;
         // the moving dot marks the current point in the day/night cycle.

@@ -458,6 +458,12 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
     private var followUser = true
+    private var headingUp=false
+    private var headingButton:Button?=null
+    private var trueNorthDeclination=0f
+    private var lastDeclinationLookup=0L
+    private var lastHeadingRotationAt=0L
+    private val correctedRotation=FloatArray(9)
     private lateinit var followButton:Button
     private var paintPopup:PopupWindow?=null
     private lateinit var radarDrawer:LinearLayout
@@ -801,6 +807,8 @@ class MainActivity : Activity(), SensorEventListener {
         window.navigationBarColor=ExpeditionThemes.current.dark
         sensors=getSystemService(Context.SENSOR_SERVICE) as SensorManager
         compassEnabled=sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)!=null
+        headingUp=getSharedPreferences("terra_map_orientation_v1",Context.MODE_PRIVATE)
+            .getBoolean("heading_up",false) && compassEnabled
         compassView=label("N ---°",10,sand)
         weatherView=label("--°",10,sage)
         val cachedTemperature=weatherPrefs.getInt("last_temperature",Int.MIN_VALUE)
@@ -808,7 +816,7 @@ class MainActivity : Activity(), SensorEventListener {
             onMissions={showObjectives()},
             onMap={chooseMapSource()},
             onSolar={showSolarDetails()},
-            onNorth={map.mapOrientation=0f}
+            onNorth={toggleHeadingLock()}
         ).also {
             if(cachedTemperature!=Int.MIN_VALUE)it.temperature=cachedTemperature
             root.addView(it,LinearLayout.LayoutParams(-1,dp(45)))
@@ -1012,10 +1020,29 @@ class MainActivity : Activity(), SensorEventListener {
             }
         })
         map.overlays.add(object : Overlay() {
+            private var touchStartX=0f
+            private var touchStartY=0f
             override fun onTouchEvent(event:MotionEvent,mapView:MapView):Boolean {
-                if(mode=="VIEW" && event.actionMasked==MotionEvent.ACTION_MOVE && event.pointerCount==1 && followUser) {
+                if(mode!="VIEW")return false
+                if(event.actionMasked==MotionEvent.ACTION_DOWN) {
+                    touchStartX=event.x
+                    touchStartY=event.y
+                }
+                // A tiny hand wobble while tapping the map must not disable
+                // position lock. Only a real drag releases the follow mode.
+                if(event.actionMasked==MotionEvent.ACTION_MOVE &&
+                    event.pointerCount==1 && followUser &&
+                    kotlin.math.hypot((event.x-touchStartX).toDouble(),
+                        (event.y-touchStartY).toDouble())>dp(22)) {
                     followUser=false
-                    if(::followButton.isInitialized) followButton.text="LOCATE ○"
+                    if(headingUp) {
+                        headingUp=false
+                        getSharedPreferences("terra_map_orientation_v1",
+                            Context.MODE_PRIVATE).edit().putBoolean("heading_up",false).apply()
+                        map.setMapOrientation(0f,false)
+                        updateHeadingLockUi()
+                    }
+                    if(::followButton.isInitialized)followButton.text="LOCATE ○"
                 }
                 return false
             }
@@ -1042,6 +1069,7 @@ class MainActivity : Activity(), SensorEventListener {
             private var multitouchGesture = false
             private var paintStart: GeoPoint? = null
             private var paintStarted = false
+            private val brushPreview=ArrayList<GeoPoint>(128)
             override fun onTouchEvent(event: MotionEvent, mapView: MapView): Boolean {
                 if(mode=="PAINT" || mode=="ERASE") {
                     if(event.actionMasked==MotionEvent.ACTION_POINTER_DOWN || event.pointerCount>1) {
@@ -1049,6 +1077,9 @@ class MainActivity : Activity(), SensorEventListener {
                         strokeLast=null
                         paintStart=null
                         paintStarted=false
+                        brushPreview.clear()
+                        fogOverlay.liveBrushStroke=emptyList()
+                        mapView.postInvalidateOnAnimation()
                         return false // Let osmdroid handle two-finger pan and pinch zoom.
                     }
                     if(multitouchGesture) {
@@ -1094,12 +1125,53 @@ class MainActivity : Activity(), SensorEventListener {
                     }
                     return true
                 }
-                if(event.actionMasked==MotionEvent.ACTION_UP || event.actionMasked==MotionEvent.ACTION_CANCEL) {
-                    if(mode=="PAINT" && event.actionMasked==MotionEvent.ACTION_UP && !paintStarted && paintStart!=null) {
-                        pushMark()
-                        val at=paintStart!!
-                        val p=DiscoveryPoint(at.latitude,at.longitude,true,System.currentTimeMillis())
-                        records.add(p);store.add(p);refresh()
+                if(event.actionMasked==MotionEvent.ACTION_UP ||
+                    event.actionMasked==MotionEvent.ACTION_CANCEL) {
+                    if(mode=="PAINT" && paintStart!=null) {
+                        if(event.actionMasked==MotionEvent.ACTION_UP) {
+                            val pt=mapView.projection.fromPixels(
+                                event.x.toInt(),event.y.toInt())
+                            val endPoint=GeoPoint(pt.latitude,pt.longitude)
+                            if(brushPreview.isEmpty())brushPreview.add(paintStart!!)
+                            if(gap(brushPreview.last(),endPoint)>1f)
+                                brushPreview.add(endPoint)
+                            // The original code serialized the entire history
+                            // and reblurred all fog points for EVERY drag event.
+                            // Commit the undo snapshot + both stores ONCE per
+                            // complete stroke, not on each MotionEvent.
+                            pushMark()
+                            val spacing=(radius*.28f).coerceAtLeast(2.5f)
+                            val savedPoints=ArrayList<GeoPoint>()
+                            for(point in brushPreview) {
+                                if(savedPoints.isEmpty() ||
+                                    gap(savedPoints.last(),point)>=spacing)
+                                    savedPoints.add(point)
+                            }
+                            val last=brushPreview.last()
+                            if(savedPoints.isNotEmpty() && gap(savedPoints.last(),last)>1f)
+                                savedPoints.add(last)
+                            val stamp=System.currentTimeMillis()
+                            val committed=ArrayList<DiscoveryPoint>(savedPoints.size)
+                            savedPoints.forEachIndexed{index,p->
+                                committed.add(DiscoveryPoint(
+                                    p.latitude,p.longitude,true,stamp+index))
+                                if(index>0) {
+                                    val previous=savedPoints[index-1]
+                                    segments.add(ManualSegment(previous.latitude,
+                                        previous.longitude,p.latitude,p.longitude))
+                                }
+                            }
+                            // One atomic append preserves GPS fixes written
+                            // by the tracking service while the pen is moving.
+                            if(committed.isNotEmpty()) {
+                                store.addAll(committed)
+                                records.addAll(committed)
+                            }
+                            if(savedPoints.size>1)pathStore.save(segments)
+                        }
+                        brushPreview.clear()
+                        fogOverlay.liveBrushStroke=emptyList()
+                        refresh()
                     }
                     paintStart=null;paintStarted=false;strokeLast=null
                     return true
@@ -1118,30 +1190,25 @@ class MainActivity : Activity(), SensorEventListener {
                 }
                 if (mode == "PAINT") {
                     if(event.actionMasked==MotionEvent.ACTION_DOWN) {
-                        paintStart=geo;paintStarted=false;strokeLast=null
+                        paintStart=geo
+                        paintStarted=false
+                        strokeLast=null
+                        brushPreview.clear()
+                        brushPreview.add(geo)
+                        fogOverlay.liveBrushStroke=brushPreview
+                        mapView.postInvalidateOnAnimation()
                         return true
                     }
-                    if(!paintStarted && paintStart!=null) {
-                        val start=paintStart!!
-                        if(gap(start,geo)<3f)return true
-                        pushMark()
-                        val p=DiscoveryPoint(start.latitude,start.longitude,true,System.currentTimeMillis())
-                        records.add(p);store.add(p)
-                        strokeLast=start;paintStarted=true
-                    }
-                    val current = GeoPoint(geo.latitude, geo.longitude)
-                    val previous = strokeLast
-                    if (previous == null || gap(previous, current) > radius * 0.30f) {
-                        if(strokeLast==null)pushMark()
-                        val p = DiscoveryPoint(current.latitude, current.longitude, true, System.currentTimeMillis())
-                        records.add(p)
-                        store.add(p)
-                        if (previous != null) {
-                            segments.add(ManualSegment(previous.latitude, previous.longitude, current.latitude, current.longitude))
-                            pathStore.save(segments)
+                    // Preview in the map's existing fog layer without touching
+                    // permanent discoveries or JSON. The whole stroke is
+                    // persisted only on ACTION_UP.
+                    if(paintStart!=null) {
+                        val last=brushPreview.lastOrNull()
+                        if(last==null || gap(last,geo)>=1.5f) {
+                            if(brushPreview.size<1800)brushPreview.add(geo)
+                            paintStarted=true
+                            mapView.postInvalidateOnAnimation()
                         }
-                        strokeLast = current
-                        refresh()
                     }
                     return true
                 }
@@ -1778,6 +1845,23 @@ class MainActivity : Activity(), SensorEventListener {
         journalDrawer.translationX=journalWidth.toFloat()
         mapArea.addView(journalDrawer,FrameLayout.LayoutParams(
             journalWidth+journalTabWidth,dp(272),Gravity.END or Gravity.CENTER_VERTICAL))
+        // Always accessible on-map compass lock: N = north-up, arrow =
+        // follow the phone heading and keep the user centered.
+        val headingToggle=action("N").apply {
+            gravity=Gravity.CENTER
+            textSize=14f
+            setSingleLine(false)
+            contentDescription="Toggle map orientation: north up or follow phone heading"
+            setOnClickListener{toggleHeadingLock()}
+        }
+        headingButton=headingToggle
+        mapArea.addView(headingToggle,
+            FrameLayout.LayoutParams(dp(49),dp(49),
+                Gravity.TOP or Gravity.END).apply {
+                topMargin=dp(58)
+                rightMargin=dp(8)
+            })
+        updateHeadingLockUi()
         root.addView(mapArea,LinearLayout.LayoutParams(-1,0,1f))
         // Hidden adapter buttons preserve existing activity actions; visual chrome is Canvas based.
         trackButton=action("TRACK")
@@ -1802,6 +1886,7 @@ class MainActivity : Activity(), SensorEventListener {
         controls.trackingActive=tracking
         controls.gpsSearching=tracking && fogOverlay.currentPosition==null
         fun chooseMark(next:String) {
+            fogOverlay.liveBrushStroke=emptyList()
             mode=next
             pending.clear();lasso.clear();lassoFinished=false
             confirmButton.visibility=View.GONE
@@ -4947,20 +5032,103 @@ class MainActivity : Activity(), SensorEventListener {
             status.text = "MAP IMPORT FAILED / ${e.javaClass.simpleName}"
         }
     }
-    override fun onSensorChanged(event: SensorEvent) {
-        if(event.sensor.type != Sensor.TYPE_ROTATION_VECTOR) return
+    private fun updateHeadingLockUi() {
+        headingButton?.apply {
+            text=if(headingUp)"⇧\nUP" else "N"
+            contentDescription=if(headingUp)
+                "Map locked to phone direction. Tap to return north up"
+                else "Map north up. Tap to lock map to phone direction"
+            setTextColor(ExpeditionThemes.current.light)
+            background=GradientDrawable().apply{
+                cornerRadius=dp(10).toFloat()
+                setColor(ExpeditionThemes.current.surface)
+                setStroke(dp(if(headingUp)3 else 1),
+                    if(headingUp)ExpeditionThemes.current.gold
+                    else ExpeditionThemes.current.secondary)
+            }
+        }
+        expeditionHeader?.headingUp=headingUp
+    }
+
+    private fun toggleHeadingLock() {
+        if(!compassEnabled) {
+            status.text="HEADING-UP / COMPASS SENSOR NOT AVAILABLE"
+            return
+        }
+        headingUp=!headingUp
+        getSharedPreferences("terra_map_orientation_v1",Context.MODE_PRIVATE)
+            .edit().putBoolean("heading_up",headingUp).apply()
+        if(headingUp) {
+            followUser=true
+            fogOverlay.currentPosition?.let{map.controller.setCenter(it)}
+            lastHeadingRotationAt=0L
+            status.text=if(fogOverlay.currentPosition==null)
+                "HEADING-UP / WAITING FOR GPS FIX"
+                else "HEADING-UP / MAP FOLLOWS YOUR DIRECTION"
+        } else {
+            map.mapOrientation=0f
+            status.text="NORTH-UP / FIXED COMPASS"
+        }
+        updateHeadingLockUi()
+        map.postInvalidateOnAnimation()
+    }
+
+    private fun trueHeading(magneticDegrees:Float,now:Long):Float {
+        val position=fogOverlay.currentPosition
+        if(position!=null && (now-lastDeclinationLookup>15L*60_000L ||
+                lastDeclinationLookup==0L)) {
+            trueNorthDeclination=android.hardware.GeomagneticField(
+                position.latitude.toFloat(),position.longitude.toFloat(),0f,
+                System.currentTimeMillis()).declination
+            lastDeclinationLookup=now
+        }
+        return MapHeadingPolicy.normalize(magneticDegrees+trueNorthDeclination)
+    }
+
+    override fun onSensorChanged(event:SensorEvent) {
+        if(event.sensor.type!=Sensor.TYPE_ROTATION_VECTOR)return
         SensorManager.getRotationMatrixFromVector(rotation,event.values)
-        SensorManager.getOrientation(rotation,orientation)
-        val degrees = ((Math.toDegrees(orientation[0].toDouble())+360.0)%360.0).toInt()
+        // Compass azimuth is in device coordinates. Remap it to screen-top
+        // when Android rotates the UI, so left/right remain intuitive.
+        val displayRotation=window.decorView.display?.rotation
+            ?:android.view.Surface.ROTATION_0
+        val adjusted=when(displayRotation) {
+            android.view.Surface.ROTATION_90 ->
+                SensorManager.remapCoordinateSystem(rotation,
+                    SensorManager.AXIS_Y,SensorManager.AXIS_MINUS_X,correctedRotation)
+            android.view.Surface.ROTATION_180 ->
+                SensorManager.remapCoordinateSystem(rotation,
+                    SensorManager.AXIS_MINUS_X,SensorManager.AXIS_MINUS_Y,correctedRotation)
+            android.view.Surface.ROTATION_270 ->
+                SensorManager.remapCoordinateSystem(rotation,
+                    SensorManager.AXIS_MINUS_Y,SensorManager.AXIS_X,correctedRotation)
+            else->false
+        }
+        SensorManager.getOrientation(if(adjusted)correctedRotation else rotation,orientation)
+        val magnetic=MapHeadingPolicy.normalize(
+            Math.toDegrees(orientation[0].toDouble()).toFloat())
         val now=android.os.SystemClock.uptimeMillis()
+        val current=trueHeading(magnetic,now)
+        val degrees=current.toInt()
         val change=if(lastCompassHeading<0)360
             else kotlin.math.abs((degrees-lastCompassHeading+540)%360-180)
-        if(change<3 && now-lastCompassPaintElapsed<600L)return
+        if(change<2 && now-lastCompassPaintElapsed<240L)return
         lastCompassHeading=degrees
         lastCompassPaintElapsed=now
-        compassView.text = "▲ N %03d°".format(degrees)
+        compassView.text="▲ N %03d°".format(degrees)
         expeditionHeader?.bearing=degrees
-        fogOverlay.northAzimuth = degrees.toFloat()
+        fogOverlay.northAzimuth=current
+        if(headingUp) {
+            val target=MapHeadingPolicy.headingUpOrientation(current)
+            if(MapHeadingPolicy.shouldUpdate(map.mapOrientation,target,
+                    now-lastHeadingRotationAt)) {
+                lastHeadingRotationAt=now
+                // The short-angle smoother avoids compass jitter and 360°
+                // spins, while osmdroid rotates its own map projection.
+                map.setMapOrientation(
+                    MapHeadingPolicy.easeTowards(map.mapOrientation,target),false)
+            }
+        }
         if(!map.isInLayout)map.postInvalidateOnAnimation()
     }
     override fun onAccuracyChanged(sensor:Sensor?,accuracy:Int) {}
