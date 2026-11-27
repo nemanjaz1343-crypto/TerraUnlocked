@@ -106,8 +106,8 @@ class DiscoveryFogOverlay(
             android.graphics.PorterDuff.Mode.DST_OUT)
     }
     private val maskPaint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply{
-        xfermode=android.graphics.PorterDuffXfermode(
-            android.graphics.PorterDuff.Mode.DST_OUT)
+        colorFilter=android.graphics.PorterDuffColorFilter(
+            ExpeditionThemes.current.dark,android.graphics.PorterDuff.Mode.SRC_IN)
     }
     private val bitmapRoutePaint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply{
         colorFilter=android.graphics.PorterDuffColorFilter(
@@ -240,13 +240,43 @@ class DiscoveryFogOverlay(
             val sa=kotlin.math.abs(kotlin.math.sin(angle)).toFloat()
             val dx=((ca*w+sa*h-w)*.5f).coerceAtLeast(0f)+8f
             val dy=((ca*h+sa*w-h)*.5f).coerceAtLeast(0f)+8f
-            val layer=canvas.saveLayer(-dx,-dy,w+dx,h+dy,null)
+            val extent=android.graphics.RectF(-dx,-dy,w+dx,h+dy)
             fogPaint.alpha=opacity.coerceIn(0,255)
-            canvas.drawRect(-dx,-dy,w+dx,h+dy,fogPaint)
-            organicMask?.let{canvas.drawBitmap(it,null,bounds,maskPaint)}
-            // Live paint gesture uses the existing small GPU composition;
-            // permanent raster is replaced asynchronously after finger-up.
+            maskPaint.alpha=opacity.coerceIn(0,255)
+
+            // During ordinary dragging and zooming the fog is just ONE
+            // tinted bitmap draw. GPU compositing layers are used only while
+            // the user is actively painting a new transient stroke.
             val brush=liveBrushStroke
+            val layer=if(brush.isNotEmpty())
+                canvas.saveLayer(extent.left,extent.top,extent.right,extent.bottom,null)
+            else -1
+            val fog=organicMask
+            if(fog==null || !android.graphics.RectF.intersects(extent,bounds)) {
+                canvas.drawRect(extent,fogPaint)
+            } else {
+                // Cached fog bitmap includes precomposed inverse-hole alpha.
+                // If a long pan exceeds the overscan, fill only exposed edge
+                // strips with solid fog. Never expose unknown territory.
+                if(bounds.left>extent.left)
+                    canvas.drawRect(extent.left,extent.top,
+                        bounds.left.coerceAtMost(extent.right),
+                        extent.bottom,fogPaint)
+                if(bounds.right<extent.right)
+                    canvas.drawRect(bounds.right.coerceAtLeast(extent.left),
+                        extent.top,extent.right,extent.bottom,fogPaint)
+                val left=maxOf(extent.left,bounds.left)
+                val right=minOf(extent.right,bounds.right)
+                if(left<right) {
+                    if(bounds.top>extent.top)
+                        canvas.drawRect(left,extent.top,right,
+                            bounds.top.coerceAtMost(extent.bottom),fogPaint)
+                    if(bounds.bottom<extent.bottom)
+                        canvas.drawRect(left,bounds.bottom.coerceAtLeast(extent.top),
+                            right,extent.bottom,fogPaint)
+                }
+                canvas.drawBitmap(fog,null,bounds,maskPaint)
+            }
             if(brush.isNotEmpty()) {
                 val p=brush.first()
                 val at=toPoint(mapView,p.latitude,p.longitude)
@@ -264,7 +294,7 @@ class DiscoveryFogOverlay(
                     canvas.drawPath(path,liveBrushPaint)
                 }
             }
-            canvas.restoreToCount(layer)
+            if(layer!=-1)canvas.restoreToCount(layer)
         }
         // A single textured quad replaces thousands of per-frame GPS line
         // projections, TraceReconstruction checks and Canvas drawLine calls.
