@@ -854,7 +854,14 @@ class MainActivity : Activity(), SensorEventListener {
             controller.setZoom(16.0)
             controller.setCenter(GeoPoint(25.0657, 55.1403))
         }
-        fogOverlay = DiscoveryFogOverlay({ records.filter { historyCutoff==null || it.timestamp<=historyCutoff!! } }, { if(historyCutoff==null)demo else emptyList() }, { if(historyCutoff==null)segments else emptyList() }, { notes.filter {historyCutoff==null || it.time<=historyCutoff!!} })
+        // Normal play: reuse the actual lists (no 3,500-item filter/copy on
+        // every map animation frame). The time-machine still filters as before.
+        fogOverlay = DiscoveryFogOverlay(
+            {if(historyCutoff==null)records else records.filter{it.timestamp<=historyCutoff!!}},
+            {if(historyCutoff==null)demo else emptyList()},
+            {if(historyCutoff==null)segments else emptyList()},
+            {if(historyCutoff==null)notes else notes.filter{it.time<=historyCutoff!!}}
+        )
         map.overlays.add(fogOverlay)
         restoreLastKnownFix()
         map.overlays.add(object:Overlay() {
