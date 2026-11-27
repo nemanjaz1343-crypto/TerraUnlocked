@@ -290,6 +290,11 @@ class DiscoveryFogOverlay(
                 "CAMP" to Color.rgb(147,198,105), "PHOTO" to Color.rgb(237,174,118), "VOICE" to Color.rgb(239,118,126))
             notes().forEach { note ->
                 val p=toPoint(mapView,note.latitude,note.longitude)
+                // Do not create multiple Paints, distance badges or strings
+                // for journal markers completely outside the viewport.
+                if(p.x < -90 || p.y < -90 ||
+                    p.x > canvas.width+90 || p.y > canvas.height+90)
+                    return@forEach
                 val fill=Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     color=palette[note.kind] ?: Color.rgb(228,183,85)
                 }
