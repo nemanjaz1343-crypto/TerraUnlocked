@@ -73,254 +73,232 @@ class DiscoveryFogOverlay(
         return Path().also { paint.getFillPath(path, it) }
     }
 
-    // Merge real visited discs and their existing route segments into one silhouette.
-    // A small feather at its outer edge adds mist without overlapping bright halos.
+    // A mask and route raster are produced on a single background worker.
+    // onDraw NEVER loops through old GPS positions or blurs CPU pixels.
+    private val mainThread=android.os.Handler(android.os.Looper.getMainLooper())
+    private val rasterWorker=java.util.concurrent.Executors.newSingleThreadExecutor{
+        job->Thread(job,"terra-fog-raster").apply{isDaemon=true}
+    }
     private var organicMask:android.graphics.Bitmap?=null
-    private var maskKey:String=""
+    private var routeRaster:android.graphics.Bitmap?=null
     private var cachedOrigin:GeoPoint?=null
     private var cachedOriginPixel:Point?=null
     private var cachedShiftX=0f
     private var cachedShiftY=0f
     private var cachedZoom=Double.NaN
     private var cachedScale=1f
-    private var cachedPad=160
-    /** Temporary stroke is rendered as a cheap GPU mask and committed only on finger-up. */
+    private var cachedPad=320
+    private var cachedWidth=0
+    private var cachedHeight=0
+    private var activeMap:MapView?=null
+    private var pendingBuild=false
+    private var inFlightBuilds=0
+    private var generation=0
+    private var lastSignature=""
+    private var lastPanElapsed=0L
     var liveBrushStroke:List<GeoPoint> = emptyList()
-    private val liveBrushPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{
+    private val liveBrushPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color=Color.WHITE
         style=Paint.Style.STROKE
         strokeCap=Paint.Cap.ROUND
         strokeJoin=Paint.Join.ROUND
-        xfermode=android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT)
+        xfermode=android.graphics.PorterDuffXfermode(
+            android.graphics.PorterDuff.Mode.DST_OUT)
     }
-    private var lastZoomChange=0L
-    private var observedZoom=Double.NaN
-    private var lastPanElapsed=0L
-    private var lastDeferredMaskFrame=0L
-
-    /** Avoid heavy fog recomposition during drag; cached holes translate with map. */
+    private val maskPaint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply{
+        colorFilter=android.graphics.PorterDuffColorFilter(
+            ExpeditionThemes.current.dark,android.graphics.PorterDuff.Mode.SRC_IN)
+    }
+    private val bitmapRoutePaint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply{
+        colorFilter=android.graphics.PorterDuffColorFilter(
+            ExpeditionThemes.current.gold,android.graphics.PorterDuff.Mode.SRC_IN)
+    }
+    private val rebuild=Runnable{
+        val map=activeMap
+        if(map!=null)prepareSnapshot(map)
+        else pendingBuild=false
+    }
+    /** Never recompute fog while the finger moves or the zoom animates. */
     fun onMapPanned() {
         lastPanElapsed=android.os.SystemClock.uptimeMillis()
-    }
-    private val maskPaint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
-        xfermode=android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT)
-    }
-    private fun organicMaskFor(map:MapView,width:Int,height:Int,
-        points:List<DiscoveryPoint>,manualSegments:List<ManualSegment>):android.graphics.Bitmap {
-        // Overscan prevents blur kernels and liquid bridges being clipped by screen edges.
-        // Original 160px bitmap overhang became exposed mid-drag; it
-        // caused abrupt fog edges before the next expensive recomposition.
-        // Overscan roughly half the screen and reuse during gestures.
-        val pad=(maxOf(width,height)/2).coerceAtLeast(320)
-        val mw=((width+2*pad)/6).coerceAtLeast(1)
-        val mh=((height+2*pad)/6).coerceAtLeast(1)
-        val center=map.mapCenter
-        val last=points.lastOrNull()
-        val end=manualSegments.lastOrNull()
-        // MapView applies its own orientation to the overlay canvas. A
-        // heading change should NOT recompute thousands of discs or blur.
-        val key="$mw:$mh:$pad:"+
-            "${points.size}:${last?.latitude}:${last?.longitude}:${last?.timestamp}:"+
-            "${manualSegments.size}:${end?.aLat}:${end?.bLon}:$radiusMeters"
-        val now=android.os.SystemClock.uptimeMillis()
-        val zoom=map.zoomLevelDouble
-        if(zoom!=observedZoom) {
-            observedZoom=zoom
-            lastZoomChange=now
-        }
-        organicMask?.let {cached->
-            val origin=cachedOrigin
-            val anchor=cachedOriginPixel
-            if(key==maskKey && !cached.isRecycled && origin!=null && anchor!=null) {
-                val projected=map.projection.toPixels(origin,Point())
-                val scale=Math.pow(2.0,zoom-cachedZoom).toFloat()
-                // Reuse the existing GPU-composited bitmap while pinch zoom is active.
-                // Rebuild only after zoom settles; avoid frame-by-frame CPU blurring.
-                val stillZooming=now-lastZoomChange<120L
-                val panning=now-lastPanElapsed<190L
-                val dx=projected.x-anchor.x*scale
-                val dy=projected.y-anchor.y*scale
-                // Original 80px threshold forced a blur/mask rebuild every
-                // few pan frames on the UI thread. Translate the last mask
-                // during the gesture, then rebuild after the map settles.
-                val withinOverscan=kotlin.math.abs(dx)<pad*0.72f &&
-                    kotlin.math.abs(dy)<pad*0.72f && scale in .65f..1.55f
-                if(withinOverscan &&
-                    (stillZooming || panning ||
-                        (kotlin.math.abs(scale-1f)<0.001f &&
-                            kotlin.math.abs(dx)<pad*.50f &&
-                            kotlin.math.abs(dy)<pad*.50f))) {
-                    cachedScale=scale
-                    cachedShiftX=dx
-                    cachedShiftY=dy
-                    if((panning || stillZooming) &&
-                        now-lastDeferredMaskFrame>=120L) {
-                        lastDeferredMaskFrame=now
-                        map.postInvalidateDelayed(220L)
-                    }
-                    return cached
-                }
-            }
-        }
-        cachedShiftX=0f;cachedShiftY=0f;cachedScale=1f
-        cachedPad=pad
-        val bitmap=android.graphics.Bitmap.createBitmap(mw,mh,android.graphics.Bitmap.Config.ARGB_8888)
-        val maskCanvas=Canvas(bitmap)
-        val ink=Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color=Color.WHITE
-            strokeJoin=Paint.Join.ROUND;strokeCap=Paint.Cap.ROUND
-        }
-        fun pt(lat:Double,lon:Double):android.graphics.Point =
-            map.projection.toPixels(GeoPoint(lat,lon),android.graphics.Point())
-        fun r(lat:Double,lon:Double)=radiusPx(map,lat,lon)/6f
-        for(i in points.indices) {
-            val p=points[i]
-            val xy=pt(p.latitude,p.longitude)
-            val rr=r(p.latitude,p.longitude).coerceAtLeast(.5f)
-            ink.style=Paint.Style.FILL
-            maskCanvas.drawCircle((xy.x+pad)/6f,(xy.y+pad)/6f,rr,ink)
-            if(i>0 && canJoin(points,i)) {
-                val prev=points[i-1];val ab=pt(prev.latitude,prev.longitude)
-                ink.style=Paint.Style.STROKE;ink.strokeWidth=rr*2f
-                maskCanvas.drawLine((ab.x+pad)/6f,(ab.y+pad)/6f,(xy.x+pad)/6f,(xy.y+pad)/6f,ink)
-            }
-        }
-        // World-space metaball bridges between nearby visited discs.
-        // Only join short gaps; never connect distant GPS jumps.
-        // The distance is measured in screen space using the same map projection,
-        // so bridge geometry remains consistent while zooming.
-        val projected=points.map { p -> pt(p.latitude,p.longitude) }
-        val bridgePaint=Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color=Color.WHITE
-            style=Paint.Style.STROKE
-            strokeCap=Paint.Cap.ROUND
-            strokeJoin=Paint.Join.ROUND
-        }
-        val cellSize=(radiusPx(map,center.latitude,center.longitude)/6f*2.7f)
-            .coerceAtLeast(4f)
-        val buckets=HashMap<Pair<Int,Int>,MutableList<Int>>()
-        for(i in points.indices) {
-            val pa=projected[i]
-            val cx=kotlin.math.floor(pa.x/6f/cellSize).toInt()
-            val cy=kotlin.math.floor(pa.y/6f/cellSize).toInt()
-            val p=points[i]
-            val r1=r(p.latitude,p.longitude)
-            for(gx in cx-1..cx+1)for(gy in cy-1..cy+1) {
-                for(j in buckets[Pair(gx,gy)].orEmpty()) {
-                    val q=points[j]
-                    val pb=projected[j]
-                    val r2=r(q.latitude,q.longitude)
-                    val d=kotlin.math.hypot((pa.x-pb.x)/6f,(pa.y-pb.y)/6f)
-                    val rr=kotlin.math.min(r1,r2)
-                    if(d>r1+r2 && d<=r1+r2+rr*0.8f) {
-                        bridgePaint.strokeWidth=rr*1.85f
-                        maskCanvas.drawLine((pa.x+pad)/6f,(pa.y+pad)/6f,(pb.x+pad)/6f,(pb.y+pad)/6f,bridgePaint)
-                    }
-                }
-            }
-            buckets.getOrPut(Pair(cx,cy)){mutableListOf()}.add(i)
-        }
-        for(seg in manualSegments) {
-            val a=pt(seg.aLat,seg.aLon);val b=pt(seg.bLat,seg.bLon)
-            ink.style=Paint.Style.STROKE
-            ink.strokeWidth=r(seg.aLat,seg.aLon).coerceAtLeast(.5f)*2f
-            maskCanvas.drawLine((a.x+pad)/6f,(a.y+pad)/6f,(b.x+pad)/6f,(b.y+pad)/6f,ink)
-            ink.style=Paint.Style.FILL
-            maskCanvas.drawCircle((a.x+pad)/6f,(a.y+pad)/6f,ink.strokeWidth/2f,ink)
-            maskCanvas.drawCircle((b.x+pad)/6f,(b.y+pad)/6f,ink.strokeWidth/2f,ink)
-        }
-        // Metaball-like liquid mask: blur the union, then threshold to make
-        // neighboring circles form thick, rounded necks instead of faint halos.
-        val pixels=IntArray(mw*mh)
-        bitmap.getPixels(pixels,0,mw,0,0,mw,mh)
-        val horizontal=IntArray(mw*mh)
-        // Scale the liquid bridge with the map's physical radius, not fixed pixels.
-        val blurRadius=(radiusPx(map,center.latitude,center.longitude)*0.65f/6f)
-            .toInt().coerceIn(3,16)
-        // Sliding-window box blur: O(width * height), independent of blur radius.
-        // The previous nested kernels cost O(width * height * radius) per pass.
-        for(y in 0 until mh) {
-            val row=y*mw
-            var sum=0
-            for(x in 0..kotlin.math.min(blurRadius,mw-1))sum+=pixels[row+x] ushr 24
-            for(x in 0 until mw) {
-                val count=kotlin.math.min(mw-1,x+blurRadius)-
-                    kotlin.math.max(0,x-blurRadius)+1
-                horizontal[row+x]=sum/count
-                val leaving=x-blurRadius
-                val entering=x+blurRadius+1
-                if(leaving>=0)sum-=pixels[row+leaving] ushr 24
-                if(entering<mw)sum+=pixels[row+entering] ushr 24
-            }
-        }
-        for(x in 0 until mw) {
-            var sum=0
-            for(y in 0..kotlin.math.min(blurRadius,mh-1))sum+=horizontal[y*mw+x]
-            for(y in 0 until mh) {
-                val count=kotlin.math.min(mh-1,y+blurRadius)-
-                    kotlin.math.max(0,y-blurRadius)+1
-                val field=sum.toFloat()/count
-                val alpha=((field-30f)*4.6f).toInt().coerceIn(0,255)
-                pixels[y*mw+x]=if(alpha<10)0 else (alpha shl 24) or 0x00FFFFFF
-                val leaving=y-blurRadius
-                val entering=y+blurRadius+1
-                if(leaving>=0)sum-=horizontal[leaving*mw+x]
-                if(entering<mh)sum+=horizontal[entering*mw+x]
-            }
-        }
-        bitmap.setPixels(pixels,0,mw,0,0,mw,mh)
-        // Do not recycle the previous frame while the renderer may still reference it.
-        organicMask=bitmap;maskKey=key;cachedZoom=zoom
-        cachedOrigin=GeoPoint(center.latitude,center.longitude)
-        cachedOriginPixel=map.projection.toPixels(cachedOrigin,Point())
-        return bitmap
+        generation++ // reject any in-flight raster built for an old viewport
+        scheduleRaster(300L)
     }
 
-    override fun draw(canvas: Canvas, mapView: MapView, shadow: Boolean) {
-        if (shadow) return
+    /** History import, time-machine or brush committed: use the same debounce. */
+    fun invalidateData() {
+        generation++
+        lastSignature=""
+        scheduleRaster(110L)
+    }
+
+    private fun scheduleRaster(delayMs:Long) {
+        pendingBuild=true
+        mainThread.removeCallbacks(rebuild)
+        mainThread.postDelayed(rebuild,delayMs)
+    }
+
+    private fun prepareSnapshot(map:MapView) {
+        // This step runs on the UI thread AFTER idle; it only projects positions.
+        // Raster circles, line paths and all blur loops run off the UI thread.
+        pendingBuild=false
+        val visible=records()
+        val simulation=demo()
+        val points=if(simulation.isEmpty())visible else visible+simulation
+        val manual=segments()
+        val w=map.width.coerceAtLeast(1)
+        val h=map.height.coerceAtLeast(1)
+        val pad=(maxOf(w,h)/2).coerceAtLeast(320)
+        val center=map.mapCenter
+        val origin=GeoPoint(center.latitude,center.longitude)
+        val projectedOrigin=map.projection.toPixels(origin,Point())
+        val zoom=map.zoomLevelDouble
+        val radius=radiusPx(map,center.latitude,center.longitude)
+        val projected=ArrayList<FogProjectedPoint>(points.size)
+        for(i in points.indices){
+            val p=points[i]
+            val xy=toPoint(map,p.latitude,p.longitude)
+            projected.add(FogProjectedPoint(xy.x.toFloat(),xy.y.toFloat(),
+                i>0 && canJoin(points,i)))
+        }
+        val lines=manual.map{seg->
+            val a=toPoint(map,seg.aLat,seg.aLon)
+            val b=toPoint(map,seg.bLat,seg.bLon)
+            FogProjectedLine(a.x.toFloat(),a.y.toFloat(),
+                b.x.toFloat(),b.y.toFloat())
+        }
+        val request=++generation
+        inFlightBuilds++
+        val snapshot=FogRasterInput(w,h,pad,radius,projected,lines)
+        rasterWorker.execute {
+            val raster=runCatching{FogRasterizer.render(snapshot)}.getOrNull()
+            mainThread.post {
+                inFlightBuilds=(inFlightBuilds-1).coerceAtLeast(0)
+                if(request!=generation) {
+                    raster?.mask?.recycle()
+                    raster?.route?.recycle()
+                    return@post
+                }
+                if(raster==null) {
+                    // Keep the previous bitmap; don't block the map if
+                    // allocation fails or Android is low on memory.
+                    return@post
+                }
+                organicMask=raster.mask
+                routeRaster=raster.route
+                cachedWidth=w;cachedHeight=h;cachedPad=pad
+                cachedZoom=zoom;cachedScale=1f
+                cachedOrigin=origin
+                cachedOriginPixel=projectedOrigin
+                cachedShiftX=0f;cachedShiftY=0f
+                activeMap?.postInvalidateOnAnimation()
+            }
+        }
+    }
+
+    private fun cachedBounds(map:MapView):android.graphics.RectF {
+        val origin=cachedOrigin
+        val initial=cachedOriginPixel
+        if(origin!=null && initial!=null && cachedZoom.isFinite()) {
+            val now=map.projection.toPixels(origin,Point())
+            val scale=Math.pow(2.0,map.zoomLevelDouble-cachedZoom).toFloat()
+            cachedScale=scale
+            cachedShiftX=now.x-initial.x*scale
+            cachedShiftY=now.y-initial.y*scale
+        }
+        return android.graphics.RectF(
+            cachedShiftX-cachedPad*cachedScale,
+            cachedShiftY-cachedPad*cachedScale,
+            cachedShiftX+(cachedWidth+cachedPad)*cachedScale,
+            cachedShiftY+(cachedHeight+cachedPad)*cachedScale)
+    }
+
+    override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
+        if(shadow)return
+        activeMap=mapView
         val live=records()
         val simulated=demo()
         val points=if(simulated.isEmpty())live else live+simulated
-        if (fogVisible) {
-            val blended=organicMaskFor(mapView,canvas.width,canvas.height,points,segments())
+        val existingSegments=segments()
+        val last=points.lastOrNull()
+        val end=existingSegments.lastOrNull()
+        val signature="${canvas.width}:${canvas.height}:${points.size}:"+
+            "${last?.latitude}:${last?.longitude}:${last?.timestamp}:"+
+            "${existingSegments.size}:${end?.aLat}:${end?.bLon}:$radiusMeters"
+        if(signature!=lastSignature) {
+            lastSignature=signature
+            generation++
+            scheduleRaster(140L)
+        } else if(organicMask==null && !pendingBuild && inFlightBuilds==0) {
+            scheduleRaster(140L)
+        }
+        val bounds=cachedBounds(mapView)
+        if(fogVisible) {
             val angle=Math.toRadians(mapView.mapOrientation.toDouble())
             val w=canvas.width.toFloat();val h=canvas.height.toFloat()
             val ca=kotlin.math.abs(kotlin.math.cos(angle)).toFloat()
             val sa=kotlin.math.abs(kotlin.math.sin(angle)).toFloat()
-            // Rotated MapView canvases have visible corners beyond the old
-            // 0..width/height layer. Extend only by the required diagonal.
             val dx=((ca*w+sa*h-w)*.5f).coerceAtLeast(0f)+8f
             val dy=((ca*h+sa*w-h)*.5f).coerceAtLeast(0f)+8f
-            val layer=canvas.saveLayer(-dx,-dy,w+dx,h+dy,null)
+            val extent=android.graphics.RectF(-dx,-dy,w+dx,h+dy)
             fogPaint.alpha=opacity.coerceIn(0,255)
-            canvas.drawRect(-dx,-dy,w+dx,h+dy,fogPaint)
-            canvas.drawBitmap(blended,null,
-                android.graphics.RectF(cachedShiftX-cachedPad*cachedScale,
-                    cachedShiftY-cachedPad*cachedScale,
-                    cachedShiftX+(canvas.width+cachedPad)*cachedScale,
-                    cachedShiftY+(canvas.height+cachedPad)*cachedScale),maskPaint)
-            // Draw live pen strokes directly into the fog-composition layer;
-            // no JSON serialization, bitmap blur or CPU pixel loops per MOVE.
-            if(liveBrushStroke.isNotEmpty()) {
-                val brush=liveBrushStroke
+            maskPaint.alpha=opacity.coerceIn(0,255)
+
+            // During ordinary dragging and zooming the fog is just ONE
+            // tinted bitmap draw. GPU compositing layers are used only while
+            // the user is actively painting a new transient stroke.
+            val brush=liveBrushStroke
+            val layer=if(brush.isNotEmpty())
+                canvas.saveLayer(extent.left,extent.top,extent.right,extent.bottom,null)
+            else -1
+            val fog=organicMask
+            if(fog==null || !android.graphics.RectF.intersects(extent,bounds)) {
+                canvas.drawRect(extent,fogPaint)
+            } else {
+                // Cached fog bitmap includes precomposed inverse-hole alpha.
+                // If a long pan exceeds the overscan, fill only exposed edge
+                // strips with solid fog. Never expose unknown territory.
+                if(bounds.left>extent.left)
+                    canvas.drawRect(extent.left,extent.top,
+                        bounds.left.coerceAtMost(extent.right),
+                        extent.bottom,fogPaint)
+                if(bounds.right<extent.right)
+                    canvas.drawRect(bounds.right.coerceAtLeast(extent.left),
+                        extent.top,extent.right,extent.bottom,fogPaint)
+                val left=maxOf(extent.left,bounds.left)
+                val right=minOf(extent.right,bounds.right)
+                if(left<right) {
+                    if(bounds.top>extent.top)
+                        canvas.drawRect(left,extent.top,right,
+                            bounds.top.coerceAtMost(extent.bottom),fogPaint)
+                    if(bounds.bottom<extent.bottom)
+                        canvas.drawRect(left,bounds.bottom.coerceAtLeast(extent.top),
+                            right,extent.bottom,fogPaint)
+                }
+                canvas.drawBitmap(fog,null,bounds,maskPaint)
+            }
+            if(brush.isNotEmpty()) {
                 val p=brush.first()
-                val xy=toPoint(mapView,p.latitude,p.longitude)
+                val at=toPoint(mapView,p.latitude,p.longitude)
                 liveBrushPaint.strokeWidth=radiusPx(mapView,p.latitude,p.longitude)*2f
                 if(brush.size==1) {
-                    canvas.drawCircle(xy.x.toFloat(),xy.y.toFloat(),
+                    canvas.drawCircle(at.x.toFloat(),at.y.toFloat(),
                         liveBrushPaint.strokeWidth*.5f,liveBrushPaint)
                 } else {
-                    val path=Path().apply{moveTo(xy.x.toFloat(),xy.y.toFloat())}
-                    for(i in 1 until brush.size) {
-                        val at=brush[i]
-                        val q=toPoint(mapView,at.latitude,at.longitude)
-                        path.lineTo(q.x.toFloat(),q.y.toFloat())
+                    val path=Path().apply{moveTo(at.x.toFloat(),at.y.toFloat())}
+                    for(i in 1 until brush.size){
+                        val q=brush[i]
+                        val xy=toPoint(mapView,q.latitude,q.longitude)
+                        path.lineTo(xy.x.toFloat(),xy.y.toFloat())
                     }
                     canvas.drawPath(path,liveBrushPaint)
                 }
             }
-            canvas.restoreToCount(layer)
+            if(layer!=-1)canvas.restoreToCount(layer)
         }
+        // A single textured quad replaces thousands of per-frame GPS line
+        // projections, TraceReconstruction checks and Canvas drawLine calls.
+        if(showRoute)routeRaster?.let{canvas.drawBitmap(it,null,bounds,bitmapRoutePaint)}
         // Gentle expanding liquid edge, rendered above the revealed map.
         val now=android.os.SystemClock.uptimeMillis()
         while(pulses.isNotEmpty() && now-pulses.first().start>1100L)pulses.removeFirst()
@@ -336,27 +314,17 @@ class DiscoveryFogOverlay(
             canvas.drawCircle(xy.x.toFloat(),xy.y.toFloat(),base*(0.45f+0.62f*progress),pulsePaint)
         }
         if(pulses.isNotEmpty())mapView.postInvalidateDelayed(45L)
-        if (showRoute) {
-            for (i in 1 until points.size) {
-                val a = points[i-1]; val b = points[i]
-                if (canJoin(points,i)) {
-                    val x = toPoint(mapView,a.latitude,a.longitude)
-                    val y = toPoint(mapView,b.latitude,b.longitude)
-                    canvas.drawLine(x.x.toFloat(),x.y.toFloat(),y.x.toFloat(),y.y.toFloat(),routePaint)
-                }
-            }
-            for (s in segments()) {
-                val a = toPoint(mapView,s.aLat,s.aLon)
-                val b = toPoint(mapView,s.bLat,s.bLon)
-                canvas.drawLine(a.x.toFloat(),a.y.toFloat(),b.x.toFloat(),b.y.toFloat(),routePaint)
-            }
-        }
         if (showCheckpoints) {
             val palette = mapOf("CHECKPOINT" to Color.rgb(228,183,85),
                 "POI" to Color.rgb(91,204,210), "MEMORY" to Color.rgb(203,150,220),
                 "CAMP" to Color.rgb(147,198,105), "PHOTO" to Color.rgb(237,174,118), "VOICE" to Color.rgb(239,118,126))
             notes().forEach { note ->
                 val p=toPoint(mapView,note.latitude,note.longitude)
+                // Do not create multiple Paints, distance badges or strings
+                // for journal markers completely outside the viewport.
+                if(p.x < -90 || p.y < -90 ||
+                    p.x > canvas.width+90 || p.y > canvas.height+90)
+                    return@forEach
                 val fill=Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     color=palette[note.kind] ?: Color.rgb(228,183,85)
                 }
