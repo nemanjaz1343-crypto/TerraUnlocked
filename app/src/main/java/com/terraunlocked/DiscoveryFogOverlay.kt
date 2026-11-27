@@ -92,6 +92,7 @@ class DiscoveryFogOverlay(
     private var cachedHeight=0
     private var activeMap:MapView?=null
     private var pendingBuild=false
+    private var inFlightBuilds=0
     private var generation=0
     private var lastSignature=""
     private var lastPanElapsed=0L
@@ -166,12 +167,13 @@ class DiscoveryFogOverlay(
             FogProjectedLine(a.x.toFloat(),a.y.toFloat(),
                 b.x.toFloat(),b.y.toFloat())
         }
-        val signature=lastSignature
         val request=++generation
+        inFlightBuilds++
         val snapshot=FogRasterInput(w,h,pad,radius,projected,lines)
         rasterWorker.execute {
             val raster=runCatching{FogRasterizer.render(snapshot)}.getOrNull()
             mainThread.post {
+                inFlightBuilds=(inFlightBuilds-1).coerceAtLeast(0)
                 if(request!=generation) {
                     raster?.mask?.recycle()
                     raster?.route?.recycle()
@@ -227,7 +229,7 @@ class DiscoveryFogOverlay(
             lastSignature=signature
             generation++
             scheduleRaster(140L)
-        } else if(organicMask==null && !pendingBuild) {
+        } else if(organicMask==null && !pendingBuild && inFlightBuilds==0) {
             scheduleRaster(140L)
         }
         val bounds=cachedBounds(mapView)
