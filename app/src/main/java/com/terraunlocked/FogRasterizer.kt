@@ -146,7 +146,11 @@ internal object FogRasterizer {
                     (y-blur).coerceAtLeast(0)+1
                 val alpha=(((sum.toFloat()/count)-30f)*4.6f).toInt()
                     .coerceIn(0,255)
-                pixels[y*mw+x]=if(alpha<10)0 else (alpha shl 24) or 0x00FFFFFF
+                // Store the FINAL fog alpha (inverse of revealed alpha).
+                // Drawing this translucent bitmap requires no GPU saveLayer
+                // and no full-screen DST_OUT pass for ordinary pan/zoom.
+                val fogAlpha=255-alpha
+                pixels[y*mw+x]=(fogAlpha shl 24) or 0x00FFFFFF
                 val leave=y-blur
                 val enter=y+blur+1
                 if(leave>=0)sum-=intermediate[leave*mw+x]
