@@ -3250,7 +3250,11 @@ class MainActivity : Activity(), SensorEventListener {
             override fun afterTextChanged(s:android.text.Editable?) {}
         })
         populate("")
-        objectivesPopup=PopupWindow(panel,dp(310),dp(480),true).apply {
+        val objectivesWidth=dp(310).coerceAtMost(
+            resources.displayMetrics.widthPixels-dp(16))
+        val objectivesHeight=dp(480).coerceAtMost(
+            (resources.displayMetrics.heightPixels-dp(150)).coerceAtLeast(dp(280)))
+        objectivesPopup=PopupWindow(panel,objectivesWidth,objectivesHeight,true).apply {
             isOutsideTouchable=true
             setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
             elevation=dp(8).toFloat()
@@ -4935,7 +4939,15 @@ class MainActivity : Activity(), SensorEventListener {
             startActivityForResult(intent, 81)
         }
 
-        val window=PopupWindow(panel,dp(305),dp(430),true).apply {
+        val scroll=android.widget.ScrollView(this).apply{
+            isFillViewport=true
+            addView(panel)
+        }
+        val window=PopupWindow(scroll,
+            dp(305).coerceAtMost(resources.displayMetrics.widthPixels-dp(20)),
+            dp(430).coerceAtMost(
+                (resources.displayMetrics.heightPixels-dp(130)).coerceAtLeast(dp(240))),
+            true).apply {
             isOutsideTouchable=true
             setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
         }
