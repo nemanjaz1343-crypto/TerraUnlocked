@@ -260,6 +260,38 @@ class DiscoveryFogOverlay(
             cachedShiftY+(cachedHeight+cachedPad)*cachedScale)
     }
 
+    /**
+     * One shader-filled quad covers the ENTIRE viewport. CLAMP repeats the
+     * opaque edge pixels of the cached inverse fog outside the bitmap, so
+     * there are no mismatched hard strips or half-transparent bitmap seams
+     * as the viewport pans and zooms beyond its original padded bounds.
+     */
+    private fun drawCachedFog(canvas:Canvas,mapView:MapView) {
+        val angle=Math.toRadians(mapView.mapOrientation.toDouble())
+        val w=canvas.width.toFloat();val h=canvas.height.toFloat()
+        val ca=kotlin.math.abs(kotlin.math.cos(angle)).toFloat()
+        val sa=kotlin.math.abs(kotlin.math.sin(angle)).toFloat()
+        val dx=((ca*w+sa*h-w)*.5f).coerceAtLeast(0f)+8f
+        val dy=((ca*h+sa*w-h)*.5f).coerceAtLeast(0f)+8f
+        val extent=android.graphics.RectF(-dx,-dy,w+dx,h+dy)
+        fogPaint.alpha=opacity.coerceIn(0,255)
+        maskPaint.alpha=opacity.coerceIn(0,255)
+        val fog=organicMask
+        val shader=fogShader
+        if(fog==null || shader==null || fog.isRecycled) {
+            canvas.drawRect(extent,fogPaint)
+            return
+        }
+        val bounds=cachedBounds(mapView)
+        shaderMatrix.setScale(bounds.width()/fog.width,
+            bounds.height()/fog.height)
+        shaderMatrix.postTranslate(bounds.left,bounds.top)
+        shader.setLocalMatrix(shaderMatrix)
+        maskPaint.shader=shader
+        canvas.drawRect(extent,maskPaint)
+        maskPaint.shader=null
+    }
+
     override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
         if(shadow)return
         activeMap=mapView
@@ -281,67 +313,13 @@ class DiscoveryFogOverlay(
         }
         val bounds=cachedBounds(mapView)
         if(fogVisible) {
-            val angle=Math.toRadians(mapView.mapOrientation.toDouble())
-            val w=canvas.width.toFloat();val h=canvas.height.toFloat()
-            val ca=kotlin.math.abs(kotlin.math.cos(angle)).toFloat()
-            val sa=kotlin.math.abs(kotlin.math.sin(angle)).toFloat()
-            val dx=((ca*w+sa*h-w)*.5f).coerceAtLeast(0f)+8f
-            val dy=((ca*h+sa*w-h)*.5f).coerceAtLeast(0f)+8f
-            val extent=android.graphics.RectF(-dx,-dy,w+dx,h+dy)
-            fogPaint.alpha=opacity.coerceIn(0,255)
-            maskPaint.alpha=opacity.coerceIn(0,255)
-
-            // During ordinary dragging and zooming the fog is just ONE
-            // tinted bitmap draw. GPU compositing layers are used only while
-            // the user is actively painting a new transient stroke.
-            val brush=liveBrushStroke
-            val layer=if(brush.isNotEmpty())
-                canvas.saveLayer(extent.left,extent.top,extent.right,extent.bottom,null)
-            else -1
-            val fog=organicMask
-            if(fog==null || !android.graphics.RectF.intersects(extent,bounds)) {
-                canvas.drawRect(extent,fogPaint)
-            } else {
-                // Cached fog bitmap includes precomposed inverse-hole alpha.
-                // If a long pan exceeds the overscan, fill only exposed edge
-                // strips with solid fog. Never expose unknown territory.
-                if(bounds.left>extent.left)
-                    canvas.drawRect(extent.left,extent.top,
-                        bounds.left.coerceAtMost(extent.right),
-                        extent.bottom,fogPaint)
-                if(bounds.right<extent.right)
-                    canvas.drawRect(bounds.right.coerceAtLeast(extent.left),
-                        extent.top,extent.right,extent.bottom,fogPaint)
-                val left=maxOf(extent.left,bounds.left)
-                val right=minOf(extent.right,bounds.right)
-                if(left<right) {
-                    if(bounds.top>extent.top)
-                        canvas.drawRect(left,extent.top,right,
-                            bounds.top.coerceAtMost(extent.bottom),fogPaint)
-                    if(bounds.bottom<extent.bottom)
-                        canvas.drawRect(left,bounds.bottom.coerceAtLeast(extent.top),
-                            right,extent.bottom,fogPaint)
-                }
-                canvas.drawBitmap(fog,null,bounds,maskPaint)
-            }
-            if(brush.isNotEmpty()) {
-                val p=brush.first()
-                val at=toPoint(mapView,p.latitude,p.longitude)
-                liveBrushPaint.strokeWidth=radiusPx(mapView,p.latitude,p.longitude)*2f
-                if(brush.size==1) {
-                    canvas.drawCircle(at.x.toFloat(),at.y.toFloat(),
-                        liveBrushPaint.strokeWidth*.5f,liveBrushPaint)
-                } else {
-                    val path=Path().apply{moveTo(at.x.toFloat(),at.y.toFloat())}
-                    for(i in 1 until brush.size){
-                        val q=brush[i]
-                        val xy=toPoint(mapView,q.latitude,q.longitude)
-                        path.lineTo(xy.x.toFloat(),xy.y.toFloat())
-                    }
-                    canvas.drawPath(path,liveBrushPaint)
-                }
-            }
-            if(layer!=-1)canvas.restoreToCount(layer)
+            // During a pen gesture the brush owns one cached fog bitmap and
+            // updates only the small feathered circle under the finger.
+            // This replaces full-screen per-frame saveLayer + all-point path
+            // reprojection and removes the old hard white preview marker.
+            if(!fluidBrush.draw(canvas,ExpeditionThemes.current.gold))
+                drawCachedFog(canvas,mapView)
+            if(fluidBrush.hasPendingWork())mapView.postInvalidateOnAnimation()
         }
         // A single textured quad replaces thousands of per-frame GPS line
         // projections, TraceReconstruction checks and Canvas drawLine calls.
