@@ -91,6 +91,60 @@ class TerraArchive(private val context:Context) {
             }
         }
     }
+    internal data class BackupPreview(
+        val discoveries:Int,val notes:Int,val paths:Int,
+        val places:Int,val media:Int
+    ) {
+        fun describe():String=
+            "$discoveries discovered points, $paths manual paths, "+
+            "$notes journal notes, $places saved locations and "+
+            "$media media files."
+    }
+
+    /** Non-mutating preview; used before asking permission to replace data. */
+    fun preview(input:InputStream):BackupPreview {
+        val counts=HashMap<String,Int>()
+        val seen=HashSet<String>()
+        var media=0
+        var entries=0
+        var total=0L
+        ZipInputStream(input).use{zip->
+            while(true) {
+                val entry=zip.nextEntry?:break
+                val name=entry.name
+                require(++entries<=600 && seen.add(name)) {
+                    "Too many or duplicate backup entries"
+                }
+                val json=name in keys.map{it.first}
+                val output=if(json)java.io.ByteArrayOutputStream() else null
+                val buffer=ByteArray(8192)
+                var size=0L
+                while(true) {
+                    val n=zip.read(buffer)
+                    if(n<0)break
+                    size+=n;total+=n
+                    require(total<=256L*1024L*1024L) {
+                        "Backup expands beyond 256 MB"
+                    }
+                    if(json) {
+                        require(size<=15_000_000L) {"Backup JSON too large"}
+                        output!!.write(buffer,0,n)
+                    } else require(size<=40_000_000L) {"Oversized entry"}
+                }
+                if(json)counts[name]=org.json.JSONArray(
+                    output!!.toString("UTF-8")).length()
+                if(name.startsWith("media/"))media++
+                zip.closeEntry()
+            }
+        }
+        require(counts.keys.containsAll(keys.take(3).map{it.first})) {
+            "Not a complete TERRA backup"
+        }
+        return BackupPreview(counts["discoveries.json"]?:0,
+            counts["notes.json"]?:0,counts["paths.json"]?:0,
+            counts["places.json"]?:0,media)
+    }
+
     private val recoveryFile:File get()=File(context.filesDir,"terra_restore_recovery.zip")
     private val recoveryPrefs get()=context.getSharedPreferences(
         "terra_restore_transaction_v1",Context.MODE_PRIVATE)
