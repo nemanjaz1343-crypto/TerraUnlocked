@@ -51,7 +51,7 @@ class GlobalObjectivePolicyTest {
             "tourism" to "attraction","wikidata" to "Q123")))
         assertEquals(3,GlobalObjectivePolicy.tier(mapOf(
             "tourism" to "gallery","wikidata" to "Q456")))
-        assertEquals(4,GlobalObjectivePolicy.tier(mapOf(
+        assertEquals(3,GlobalObjectivePolicy.tier(mapOf(
             "tourism" to "museum")))
         assertEquals(5,GlobalObjectivePolicy.tier(mapOf(
             "tourism" to "artwork")))
@@ -69,5 +69,11 @@ class GlobalObjectivePolicyTest {
         assertTrue(world.any{it.longitude<0})
         assertTrue(world.all{it.id.startsWith("world_")})
         assertTrue(world.none{seed->ReconObjectives.all.any{it.id==seed.id}})
+        assertTrue("Cities need offline reference sites",world.size>=50)
+        assertTrue(world.any{it.name=="Sagrada Família"})
+        assertTrue(world.any{it.name=="Central Park"})
+        assertTrue(world.any{it.name=="Petronas Towers"})
+        assertTrue(GlobalWorldLandmarks.visible(4.0).size <
+            GlobalWorldLandmarks.visible(8.0).size)
     }
 }

@@ -22,7 +22,7 @@ internal object ExpeditionArt {
     fun fill(c:Canvas,l:Float,t:Float,r:Float,b:Float,col:Int) {
         p.style=Paint.Style.FILL;p.color=col;p.clearShadowLayer();c.drawRect(l,t,r,b,p)
     }
-    fun panel(c:Canvas,rect:RectF,highlight:Boolean=false,radius:Float=10f) {
+    fun panel(c:Canvas,rect:RectF,highlight:Boolean=false,radius:Float=12f) {
         p.style=Paint.Style.FILL;p.color=if(highlight)
             (if(ExpeditionThemes.current.id=="MILITARY")Color.rgb(54,49,31)
                 else ExpeditionThemes.current.raised)
@@ -30,13 +30,14 @@ internal object ExpeditionArt {
         c.drawRoundRect(rect,radius,radius,p)
         // Faint leather/grain and military-map scuffs; deterministic, inexpensive.
         p.style=Paint.Style.STROKE;p.strokeWidth=.45f
-        for(i in 0..75) {
+        for(i in 0..31) {
             val x=rect.left+(i*47%997)/997f*rect.width()
             val y=rect.top+(i*73%991)/991f*rect.height()
-            p.color=if(i%3==0)Color.argb(26,205,179,122) else Color.argb(21,117,131,103)
+            p.color=if(i%3==0)Color.argb(13,205,179,122) else Color.argb(9,117,131,103)
             if(x<rect.right-6f && y<rect.bottom-4f)c.drawLine(x,y,x+(i%5+1)*.9f,y+.65f,p)
         }
-        p.style=Paint.Style.STROKE;p.strokeWidth=1.25f;p.color=if(highlight)light else gold
+        p.style=Paint.Style.STROKE;p.strokeWidth=if(highlight)1.0f else .85f
+        p.color=if(highlight)light else Color.argb(190,213,175,106)
         c.drawRoundRect(RectF(rect.left+1,rect.top+1,rect.right-1,rect.bottom-1),radius,radius,p)
     }
     fun rule(c:Canvas,x1:Float,y1:Float,x2:Float,y2:Float,color:Int=gold,w:Float=1f) {
@@ -83,6 +84,11 @@ internal object ExpeditionArt {
                 line(-5f,0f,-3.5f,0f);line(3.5f,0f,5f,0f)
                 c.restore()
                 c.drawArc(-8f,5f,8f,18f,202f,136f,false,p)
+            }
+            "search" -> {
+                c.drawCircle(-2f,-2f,6.8f,p)
+                p.strokeWidth=2.2f
+                line(3f,3f,10.5f,10.5f)
             }
             "follow" -> {
                 p.style=Paint.Style.FILL
@@ -200,7 +206,7 @@ internal class ExpeditionHeaderView(context:Context,
         c.save();c.scale(scale,scale)
         val hh=h/scale
         ExpeditionArt.fill(c,0f,0f,393f,hh,ExpeditionArt.dark)
-        ExpeditionArt.panel(c,RectF(10f,6f,94f,hh-8f),false,5f)
+        ExpeditionArt.panel(c,RectF(10f,6f,94f,hh-8f),false,9f)
         val missionHeading=ExpeditionWording.current.heading
         ExpeditionArt.label(c,missionHeading+" ›",52f,hh/2f+5f,
             if(missionHeading.length>9)9.5f else 12f,
@@ -291,17 +297,19 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
     override fun onDetachedFromWindow(){radar.cancel();super.onDetachedFromWindow()}
     private var pressedIndex=-1
     private val d=resources.displayMetrics.density
-    private val labels=arrayOf("TRACK","LOCATE","SNAP","MARK","ERASE","SETTINGS")
-    private val icons=arrayOf("track","follow","snap","mark","erase","settings")
+    // Odd slot count puts SEARCH exactly at horizontal centre on every screen.
+    private val labels=arrayOf("TRACK","LOCATE","SNAP","SEARCH","MARK","ERASE","SETTINGS")
+    private val icons=arrayOf("track","follow","snap","search","mark","erase","settings")
     override fun onDraw(c:Canvas) {
         val w=width.toFloat();val h=height.toFloat()
         ExpeditionArt.fill(c,0f,0f,w,h,ExpeditionArt.dark)
-        ExpeditionArt.panel(c,RectF(3*d,3*d,w-3*d,h-3*d),false,8*d)
-        val step=(w-6*d)/6
-        for(i in 0..5){
+        ExpeditionArt.panel(c,RectF(3*d,3*d,w-3*d,h-3*d),false,13*d)
+        val step=(w-6*d)/7
+        for(i in 0..6){
             val x=3*d+(i+.5f)*step
             if(i==selected || i==pressedIndex || (i==0 && trackingActive)){
-                ExpeditionArt.panel(c,RectF(3*d+i*step,3*d,3*d+(i+1)*step,h-3*d),true,7*d)
+                ExpeditionArt.panel(c,RectF(3*d+i*step+1*d,4*d,
+                    3*d+(i+1)*step-1*d,h-4*d),true,10*d)
                 ExpeditionArt.rule(c,x-step*.22f,h-8*d,x+step*.22f,h-8*d,
                     if(ExpeditionThemes.current.id=="CIVIL")ExpeditionThemes.current.accent
                     else ExpeditionArt.light,1*d)
@@ -320,7 +328,7 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
                 ring.alpha=((scanPhase)*135).toInt()
                 c.drawCircle(x,17*d,(10f+10f*((scanPhase+0.5f)%1f))*d,ring)
             }
-            ExpeditionArt.label(c,if(i==0 && gpsSearching)"SEARCH" else if(i==0 && trackingActive)"STOP" else labels[i],x,h-8*d,10f*d,if(i==selected)ExpeditionArt.light else (if(ExpeditionThemes.current.id=="MILITARY")
+            ExpeditionArt.label(c,if(i==0 && gpsSearching)"SCAN" else if(i==0 && trackingActive)"STOP" else labels[i],x,h-8*d,8.5f*d,if(i==selected)ExpeditionArt.light else (if(ExpeditionThemes.current.id=="MILITARY")
                 Color.rgb(183,178,150) else ExpeditionThemes.current.secondary),false,.2f*d)
             if(i==0 && trackingActive){
                 ExpeditionArt.p.style=Paint.Style.FILL
@@ -333,11 +341,11 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
     override fun onTouchEvent(e:MotionEvent):Boolean {
         when(e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                pressedIndex=(6*e.x/width).toInt().coerceIn(0,5)
+                pressedIndex=(7*e.x/width).toInt().coerceIn(0,6)
                 invalidate();return true
             }
             MotionEvent.ACTION_UP -> {
-                val idx=(6*e.x/width).toInt().coerceIn(0,5)
+                val idx=(7*e.x/width).toInt().coerceIn(0,6)
                 val shouldClick=idx==pressedIndex
                 pressedIndex=-1;invalidate()
                 if(shouldClick)onSelect(idx)

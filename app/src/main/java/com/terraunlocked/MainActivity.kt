@@ -98,6 +98,7 @@ class MainActivity : Activity(), SensorEventListener {
     // Dynamic worldwide places augment -- never replace -- Dubai and SAVED IDs.
     // Draw only reads this snapshot; networking/cache writes run on a worker.
     private val globalObjectiveStore by lazy{GlobalObjectiveStore(applicationContext)}
+    private val objectiveLinkResolver by lazy{ObjectiveLinkResolver(applicationContext)}
     private var regionalObjectives:List<ReconObjective> = emptyList()
     private val globalObjectiveWorker=java.util.concurrent.Executors.newSingleThreadExecutor{
         job->Thread(job,"terra-global-objectives").apply{isDaemon=true}
@@ -596,6 +597,30 @@ class MainActivity : Activity(), SensorEventListener {
     private var trueNorthDeclination=0f
     private var lastDeclinationLookup=0L
     private var lastHeadingRotationAt=0L
+    private var headingTarget=0f
+    private var headingFramePosted=false
+    private val headingFrame=object:Runnable {
+        override fun run() {
+            headingFramePosted=false
+            if(!headingUp || !::map.isInitialized || isFinishing || isDestroyed)return
+            val now=android.os.SystemClock.uptimeMillis()
+            val delta=if(lastHeadingRotationAt==0L)16L
+                else (now-lastHeadingRotationAt).coerceIn(1L,80L)
+            lastHeadingRotationAt=now
+            val before=map.mapOrientation
+            val next=MapHeadingPolicy.frameAngle(before,headingTarget,delta)
+            if(kotlin.math.abs(MapHeadingPolicy.shortestTurn(before,next))>=0.04f)
+                map.setMapOrientation(next,false)
+            if(MapHeadingPolicy.needsFrame(next,headingTarget))
+                postHeadingFrame()
+        }
+    }
+    private fun postHeadingFrame() {
+        if(!headingFramePosted && headingUp && ::map.isInitialized) {
+            headingFramePosted=true
+            map.postOnAnimation(headingFrame)
+        }
+    }
     private val correctedRotation=FloatArray(9)
     private lateinit var followButton:Button
     private var paintPopup:PopupWindow?=null
@@ -1658,27 +1683,27 @@ class MainActivity : Activity(), SensorEventListener {
                     // Diamond marker, high contrast on both bright map tiles
                     // and dark fog. Full fill prevents icons disappearing
                     // against satellite imagery.
-                    val diamond=android.graphics.Path().apply{
-                        moveTo(x,y-size)
-                        lineTo(x+size,y)
-                        lineTo(x,y+size)
-                        lineTo(x-size,y)
-                        close()
-                    }
+                    // Rotate a rounded square instead of a hard diamond.
+                    // Rounded corners stay crisp with cheap GPU geometry.
+                    val half=size*.70710678f
+                    canvas.save()
+                    canvas.rotate(45f,x,y)
+                    val rect=android.graphics.RectF(x-half,y-half,x+half,y+half)
                     ink.style=Paint.Style.FILL
                     ink.color=fill
-                    canvas.drawPath(diamond,ink)
+                    canvas.drawRoundRect(rect,4f*density,4f*density,ink)
                     ink.style=Paint.Style.STROKE
-                    ink.strokeWidth=border
+                    ink.strokeWidth=border*.72f
                     ink.strokeJoin=Paint.Join.ROUND
                     ink.color=outline
-                    canvas.drawPath(diamond,ink)
-                    // Simple central facet differentiates it from objective
-                    // diamonds and makes smaller community malls legible.
+                    canvas.drawRoundRect(rect,4f*density,4f*density,ink)
+                    canvas.restore()
+                    // Soft, rounded central facet retains mall distinctiveness.
                     ink.style=Paint.Style.FILL
                     ink.color=outline
-                    val facet=size*.28f
-                    canvas.drawRect(x-facet,y-facet,x+facet,y+facet,ink)
+                    val facet=size*.23f
+                    canvas.drawRoundRect(x-facet,y-facet,x+facet,y+facet,
+                        facet*.48f,facet*.48f,ink)
 
                     // Names appear earlier at mid-range zoom. Avoid labels
                     // at country/city zoom where they would overlap.
@@ -2103,9 +2128,10 @@ class MainActivity : Activity(), SensorEventListener {
                 0->trackButton.performClick()
                 1->followButton.performClick()
                 2->snapButton.performClick()
-                3->markButton.performClick()
-                4->eraseButton.performClick()
-                5->viewButton.performClick()
+                3->showMapLookup()
+                4->markButton.performClick()
+                5->eraseButton.performClick()
+                6->viewButton.performClick()
             }
         }
         expeditionBottom=controls
@@ -2143,8 +2169,8 @@ class MainActivity : Activity(), SensorEventListener {
         val paletteParams=FrameLayout.LayoutParams(dp(242),dp(70),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
         paletteParams.bottomMargin=dp(12)
         mapArea.addView(palette,paletteParams)
-        // The artwork remains unchanged; six transparent NATIVE Button
-        // hit targets give TalkBack and Switch Access independent semantics.
+        // Seven transparent native buttons align with the 7 drawn slots.
+        // SEARCH is exactly in the middle (index 3), including for TalkBack.
         val accessibleBottom=FrameLayout(this)
         controls.importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
         accessibleBottom.addView(controls,FrameLayout.LayoutParams(-1,-1))
@@ -2155,6 +2181,7 @@ class MainActivity : Activity(), SensorEventListener {
             "Start or stop recording my GPS journey",
             "Find my location and follow me on the map",
             "Capture a quick photo, video or voice note",
+            "Search for a city, attraction, address or coordinates",
             "Choose manual map drawing and marking tools",
             "Erase a previously discovered map area",
             "Open application settings and data controls")
@@ -2189,10 +2216,17 @@ class MainActivity : Activity(), SensorEventListener {
         }
         followButton.setOnClickListener {
             followUser=true
-            fogOverlay.currentPosition?.let{
-                map.controller.animateTo(it)
-                status.text="LOCATE / FOLLOW ACTIVE / ZOOM UNCHANGED"
-            } ?: run{locateOnce()}
+            val age=System.currentTimeMillis()-lastKnownFixTime
+            val fresh=lastKnownFixTime>0L && age in 0L..120000L
+            val point=if(fresh)fogOverlay.currentPosition else null
+            if(point!=null) {
+                val next=LocateZoomPolicy.next(map.zoomLevelDouble,
+                    map.maxZoomLevel.toDouble())
+                map.controller.setZoom(next)
+                map.controller.animateTo(point)
+                status.text="LOCATE / FOLLOW ACTIVE / ZOOM %.1f".format(
+                    java.util.Locale.US,next)
+            } else locateOnce()
         }
         markButton.setOnClickListener {
             val opening=palette.visibility!=View.VISIBLE
@@ -2206,14 +2240,14 @@ class MainActivity : Activity(), SensorEventListener {
             }else{
                 mode="VIEW";pending.clear();lasso.clear();confirmButton.visibility=View.GONE
             }
-            controls.selected=if(opening)3 else -1
+            controls.selected=if(opening)4 else -1
             refresh()
         }
         snapButton.setOnClickListener {showSnapOptions()}
         eraseButton.setOnClickListener {
             if(mode!="ERASE"){
                 mode="ERASE";palette.visibility=View.GONE
-                controls.selected=4;status.text="ERASE / MANUAL MARKS ONLY / GPS SAFE"
+                controls.selected=5;status.text="ERASE / MANUAL MARKS ONLY / GPS SAFE"
             }else{
                 mode="VIEW";controls.selected=-1;status.text="MAP READY"
             }
@@ -2880,6 +2914,8 @@ class MainActivity : Activity(), SensorEventListener {
             mapSearchGeneration++
         }
         popup.showAtLocation(map,Gravity.TOP or Gravity.CENTER_HORIZONTAL,0,dp(112))
+        box.alpha=0f
+        box.animate().alpha(1f).setDuration(170L).start()
     }
     private fun resolveMapLocation(raw:String) {
         if(raw.isBlank())return
@@ -3507,7 +3543,7 @@ class MainActivity : Activity(), SensorEventListener {
                     popup.dismiss()
                 }
             },
-            (if(o.id.startsWith("saved_"))"MOVE PIN" else "SOURCE") to {
+            (if(o.id.startsWith("saved_"))"MOVE PIN" else "CLOSE") to {
                 popup.dismiss()
                 if(o.id.startsWith("saved_")) {
                     movingObjectiveId=o.id;movingPinTime=null;movingOriginalNote=null
@@ -3517,11 +3553,68 @@ class MainActivity : Activity(), SensorEventListener {
                     movePinBar?.visibility=View.VISIBLE
                     pinMoveReticle?.invalidate()
                     status.text="MOVE "+terms.single+" / TOUCH MAP TO RELOCATE, THEN CONFIRM"
-                } else if(o.source.startsWith("http")) {
-                    startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(o.source)))
-                }
+                } else popup.dismiss()
             }
         )
+        if(!o.id.startsWith("saved_")) {
+            val initialLinks=objectiveLinkResolver.cached(o)
+            var officialSite=initialLinks.website
+            val linksRow=LinearLayout(this).apply {
+                orientation=LinearLayout.HORIZONTAL
+                setPadding(0,dp(5),0,0)
+            }
+            val sourceButton=action("⌖ VIEW OSM MAP").apply {
+                applyExpeditionStyle(this)
+                contentDescription="Open stable OpenStreetMap source for ${o.name}"
+                setOnClickListener {
+                    popup.dismiss()
+                    startActivity(Intent(Intent.ACTION_VIEW,
+                        Uri.parse(initialLinks.source)))
+                }
+            }
+            linksRow.addView(sourceButton,LinearLayout.LayoutParams(0,dp(42),1f).apply{
+                setMargins(dp(2),0,dp(2),0)
+            })
+            val siteButton=action(if(officialSite!=null)"↗ OFFICIAL WEBSITE"
+                else "WEBSITE NOT LISTED").apply {
+                applyExpeditionStyle(this)
+                isEnabled=officialSite!=null
+                contentDescription="Open location website if available"
+                setOnClickListener {
+                    val link=officialSite ?: return@setOnClickListener
+                    popup.dismiss()
+                    startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(link)))
+                }
+            }
+            linksRow.addView(siteButton,LinearLayout.LayoutParams(0,dp(42),1f).apply{
+                setMargins(dp(2),0,dp(2),0)
+            })
+            body.addView(linksRow)
+            // Unlike a fragile venue URL, this source map never depends on
+            // a business website retaining its address. Check OSM website tags
+            // lazily and at most once/day for a bubble the user actually opens.
+            if(objectiveLinkResolver.needsRefresh(o)) {
+                if(officialSite==null)siteButton.text="↻ CHECKING WEBSITE"
+                Thread {
+                    val result=runCatching{objectiveLinkResolver.refresh(o)}
+                    runOnUiThread {
+                        if(!isFinishing && !isDestroyed &&
+                            objectiveBubble===popup && popup.isShowing) {
+                            result.onSuccess {
+                                officialSite=it.website
+                                siteButton.text=if(officialSite!=null)
+                                    "↗ OFFICIAL WEBSITE" else "WEBSITE NOT LISTED"
+                                siteButton.isEnabled=officialSite!=null
+                            }.onFailure {
+                                siteButton.text=if(officialSite!=null)
+                                    "↗ CACHED WEBSITE" else "WEBSITE UNAVAILABLE"
+                                siteButton.isEnabled=officialSite!=null
+                            }
+                        }
+                    }
+                }.start()
+            }
+        }
         val tail=ObjectiveBubbleTail(this).apply {
             pointingUp=false
             minimumHeight=dp(11)
@@ -3538,6 +3631,8 @@ class MainActivity : Activity(), SensorEventListener {
         }
         // First layout and viewport positioning happen after the callout enters WindowManager.
         popup.showAtLocation(map,Gravity.TOP or Gravity.START,0,0)
+        stack.alpha=0f
+        stack.animate().alpha(1f).setDuration(180L).start()
         handler.post {updateObjectiveBubblePosition()}
     }
     private fun showExpeditionJournal() {
@@ -4030,9 +4125,13 @@ class MainActivity : Activity(), SensorEventListener {
                         fogOverlay.currentPosition=GeoPoint(fix.latitude,fix.longitude)
                         fogOverlay.positionAccuracy=if(fix.hasAccuracy())fix.accuracy else 0f
                         followUser=true
-                        if(map.zoomLevelDouble<10.0)map.controller.setZoom(15.0)
+                        lastKnownFixTime=System.currentTimeMillis()
+                        val next=LocateZoomPolicy.next(map.zoomLevelDouble,
+                            map.maxZoomLevel.toDouble())
+                        map.controller.setZoom(next)
                         map.controller.animateTo(fogOverlay.currentPosition)
-                        status.text="LOCATE / POSITION FOUND / NOT RECORDING"
+                        status.text="LOCATE / POSITION FOUND / ZOOM %.1f / NOT RECORDING"
+                            .format(java.util.Locale.US,next)
                         refresh()
                     } else status.text="LOCATE / NO FRESH FIX / TRY OUTDOORS"
                 }
@@ -5197,9 +5296,9 @@ class MainActivity : Activity(), SensorEventListener {
             setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
             elevation=dp(8).toFloat()
             setOnDismissListener {
-                if(expeditionBottom?.selected==4)expeditionBottom?.selected=-1
+                if(expeditionBottom?.selected==6)expeditionBottom?.selected=-1
             }
-            expeditionBottom?.selected=4
+            expeditionBottom?.selected=6
             showAtLocation(map,Gravity.END or Gravity.BOTTOM,dp(9),dp(66))
         }
     }
@@ -5532,10 +5631,14 @@ class MainActivity : Activity(), SensorEventListener {
             followUser=true
             fogOverlay.currentPosition?.let{map.controller.setCenter(it)}
             lastHeadingRotationAt=0L
+            headingTarget=map.mapOrientation
+            postHeadingFrame()
             status.text=if(fogOverlay.currentPosition==null)
                 "HEADING-UP / WAITING FOR GPS FIX"
                 else "HEADING-UP / MAP FOLLOWS YOUR DIRECTION"
         } else {
+            map.removeCallbacks(headingFrame)
+            headingFramePosted=false
             map.mapOrientation=0f
             status.text="NORTH-UP / FIXED COMPASS"
         }
@@ -5589,17 +5692,11 @@ class MainActivity : Activity(), SensorEventListener {
         expeditionHeader?.bearing=degrees
         fogOverlay.northAzimuth=current
         if(headingUp) {
-            val target=MapHeadingPolicy.headingUpOrientation(current)
-            if(MapHeadingPolicy.shouldUpdate(map.mapOrientation,target,
-                    now-lastHeadingRotationAt)) {
-                lastHeadingRotationAt=now
-                // The short-angle smoother avoids compass jitter and 360°
-                // spins, while osmdroid rotates its own map projection.
-                map.setMapOrientation(
-                    MapHeadingPolicy.easeTowards(map.mapOrientation,target),false)
-            }
+            headingTarget=MapHeadingPolicy.headingUpOrientation(current)
+            postHeadingFrame()
         }
-        if(!map.isInLayout)map.postInvalidateOnAnimation()
+        // Map repaint is paced by animation frames rather than sensor spikes.
+        if(!headingUp && !map.isInLayout)map.postInvalidateOnAnimation()
     }
     override fun onAccuracyChanged(sensor:Sensor?,accuracy:Int) {}
     private fun startTracking() {
@@ -5674,7 +5771,7 @@ class MainActivity : Activity(), SensorEventListener {
         minimumWidth=0
         setPadding(dp(6),dp(3),dp(6),dp(3))
         background=GradientDrawable().apply {
-            cornerRadius=dp(7).toFloat()
+            cornerRadius=dp(12).toFloat()
             setColor(ExpeditionThemes.current.surface)
             setStroke(dp(1),ExpeditionThemes.current.raised)
         }
@@ -5714,6 +5811,10 @@ class MainActivity : Activity(), SensorEventListener {
         super.onResume()
         if(!::map.isInitialized)return
         map.onResume()
+        if(headingUp) {
+            lastHeadingRotationAt=0L
+            postHeadingFrame()
+        }
         lastVerifiedGpsElapsed=android.os.SystemClock.elapsedRealtime()
         handler.removeCallbacks(gpsStatusTick)
         handler.postDelayed(gpsStatusTick,15000L)
@@ -5770,6 +5871,9 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
     override fun onPause() {
+        if(::map.isInitialized)map.removeCallbacks(headingFrame)
+        headingFramePosted=false
+        lastHeadingRotationAt=0L
         handler.removeCallbacks(gpsStatusTick)
         if(::map.isInitialized) {
             val loc=map.mapCenter
@@ -5791,6 +5895,8 @@ class MainActivity : Activity(), SensorEventListener {
         if(receiverRegistered) {unregisterReceiver(trackingReceiver);receiverRegistered=false}
     }
     override fun onDestroy() {
+        if(::map.isInitialized)map.removeCallbacks(headingFrame)
+        headingFramePosted=false
         restoreProgressDialog?.dismiss()
         restoreProgressDialog=null
         handler.removeCallbacks(gpsStatusTick)

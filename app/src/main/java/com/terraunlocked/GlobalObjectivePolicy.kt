@@ -8,23 +8,23 @@ import kotlin.math.hypot
 /** Five importance levels, from world landmarks (1) to neighbourhood POIs (5). */
 internal object GlobalObjectivePolicy {
     fun visibleTier(zoom:Double):Int=when {
-        zoom<7.0->1
-        zoom<10.0->2
+        zoom<5.5->1
+        zoom<9.0->2
         zoom<12.5->3
         zoom<15.0->4
         else->5
     }
 
     fun fetchBand(zoom:Double):Int=when {
-        zoom<9.0->0 // world landmarks are bundled, never query world-wide Overpass
-        zoom<11.5->2
+        zoom<7.5->0 // never query a whole country or the whole world
+        zoom<10.5->2
         zoom<13.5->3
         zoom<15.5->4
         else->5
     }
 
     fun cellSize(zoom:Double):Double=when(fetchBand(zoom)) {
-        2->.65
+        2->.35
         3->.18
         4->.065
         5->.022
@@ -120,9 +120,13 @@ internal object GlobalObjectivePolicy {
                 historic in setOf("castle","monument","archaeological_site") ||
                 tourism=="attraction")->2
             hasWiki->3
-            tourism in setOf("museum","attraction","gallery") ||
-                historic.isNotBlank() ||
-                tags["natural"] in setOf("waterfall","peak","cave_entrance")->4
+            // Many cities have poor wikidata coverage in OSM. Named tourist
+            // sights still deserve city-level visibility without a wiki tag.
+            tourism in setOf("museum","attraction","gallery","zoo","theme_park") ||
+                historic in setOf("castle","monument","archaeological_site","fort")->3
+            tourism=="viewpoint" || historic.isNotBlank() ||
+                tags["natural"] in setOf("waterfall","peak","cave_entrance") ||
+                tags["leisure"] in setOf("nature_reserve","park")->4
             else->5
         }
     }
@@ -160,6 +164,18 @@ internal object GlobalObjectivePolicy {
  * House nomination, the World Wonders longitude/latitude coordinate sheet.
  */
 internal object GlobalWorldLandmarks {
+    private data class Seed(val id:String,val name:String,val category:String,
+        val lat:Double,val lon:Double,val city:String)
+    // Keep the original iconic worldwide sites at the smallest scales.
+    private val worldwideCoreIds=setOf(
+        "world_eiffel","world_liberty","world_sydney_opera","world_taj",
+        "world_machu","world_giza","world_colosseum","world_petra",
+        "world_chichen","world_redeemer","world_angkor",
+        "world_golden_gate","world_everest"
+    )
+    fun visible(zoom:Double):List<ReconObjective> =
+        if(zoom<6.0)all.filter{it.id in worldwideCoreIds} else all
+
     val all:List<ReconObjective> = listOf(
         ReconObjective("world_eiffel","Eiffel Tower","ARCH",48.8584,2.2945,
             "Paris / Worldwide architectural landmark.","https://www.openstreetmap.org/?mlat=48.8584&mlon=2.2945"),
@@ -187,5 +203,64 @@ internal object GlobalWorldLandmarks {
             "San Francisco / Bridge landmark.","https://www.openstreetmap.org/?mlat=37.8199&mlon=-122.4783"),
         ReconObjective("world_everest","Mount Everest","NATURE",27.9881,86.9253,
             "Himalayas / Mountain summit.","https://www.openstreetmap.org/?mlat=27.9881&mlon=86.9253")
-    )
+    ) + listOf(
+        // Approximate public landmark centres: offline discovery seeds, not
+        // entrances, reviews, or a replacement for nearby live OSM features.
+        Seed("world_sagrada","Sagrada Família","ARCH",41.4036,2.1744,"Barcelona"),
+        Seed("world_louvre","Louvre Museum","ART",48.8606,2.3376,"Paris"),
+        Seed("world_notredame","Notre-Dame Cathedral","HERITAGE",48.8530,2.3499,"Paris"),
+        Seed("world_arc_triomphe","Arc de Triomphe","HERITAGE",48.8738,2.2950,"Paris"),
+        Seed("world_elizabeth_tower","Elizabeth Tower / Big Ben","HERITAGE",51.5007,-0.1246,"London"),
+        Seed("world_tower_bridge","Tower Bridge","ARCH",51.5055,-0.0754,"London"),
+        Seed("world_buckingham","Buckingham Palace","HERITAGE",51.5014,-0.1419,"London"),
+        Seed("world_acropolis","Acropolis of Athens","HERITAGE",37.9715,23.7257,"Athens"),
+        Seed("world_brandenburg","Brandenburg Gate","HERITAGE",52.5163,13.3777,"Berlin"),
+        Seed("world_neuschwanstein","Neuschwanstein Castle","HERITAGE",47.5576,10.7498,"Bavaria"),
+        Seed("world_saint_peter","St Peter's Basilica","HERITAGE",41.9022,12.4539,"Vatican City"),
+        Seed("world_pisa","Leaning Tower of Pisa","HERITAGE",43.7230,10.3966,"Pisa"),
+        Seed("world_hagia_sophia","Hagia Sophia","HERITAGE",41.0086,28.9802,"Istanbul"),
+        Seed("world_charles_bridge","Charles Bridge","ARCH",50.0865,14.4114,"Prague"),
+        Seed("world_alhambra","Alhambra","HERITAGE",37.1761,-3.5881,"Granada"),
+        Seed("world_table_mountain","Table Mountain","NATURE",-33.9628,18.4098,"Cape Town"),
+        Seed("world_victoria_falls","Victoria Falls","NATURE",-17.9243,25.8572,"Zimbabwe / Zambia"),
+        Seed("world_kilimanjaro","Mount Kilimanjaro","NATURE",-3.0674,37.3556,"Tanzania"),
+        Seed("world_hassan_mosque","Hassan II Mosque","HERITAGE",33.6084,-7.6326,"Casablanca"),
+        Seed("world_abu_simbel","Abu Simbel Temples","HERITAGE",22.3372,31.6258,"Egypt"),
+        Seed("world_burj_khalifa","Burj Khalifa","ARCH",25.1921,55.2814,"Dubai"),
+        Seed("world_sheikh_zayed_mosque","Sheikh Zayed Grand Mosque","HERITAGE",24.4127,54.4749,"Abu Dhabi"),
+        Seed("world_tokyo_tower","Tokyo Tower","ARCH",35.6586,139.7454,"Tokyo"),
+        Seed("world_tokyo_skytree","Tokyo Skytree","ARCH",35.7101,139.8107,"Tokyo"),
+        Seed("world_fushimi_inari","Fushimi Inari Shrine","HERITAGE",34.9671,135.7727,"Kyoto"),
+        Seed("world_mount_fuji","Mount Fuji","NATURE",35.3606,138.7274,"Japan"),
+        Seed("world_forbidden_city","Forbidden City","HERITAGE",39.9163,116.3972,"Beijing"),
+        Seed("world_great_wall","Great Wall of China","HERITAGE",40.4319,116.5704,"Beijing region"),
+        Seed("world_shanghai_tower","Shanghai Tower","ARCH",31.2335,121.5056,"Shanghai"),
+        Seed("world_petronas","Petronas Towers","ARCH",3.1579,101.7116,"Kuala Lumpur"),
+        Seed("world_mbs","Marina Bay Sands","ARCH",1.2834,103.8607,"Singapore"),
+        Seed("world_gardens_bay","Gardens by the Bay","NATURE",1.2816,103.8636,"Singapore"),
+        Seed("world_borobudur","Borobudur Temple","HERITAGE",-7.6079,110.2038,"Java"),
+        Seed("world_shwedagon","Shwedagon Pagoda","HERITAGE",16.7984,96.1496,"Yangon"),
+        Seed("world_wat_arun","Wat Arun","HERITAGE",13.7437,100.4889,"Bangkok"),
+        Seed("world_gateway_india","Gateway of India","HERITAGE",18.9219,72.8347,"Mumbai"),
+        Seed("world_empire_state","Empire State Building","ARCH",40.7484,-73.9857,"New York"),
+        Seed("world_one_world_trade","One World Trade Center","ARCH",40.7127,-74.0134,"New York"),
+        Seed("world_central_park","Central Park","NATURE",40.7829,-73.9654,"New York"),
+        Seed("world_cn_tower","CN Tower","ARCH",43.6426,-79.3871,"Toronto"),
+        Seed("world_niagara","Niagara Falls","NATURE",43.0962,-79.0377,"Canada / USA"),
+        Seed("world_space_needle","Space Needle","ARCH",47.6205,-122.3493,"Seattle"),
+        Seed("world_griffith","Griffith Observatory","ARCH",34.1184,-118.3004,"Los Angeles"),
+        Seed("world_grand_canyon","Grand Canyon South Rim","NATURE",36.1069,-112.1129,"Arizona"),
+        Seed("world_teotihuacan","Teotihuacan Pyramids","HERITAGE",19.6925,-98.8438,"Mexico"),
+        Seed("world_iguazu","Iguazu Falls","NATURE",-25.6953,-54.4367,"Argentina / Brazil"),
+        Seed("world_sugarloaf","Sugarloaf Mountain","NATURE",-22.9486,-43.1566,"Rio de Janeiro"),
+        Seed("world_salar_uyuni","Salar de Uyuni","NATURE",-20.1338,-67.4891,"Bolivia"),
+        Seed("world_sydney_bridge","Sydney Harbour Bridge","ARCH",-33.8523,151.2108,"Sydney"),
+        Seed("world_uluru","Uluru","NATURE",-25.3444,131.0369,"Australia"),
+        Seed("world_auckland_sky","Sky Tower Auckland","ARCH",-36.8485,174.7622,"Auckland"),
+        Seed("world_milford_sound","Milford Sound","NATURE",-44.6718,167.9256,"New Zealand")
+    ).map{seed->
+        ReconObjective(seed.id,seed.name,seed.category,seed.lat,seed.lon,
+            seed.city+" / Selected world landmark (approximate centre).",
+            "https://www.openstreetmap.org/?mlat=${seed.lat}&mlon=${seed.lon}")
+    }
 }
