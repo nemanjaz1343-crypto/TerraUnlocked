@@ -178,10 +178,19 @@ class DiscoveryFogOverlay(
     }
 
     private fun prepareSnapshot(map:MapView) {
-        // This step runs on the UI thread AFTER idle; it only projects positions.
-        // Raster circles, line paths and all blur loops run off the UI thread.
+        // Never project the full history mid-drag or while brush samples are
+        // coming in. The clamped shader can safely span any exposed edges
+        // until movement settles. Preserve 60Hz gesture responsiveness.
         pendingBuild=false
         nextBuildAt=0L
+        if(fluidBrush.isActive ||
+            (organicMask!=null &&
+                android.os.SystemClock.uptimeMillis()-lastPanElapsed<100L)) {
+            scheduleRaster(115L)
+            return
+        }
+        // Projection metadata is captured on UI thread only when idle.
+        // Rasterization/blur stays on the dedicated worker.
         val visible=records()
         val simulation=demo()
         val points=if(simulation.isEmpty())visible else visible+simulation
