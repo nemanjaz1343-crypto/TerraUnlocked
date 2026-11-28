@@ -120,7 +120,8 @@ class MainActivity : Activity(), SensorEventListener {
         val oldIds=regionalObjectives.map{it.id}
         val legacy=ReconObjectives.all+objectiveStore.customPlaces()
         regionalObjectives=GlobalObjectivePolicy.distinct(
-            legacy,globalObjectiveStore.nearby(lat,lon,zoom))
+            legacy,globalObjectiveStore.nearby(lat,lon,zoom)+
+                globalObjectiveStore.savedForZoom(zoom))
         if(regionalObjectives.map{it.id}!=oldIds)map.invalidate()
         if(offline || globalObjectiveLoading ||
             !globalObjectiveStore.needsFetch(lat,lon,zoom,System.currentTimeMillis()))
@@ -2854,6 +2855,7 @@ class MainActivity : Activity(), SensorEventListener {
             return
         }
         val selected=candidate.first
+        globalObjectiveStore.remember(selected)
         if(selected.id in journeyDraft) {
             journeyDraft.remove(selected.id)
             status.text=terms.journey+" / REMOVED "+selected.name.take(24)
