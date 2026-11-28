@@ -127,7 +127,7 @@ class ObjectiveMarkerArt(context:Context) {
         }
         val visibleColor=if(muted)Color.argb(145,200,200,195) else color
         c.save()
-        c.scale(0.82f,0.82f,x,y)
+        c.scale(0.84f,0.84f,x,y)
         val radius=d(if(active)21f else 19.5f)
         paint.style=Paint.Style.FILL
         paint.clearShadowLayer()
@@ -135,26 +135,35 @@ class ObjectiveMarkerArt(context:Context) {
             (if(transit)Color.argb(242,15,32,43) else Color.argb(240,20,32,27))
             else theme.dark
 
-        fun diamond(r:Float):Path = Path().apply {
-            moveTo(x,y-r)
-            lineTo(x+r,y)
-            lineTo(x,y+r)
-            lineTo(x-r,y)
-            close()
+        // Rounded/chamfered diamond: geometry is drawn as a rounded square
+        // rotated by 45°. No software BlurMaskFilter or shadow allocations
+        // per frame; the low-alpha outline creates a soft lightweight halo.
+        fun badge(r:Float) {
+            if(circular) {
+                c.drawCircle(x,y,r,paint)
+            } else {
+                val half=r*0.70710678f
+                c.save()
+                c.rotate(45f,x,y)
+                c.drawRoundRect(RectF(x-half,y-half,x+half,y+half),
+                    d(4.9f),d(4.9f),paint)
+                c.restore()
+            }
         }
-        if(circular)c.drawCircle(x,y,radius,paint)
-        else c.drawPath(diamond(radius),paint)
-
+        badge(radius)
         if(active) {
             paint.style=Paint.Style.STROKE
-            paint.strokeWidth=d(4f)
-            paint.color=Color.argb(65,249,216,145)
-            if(circular)c.drawCircle(x,y,radius+d(4f),paint)
-            else c.drawPath(diamond(radius+d(3.5f)),paint)
+            paint.strokeWidth=d(5f)
+            paint.color=Color.argb(50,249,216,145)
+            badge(radius+d(4f))
+        } else {
+            paint.style=Paint.Style.STROKE
+            paint.strokeWidth=d(2.8f)
+            paint.color=Color.argb(41,200,181,138)
+            badge(radius+d(.8f))
         }
-        stroke(visibleColor,if(active)2.2f else 1.8f)
-        if(circular)c.drawCircle(x,y,radius-d(1.3f),paint)
-        else c.drawPath(diamond(radius-d(1.3f)),paint)
+        stroke(visibleColor,if(active)2.0f else 1.55f)
+        badge(radius-d(1.4f))
 
         glyph(c,x,y,type,visibleColor)
         if(done) {
