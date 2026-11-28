@@ -5667,6 +5667,7 @@ class MainActivity : Activity(), SensorEventListener {
         if(receiverRegistered) {unregisterReceiver(trackingReceiver);receiverRegistered=false}
     }
     override fun onDestroy() {
+        if(::fogOverlay.isInitialized)fogOverlay.release()
         activeVoiceMeterTick?.let{handler.removeCallbacks(it)}
         activeVoiceMeterTick=null
         runCatching{recorder?.stop()}
