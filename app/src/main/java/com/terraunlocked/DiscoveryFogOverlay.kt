@@ -7,6 +7,8 @@ import android.graphics.Path
 import android.graphics.Point
 import android.graphics.RadialGradient
 import android.graphics.Shader
+import android.graphics.BitmapShader
+import android.graphics.Matrix
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Overlay
@@ -80,6 +82,8 @@ class DiscoveryFogOverlay(
         job->Thread(job,"terra-fog-raster").apply{isDaemon=true}
     }
     private var organicMask:android.graphics.Bitmap?=null
+    private var fogShader:BitmapShader?=null
+    private val shaderMatrix=Matrix()
     private var routeRaster:android.graphics.Bitmap?=null
     private var cachedOrigin:GeoPoint?=null
     private var cachedOriginPixel:Point?=null
@@ -92,19 +96,36 @@ class DiscoveryFogOverlay(
     private var cachedHeight=0
     private var activeMap:MapView?=null
     private var pendingBuild=false
+    private var nextBuildAt=0L
     private var inFlightBuilds=0
     private var generation=0
     private var lastSignature=""
     private var lastPanElapsed=0L
-    var liveBrushStroke:List<GeoPoint> = emptyList()
-    private val liveBrushPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color=Color.WHITE
-        style=Paint.Style.STROKE
-        strokeCap=Paint.Cap.ROUND
-        strokeJoin=Paint.Join.ROUND
-        xfermode=android.graphics.PorterDuffXfermode(
-            android.graphics.PorterDuff.Mode.DST_OUT)
+    private val fluidBrush=FluidRevealPreview()
+
+    /** Direct finger-to-map drawing. No history bitmap rebuild per move. */
+    fun beginFluidReveal(map:MapView,x:Float,y:Float) {
+        val loc=map.projection.fromPixels(x.toInt(),y.toInt())
+        val r=radiusPx(map,loc.latitude,loc.longitude).coerceAtLeast(4f)
+        fluidBrush.begin(map.width,map.height,
+            {base->drawCachedFog(base,map)},x,y,r)
+        map.postInvalidateOnAnimation()
     }
+    fun moveFluidReveal(map:MapView,x:Float,y:Float) {
+        val loc=map.projection.fromPixels(x.toInt(),y.toInt())
+        val r=radiusPx(map,loc.latitude,loc.longitude).coerceAtLeast(4f)
+        fluidBrush.move(x,y,r)
+        map.postInvalidateOnAnimation()
+    }
+    fun endFluidReveal(map:MapView) {
+        fluidBrush.finish()
+        map.postInvalidateOnAnimation()
+    }
+    fun cancelFluidReveal(map:MapView) {
+        fluidBrush.cancel()
+        map.postInvalidateOnAnimation()
+    }
+
     private val maskPaint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply{
         colorFilter=android.graphics.PorterDuffColorFilter(
             ExpeditionThemes.current.dark,android.graphics.PorterDuff.Mode.SRC_IN)
@@ -118,11 +139,26 @@ class DiscoveryFogOverlay(
         if(map!=null)prepareSnapshot(map)
         else pendingBuild=false
     }
-    /** Never recompute fog while the finger moves or the zoom animates. */
+    /**
+     * A cached geographical mask can be reprojected while the map moves.
+     * Do not invalidate a worker on EVERY pan event: that left the cached
+     * raster stranded and created visible seams at the overscan boundary.
+     * Trigger a near-term rebuild when reaching the safe outer margin.
+     */
     fun onMapPanned() {
         lastPanElapsed=android.os.SystemClock.uptimeMillis()
-        generation++ // reject any in-flight raster built for an old viewport
-        scheduleRaster(300L)
+        val map=activeMap
+        val urgent=if(map!=null && organicMask!=null) {
+            val bounds=cachedBounds(map)
+            val margin=(minOf(map.width,map.height)*.16f).coerceAtLeast(65f)
+            bounds.left> -margin || bounds.top> -margin ||
+                bounds.right<map.width+margin ||
+                bounds.bottom<map.height+margin ||
+                kotlin.math.abs(map.zoomLevelDouble-cachedZoom)>.12
+        }else true
+        if(urgent) {
+            if(inFlightBuilds==0)scheduleRaster(35L)
+        } else scheduleRaster(170L)
     }
 
     /** History import, time-machine or brush committed: use the same debounce. */
@@ -133,7 +169,10 @@ class DiscoveryFogOverlay(
     }
 
     private fun scheduleRaster(delayMs:Long) {
+        val target=android.os.SystemClock.uptimeMillis()+delayMs
+        if(pendingBuild && nextBuildAt<=target)return
         pendingBuild=true
+        nextBuildAt=target
         mainThread.removeCallbacks(rebuild)
         mainThread.postDelayed(rebuild,delayMs)
     }
@@ -142,6 +181,7 @@ class DiscoveryFogOverlay(
         // This step runs on the UI thread AFTER idle; it only projects positions.
         // Raster circles, line paths and all blur loops run off the UI thread.
         pendingBuild=false
+        nextBuildAt=0L
         val visible=records()
         val simulation=demo()
         val points=if(simulation.isEmpty())visible else visible+simulation
@@ -184,8 +224,15 @@ class DiscoveryFogOverlay(
                     // allocation fails or Android is low on memory.
                     return@post
                 }
+                val priorMask=organicMask
+                val priorRoute=routeRaster
                 organicMask=raster.mask
+                fogShader=BitmapShader(raster.mask,
+                    Shader.TileMode.CLAMP,Shader.TileMode.CLAMP)
                 routeRaster=raster.route
+                if(priorMask!==raster.mask)priorMask?.recycle()
+                if(priorRoute!==raster.route)priorRoute?.recycle()
+                fluidBrush.rasterUpdated()
                 cachedWidth=w;cachedHeight=h;cachedPad=pad
                 cachedZoom=zoom;cachedScale=1f
                 cachedOrigin=origin
