@@ -952,8 +952,19 @@ class MainActivity : Activity(), SensorEventListener {
             setTileSource(TileSourceFactory.MAPNIK)
             setMultiTouchControls(true)
             setBuiltInZoomControls(false)
-            controller.setZoom(16.0)
-            controller.setCenter(GeoPoint(25.0657, 55.1403))
+            // Reopen where the user was last exploring. A fresh install
+            // starts on a neutral world view, not the developer's Dubai map.
+            val viewPrefs=getSharedPreferences("terra_map_view_v1",Context.MODE_PRIVATE)
+            val lat=viewPrefs.getString("lat",null)?.toDoubleOrNull()
+            val lon=viewPrefs.getString("lon",null)?.toDoubleOrNull()
+            if(lat!=null && lon!=null && lat in -85.0..85.0 && lon in -180.0..180.0) {
+                controller.setZoom(viewPrefs.getFloat("zoom",12f).toDouble()
+                    .coerceIn(2.5,20.0))
+                controller.setCenter(GeoPoint(lat,lon))
+            } else {
+                controller.setZoom(3.0)
+                controller.setCenter(GeoPoint(18.0,0.0))
+            }
         }
         // Normal play: reuse the actual lists (no 3,500-item filter/copy on
         // every map animation frame). The time-machine still filters as before.
@@ -964,7 +975,15 @@ class MainActivity : Activity(), SensorEventListener {
             {if(historyCutoff==null)notes else notes.filter{it.time<=historyCutoff!!}}
         )
         map.overlays.add(fogOverlay)
-        restoreLastKnownFix()
+        val hasInitialPosition=restoreLastKnownFix()
+        if(hasInitialPosition &&
+            !getSharedPreferences("terra_map_view_v1",Context.MODE_PRIVATE)
+                .contains("lat")) {
+            fogOverlay.currentPosition?.let {
+                map.controller.setZoom(15.0)
+                map.controller.setCenter(it)
+            }
+        }
         map.overlays.add(object:Overlay() {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
                 if(shadow)return
@@ -1143,13 +1162,9 @@ class MainActivity : Activity(), SensorEventListener {
                     kotlin.math.hypot((event.x-touchStartX).toDouble(),
                         (event.y-touchStartY).toDouble())>dp(22)) {
                     followUser=false
-                    if(headingUp) {
-                        headingUp=false
-                        getSharedPreferences("terra_map_orientation_v1",
-                            Context.MODE_PRIVATE).edit().putBoolean("heading_up",false).apply()
-                        map.setMapOrientation(0f,false)
-                        updateHeadingLockUi()
-                    }
+                    // Panning pauses auto-centering, not the compass lock:
+                    // a small accidental drag should not reset orientation.
+                    if(headingUp)status.text="HEADING-UP / PAN PAUSED / TAP LOCATE TO FOLLOW"
                     if(::followButton.isInitialized)followButton.text="LOCATE ○"
                 }
                 return false
@@ -2080,12 +2095,9 @@ class MainActivity : Activity(), SensorEventListener {
         followButton.setOnClickListener {
             followUser=true
             fogOverlay.currentPosition?.let{
-                val next=(map.zoomLevelDouble+0.5849625).coerceAtMost(map.maxZoomLevel.toDouble())
-                map.controller.setZoom(next)
                 map.controller.animateTo(it)
-                status.text="LOCATE / ZOOM 150%"
-            }
-                ?:run{status.text="LOCATE / WAITING FOR GPS"}
+                status.text="LOCATE / FOLLOW ACTIVE / ZOOM UNCHANGED"
+            } ?: run{locateOnce()}
         }
         markButton.setOnClickListener {
             val opening=palette.visibility!=View.VISIBLE
@@ -5427,6 +5439,15 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
     override fun onPause() {
+        if(::map.isInitialized) {
+            val loc=map.mapCenter
+            if(loc.latitude.isFinite() && loc.longitude.isFinite()) {
+                getSharedPreferences("terra_map_view_v1",Context.MODE_PRIVATE).edit()
+                    .putString("lat",loc.latitude.toString())
+                    .putString("lon",loc.longitude.toString())
+                    .putFloat("zoom",map.zoomLevelDouble.toFloat()).apply()
+            }
+        }
         handler.removeCallbacks(globalRefreshTask)
         handler.removeCallbacks(mallRefreshTask)
         handler.removeCallbacks(taxiRefreshTask)
