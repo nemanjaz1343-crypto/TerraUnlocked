@@ -131,13 +131,41 @@ class TerraArchive(private val context:Context) {
     }
 
     private fun applyImport(input:InputStream) {
+        // Always cap reads BEFORE allocating the next chunk. Stage large
+        // attachments on disk instead of retaining every byte in RAM.
+        var totalBytes=0L
+        fun stage(zip:ZipInputStream,out:java.io.OutputStream,limit:Long) {
+            val buffer=ByteArray(8192)
+            var size=0L
+            while(true) {
+                val count=zip.read(buffer)
+                if(count<0)break
+                size+=count
+                totalBytes+=count
+                require(size<=limit && totalBytes<=256L*1024L*1024L) {
+                    "Backup exceeds safe decompressed limits"
+                }
+                out.write(buffer,0,count)
+            }
+        }
+        fun boundedText(zip:ZipInputStream,limit:Long):String {
+            val out=java.io.ByteArrayOutputStream()
+            stage(zip,out,limit)
+            return out.toString("UTF-8")
+        }
+        val stageDir=File(context.cacheDir,"terra_import_"+System.nanoTime()).apply{
+            check(mkdirs()) {"Cannot stage backup files"}
+        }
+        try {
         // Finish any recently queued manual strokes before a backup restore
         // replaces discoveries.json. Otherwise a late writer could append
         // stale strokes into the newly imported history.
         DiscoveryStore(context).flushPending()
         val fields=mutableMapOf<String,String>()
-        val media=mutableMapOf<String,ByteArray>()
-        val gpsFiles=mutableMapOf<String,ByteArray>()
+        val media=mutableMapOf<String,File>()
+        val gpsFiles=mutableMapOf<String,File>()
+        val entryNames=HashSet<String>()
+        var entryCount=0
         var anchors:JSONObject?=null
         var journey:JSONObject?=null
         var objectiveState:JSONObject?=null
@@ -146,62 +174,45 @@ class TerraArchive(private val context:Context) {
             while(true) {
                 val entry=zip.nextEntry ?: break
                 val name=entry.name
+                require(++entryCount<=600 && entryNames.add(name)) {
+                    "Too many or duplicate backup entries"
+                }
                 if(name=="anchors.json") {
-                    val bytes=zip.readBytes()
-                    require(bytes.size<=100_000) {"Anchors too large"}
-                    anchors=JSONObject(bytes.toString(Charsets.UTF_8))
+                    anchors=JSONObject(boundedText(zip,100_000L))
                 } else if(name=="journey.json") {
-                    val bytes=zip.readBytes()
-                    require(bytes.size<=100_000) {"Journey too large"}
-                    journey=JSONObject(bytes.toString(Charsets.UTF_8))
+                    journey=JSONObject(boundedText(zip,100_000L))
                 } else if(name=="global_objectives.json") {
-                    val bytes=zip.readBytes()
-                    require(bytes.size<=250_000) {"Global objective metadata too large"}
-                    val raw=bytes.toString(Charsets.UTF_8)
+                    val raw=boundedText(zip,250_000L)
                     org.json.JSONArray(raw)
                     globalObjectives=raw
                 } else if(name=="objective_state.json") {
-                    val bytes=zip.readBytes()
-                    require(bytes.size<=100_000) {"Objective state too large"}
-                    objectiveState=JSONObject(bytes.toString(Charsets.UTF_8))
+                    objectiveState=JSONObject(boundedText(zip,100_000L))
                 } else if(name in keys.map {it.first}) {
-                    val data=zip.readBytes()
-                    require(data.size<=15_000_000) {"Archive data too large"}
-                    val value=data.toString(Charsets.UTF_8)
+                    val value=boundedText(zip,15_000_000L)
                     org.json.JSONArray(value)
                     fields[name]=value
                 } else if(name in listOf("terra_gps_raw.csv","terra_gps_trace.csv",
                         "terra_gps_diagnostics.csv")) {
-                    val out=java.io.ByteArrayOutputStream()
-                    val buffer=ByteArray(8192)
-                    while(true) {
-                        val count=zip.read(buffer)
-                        if(count<0)break
-                        require(out.size()+count<=10_000_000) {"GPS archive too large"}
-                        out.write(buffer,0,count)
-                    }
-                    gpsFiles[name]=out.toByteArray()
+                    val output=File(stageDir,name)
+                    output.outputStream().use{stage(zip,it,40_000_000L)}
+                    gpsFiles[name]=output
                 } else if(name.startsWith("media/")) {
                     val filename=name.removePrefix("media/")
-                    if(filename.isNotBlank() && !filename.contains("/") && !filename.contains("\\") && !filename.startsWith(".")) {
-                        val out=java.io.ByteArrayOutputStream()
-                        val buffer=ByteArray(8192)
-                        while(true) {
-                            val count=zip.read(buffer)
-                            if(count<0)break
-                            require(out.size()+count<=25_000_000) {"Attachment too large"}
-                            out.write(buffer,0,count)
-                        }
-                        media[filename]=out.toByteArray()
+                    require(filename.isNotBlank() && !filename.contains("/") &&
+                        !filename.contains("\\") && !filename.startsWith(".")) {
+                        "Unsafe media entry"
                     }
+                    val output=File(stageDir,"media_"+entryCount)
+                    output.outputStream().use{stage(zip,it,25_000_000L)}
+                    media[filename]=output
                 }
                 zip.closeEntry()
             }
         }
         require(fields.keys.containsAll(keys.take(3).map {it.first})) {"Incomplete TerraUnlocked archive"}
         // Archive is validated before replacing local data.
-        for((name,bytes) in media) File(context.filesDir,name).writeBytes(bytes)
-        for((name,bytes) in gpsFiles) File(context.filesDir,name).writeBytes(bytes)
+        for((name,source) in media) source.copyTo(File(context.filesDir,name),overwrite=true)
+        for((name,source) in gpsFiles) source.copyTo(File(context.filesDir,name),overwrite=true)
         anchors?.let {j->
             val edit=context.getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE).edit()
             j.keys().forEach {k->edit.putString(k,j.optString(k))}
@@ -250,5 +261,6 @@ class TerraArchive(private val context:Context) {
                 .map{it.id}.toSet()
             JourneyStore(context).save(ids,valid,plan.optBoolean("enabled",false))
         }
+        } finally {stageDir.deleteRecursively()}
     }
 }
