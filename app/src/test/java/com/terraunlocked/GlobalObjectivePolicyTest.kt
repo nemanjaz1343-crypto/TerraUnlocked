@@ -38,6 +38,14 @@ class GlobalObjectivePolicyTest {
         assertTrue(legacy.any{it.id=="almas"})
     }
 
+    @Test fun accentedAndUnaccentedNamesDoNotOverlapAsDuplicateIcons() {
+        val accented=ReconObjective("world_chichen","Chichén Itzá","HERITAGE",
+            20.68428,-88.56778,"World","")
+        val mapped=ReconObjective("osm_way_9876","Chichen Itza","HERITAGE",
+            20.68430,-88.56777,"OSM","")
+        assertTrue(GlobalObjectivePolicy.overlapping(accented,mapped))
+    }
+
     @Test fun osmMetadataMapsToRelevantCategoriesAndTiers() {
         assertEquals(2,GlobalObjectivePolicy.tier(mapOf(
             "tourism" to "attraction","wikidata" to "Q123")))
