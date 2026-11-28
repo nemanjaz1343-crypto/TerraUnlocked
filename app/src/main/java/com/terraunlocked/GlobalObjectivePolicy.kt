@@ -49,8 +49,12 @@ internal object GlobalObjectivePolicy {
     }
 
     fun overlapping(a:ReconObjective,b:ReconObjective):Boolean {
-        val aName=a.name.lowercase(Locale.US).replace(Regex("[^a-z0-9]+"),"").trim()
-        val bName=b.name.lowercase(Locale.US).replace(Regex("[^a-z0-9]+"),"").trim()
+        fun folded(value:String):String=java.text.Normalizer.normalize(
+            value.lowercase(Locale.US),java.text.Normalizer.Form.NFD)
+            .replace(Regex("\\p{M}+"),"")
+            .replace(Regex("[^a-z0-9]+"),"").trim()
+        val aName=folded(a.name)
+        val bName=folded(b.name)
         return aName==bName && distanceMetres(
             a.latitude,a.longitude,b.latitude,b.longitude)<400.0
     }
