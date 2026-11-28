@@ -91,7 +91,46 @@ class TerraArchive(private val context:Context) {
             }
         }
     }
-    fun importFrom(input:InputStream) {
+    private val recoveryFile:File get()=File(context.filesDir,"terra_restore_recovery.zip")
+    private val recoveryPrefs get()=context.getSharedPreferences(
+        "terra_restore_transaction_v1",Context.MODE_PRIVATE)
+
+    /**
+     * A complete pre-restore backup is created *before* mutating any files.
+     * The durable marker allows a rollback on a later app launch if Android
+     * kills this process in the middle of the multi-preference restore.
+     */
+    @Synchronized fun recoverInterruptedRestore() {
+        if(!recoveryPrefs.getBoolean("in_progress",false))return
+        check(recoveryFile.isFile) {"Restore recovery file is missing"}
+        recoveryFile.inputStream().use{applyImport(it)}
+        check(recoveryPrefs.edit().putBoolean("in_progress",false).commit())
+        recoveryFile.delete()
+    }
+
+    @Synchronized fun importFrom(input:InputStream) {
+        recoverInterruptedRestore()
+        val temp=File(context.filesDir,"terra_restore_recovery.tmp")
+        try {
+            temp.outputStream().use{exportTo(it)}
+            check(temp.isFile && temp.length()>0L) {"Could not stage rollback"}
+            if(recoveryFile.exists())recoveryFile.delete()
+            check(temp.renameTo(recoveryFile)) {"Cannot install rollback"}
+            check(recoveryPrefs.edit().putBoolean("in_progress",true).commit())
+            try {
+                applyImport(input)
+                check(recoveryPrefs.edit().putBoolean("in_progress",false).commit())
+                recoveryFile.delete()
+            } catch(error:Throwable) {
+                // Attempt immediate rollback, but retain the recovery marker
+                // if this fails, so onCreate can retry before reading data.
+                runCatching{recoverInterruptedRestore()}
+                throw error
+            }
+        } finally {temp.delete()}
+    }
+
+    private fun applyImport(input:InputStream) {
         // Finish any recently queued manual strokes before a backup restore
         // replaces discoveries.json. Otherwise a late writer could append
         // stale strokes into the newly imported history.
