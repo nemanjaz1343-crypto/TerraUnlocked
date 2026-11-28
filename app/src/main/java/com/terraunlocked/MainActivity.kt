@@ -449,7 +449,8 @@ class MainActivity : Activity(), SensorEventListener {
     private var lastTrackTapElapsed=0L
     private val gpsStatusTick=object:Runnable {
         override fun run() {
-            if(tracking && lastVerifiedGpsElapsed>0L &&
+            if(tracking && !TrackingService.resting &&
+                lastVerifiedGpsElapsed>0L &&
                 android.os.SystemClock.elapsedRealtime()-lastVerifiedGpsElapsed>45000L) {
                 status.text="GPS SIGNAL WEAK / NO FRESH VERIFIED POSITION / CHECK OPEN SKY"
                 expeditionBottom?.gpsSearching=true
@@ -5669,7 +5670,9 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
     override fun onResume() {
-        super.onResume(); map.onResume()
+        super.onResume()
+        if(!::map.isInitialized)return
+        map.onResume()
         lastVerifiedGpsElapsed=android.os.SystemClock.elapsedRealtime()
         handler.removeCallbacks(gpsStatusTick)
         handler.postDelayed(gpsStatusTick,15000L)
@@ -5741,7 +5744,9 @@ class MainActivity : Activity(), SensorEventListener {
         handler.removeCallbacks(taxiRefreshTask)
         handler.removeCallbacks(repositionBubbleAfterPan)
         handler.removeCallbacks(solarTick)
-        super.onPause(); sensors.unregisterListener(this); map.onPause()
+        super.onPause()
+        if(::sensors.isInitialized)sensors.unregisterListener(this)
+        if(::map.isInitialized)map.onPause()
         if(receiverRegistered) {unregisterReceiver(trackingReceiver);receiverRegistered=false}
     }
     override fun onDestroy() {
