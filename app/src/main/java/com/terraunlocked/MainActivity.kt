@@ -98,6 +98,7 @@ class MainActivity : Activity(), SensorEventListener {
     // Dynamic worldwide places augment -- never replace -- Dubai and SAVED IDs.
     // Draw only reads this snapshot; networking/cache writes run on a worker.
     private val globalObjectiveStore by lazy{GlobalObjectiveStore(applicationContext)}
+    private val objectiveLinkResolver by lazy{ObjectiveLinkResolver(applicationContext)}
     private var regionalObjectives:List<ReconObjective> = emptyList()
     private val globalObjectiveWorker=java.util.concurrent.Executors.newSingleThreadExecutor{
         job->Thread(job,"terra-global-objectives").apply{isDaemon=true}
@@ -3555,6 +3556,65 @@ class MainActivity : Activity(), SensorEventListener {
                 }
             }
         )
+        if(!o.id.startsWith("saved_")) {
+            val initialLinks=objectiveLinkResolver.cached(o)
+            var officialSite=initialLinks.website
+            val linksRow=LinearLayout(this).apply {
+                orientation=LinearLayout.HORIZONTAL
+                setPadding(0,dp(5),0,0)
+            }
+            val sourceButton=action("⌖ VIEW OSM MAP").apply {
+                applyExpeditionStyle(this)
+                contentDescription="Open stable OpenStreetMap source for ${o.name}"
+                setOnClickListener {
+                    popup.dismiss()
+                    startActivity(Intent(Intent.ACTION_VIEW,
+                        Uri.parse(initialLinks.source)))
+                }
+            }
+            linksRow.addView(sourceButton,LinearLayout.LayoutParams(0,dp(42),1f).apply{
+                setMargins(dp(2),0,dp(2),0)
+            })
+            val siteButton=action(if(officialSite!=null)"↗ OFFICIAL WEBSITE"
+                else "WEBSITE NOT LISTED").apply {
+                applyExpeditionStyle(this)
+                isEnabled=officialSite!=null
+                contentDescription="Open location website if available"
+                setOnClickListener {
+                    val link=officialSite ?: return@setOnClickListener
+                    popup.dismiss()
+                    startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(link)))
+                }
+            }
+            linksRow.addView(siteButton,LinearLayout.LayoutParams(0,dp(42),1f).apply{
+                setMargins(dp(2),0,dp(2),0)
+            })
+            body.addView(linksRow)
+            // Unlike a fragile venue URL, this source map never depends on
+            // a business website retaining its address. Check OSM website tags
+            // lazily and at most once/day for a bubble the user actually opens.
+            if(objectiveLinkResolver.needsRefresh(o)) {
+                if(officialSite==null)siteButton.text="↻ CHECKING WEBSITE"
+                Thread {
+                    val result=runCatching{objectiveLinkResolver.refresh(o)}
+                    runOnUiThread {
+                        if(!isFinishing && !isDestroyed &&
+                            objectiveBubble===popup && popup.isShowing) {
+                            result.onSuccess {
+                                officialSite=it.website
+                                siteButton.text=if(officialSite!=null)
+                                    "↗ OFFICIAL WEBSITE" else "WEBSITE NOT LISTED"
+                                siteButton.isEnabled=officialSite!=null
+                            }.onFailure {
+                                siteButton.text=if(officialSite!=null)
+                                    "↗ CACHED WEBSITE" else "WEBSITE UNAVAILABLE"
+                                siteButton.isEnabled=officialSite!=null
+                            }
+                        }
+                    }
+                }.start()
+            }
+        }
         val tail=ObjectiveBubbleTail(this).apply {
             pointingUp=false
             minimumHeight=dp(11)
@@ -3571,6 +3631,8 @@ class MainActivity : Activity(), SensorEventListener {
         }
         // First layout and viewport positioning happen after the callout enters WindowManager.
         popup.showAtLocation(map,Gravity.TOP or Gravity.START,0,0)
+        stack.alpha=0f
+        stack.animate().alpha(1f).setDuration(180L).start()
         handler.post {updateObjectiveBubblePosition()}
     }
     private fun showExpeditionJournal() {
