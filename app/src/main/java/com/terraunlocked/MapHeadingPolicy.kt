@@ -22,4 +22,19 @@ internal object MapHeadingPolicy {
 
     fun shouldUpdate(from:Float,to:Float,deltaMs:Long):Boolean =
         deltaMs>=120L && abs(shortestTurn(from,to))>=3f
+
+    /** Time-based low-pass filter. A frame animation keeps the camera smooth
+     * while short-turn arithmetic stops the 359°→0° full-circle spin.
+     * Tiny compass noise is absorbed to prevent perpetual tile redraw.
+     */
+    fun frameAngle(from:Float,target:Float,deltaMs:Long):Float {
+        val distance=shortestTurn(from,target)
+        if(abs(distance)<0.32f)return normalize(from)
+        val elapsed=deltaMs.coerceIn(1L,80L).toDouble()
+        val portion=(1.0-kotlin.math.exp(-elapsed/145.0)).toFloat()
+        return normalize(from+distance*portion)
+    }
+
+    fun needsFrame(from:Float,target:Float):Boolean =
+        abs(shortestTurn(from,target))>=0.32f
 }
