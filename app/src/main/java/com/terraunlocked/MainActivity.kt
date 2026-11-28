@@ -2090,7 +2090,35 @@ class MainActivity : Activity(), SensorEventListener {
         val paletteParams=FrameLayout.LayoutParams(dp(242),dp(70),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
         paletteParams.bottomMargin=dp(12)
         mapArea.addView(palette,paletteParams)
-        root.addView(controls,LinearLayout.LayoutParams(-1,dp(49)))
+        // The artwork remains unchanged; six transparent NATIVE Button
+        // hit targets give TalkBack and Switch Access independent semantics.
+        val accessibleBottom=FrameLayout(this)
+        controls.importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        accessibleBottom.addView(controls,FrameLayout.LayoutParams(-1,-1))
+        val semanticBar=LinearLayout(this).apply{
+            orientation=LinearLayout.HORIZONTAL
+        }
+        val descriptions=listOf(
+            "Start or stop recording my GPS journey",
+            "Find my location and follow me on the map",
+            "Capture a quick photo, video or voice note",
+            "Choose manual map drawing and marking tools",
+            "Erase a previously discovered map area",
+            "Open application settings and data controls")
+        descriptions.forEachIndexed{index,description->
+            semanticBar.addView(Button(this).apply{
+                text=""
+                contentDescription=description
+                background=android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)
+                stateListAnimator=null
+                minWidth=0;minimumWidth=0
+                minHeight=0;minimumHeight=0
+                importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_YES
+                setOnClickListener{controls.onSelect(index)}
+            },LinearLayout.LayoutParams(0,-1,1f))
+        }
+        accessibleBottom.addView(semanticBar,FrameLayout.LayoutParams(-1,-1))
+        root.addView(accessibleBottom,LinearLayout.LayoutParams(-1,dp(49)))
         setContentView(root)
         if(metroStations.isEmpty())handler.post{refreshMetro()}
         handler.postDelayed({maybeRecoverPaths()},12000L)
@@ -3355,7 +3383,7 @@ class MainActivity : Activity(), SensorEventListener {
             for((caption,click) in entries) {
                 val button=action(caption).apply {
                     applyExpeditionStyle(this)
-                    textSize=9.5f
+                    textSize=11f
                     maxLines=2
                     isSingleLine=false
                     setPadding(dp(4),dp(4),dp(4),dp(4))
@@ -5520,7 +5548,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
     private fun action(t: String) = Button(this).apply {
         text=t
-        textSize=10.5f
+        textSize=11.5f
         isAllCaps=false
         gravity=Gravity.CENTER
         includeFontPadding=false
