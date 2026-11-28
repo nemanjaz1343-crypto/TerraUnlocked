@@ -11,6 +11,13 @@ data class DiscoveryPoint(
     val confidence:Int=0
 )
 
+internal object DiscoveryMergePolicy {
+    /** Undo may replace MANUAL discoveries, never newer verified GPS records. */
+    fun replaceManual(persisted:List<DiscoveryPoint>,manual:List<DiscoveryPoint>):List<DiscoveryPoint> =
+        (persisted.filterNot{it.manual}+manual.filter{it.manual})
+            .sortedBy{it.timestamp}
+}
+
 class DiscoveryStore(context:Context) {
     companion object {
         private val sharedWriteLock=Any()
@@ -59,6 +66,28 @@ class DiscoveryStore(context:Context) {
                 it.put("speed",point.speed.toDouble())
             if(point.confidence>0)it.put("confidence",point.confidence)
         }
+    /**
+     * Read-modify-write inside the SAME cross-instance lock used by the
+     * foreground GPS service. UI snapshots can be stale; replace only the
+     * manual data in that case and never clobber saved verified fixes.
+     */
+    fun updateAtomic(change:(List<DiscoveryPoint>)->List<DiscoveryPoint>):List<DiscoveryPoint> =
+        synchronized(sharedWriteLock) {
+            flushPending()
+            val updated=change(decode(array()))
+            val data=JSONArray()
+            updated.forEach{data.put(json(it))}
+            val raw=data.toString()
+            check(preferences.edit().putString("points",raw).commit()) {
+                "Discovery history write failed"
+            }
+            cachedRaw=raw;cachedArray=data
+            updated
+        }
+
+    fun replaceManual(manual:List<DiscoveryPoint>):List<DiscoveryPoint> =
+        updateAtomic { DiscoveryMergePolicy.replaceManual(it,manual) }
+
     fun replaceAll(points:List<DiscoveryPoint>) = synchronized(sharedWriteLock) {
         val data=JSONArray()
         points.forEach {data.put(json(it))}
@@ -79,7 +108,9 @@ class DiscoveryStore(context:Context) {
         synchronized(sharedWriteLock) {
             val pending=JSONArray(preferences.getString(PENDING_MANUAL,"[]"))
             points.forEach{pending.put(json(it))}
-            preferences.edit().putString(PENDING_MANUAL,pending.toString()).apply()
+            check(preferences.edit().putString(PENDING_MANUAL,pending.toString()).commit()) {
+                "Pending manual stroke could not be journaled"
+            }
         }
         manualWriter.execute{flushPending()}
     }
