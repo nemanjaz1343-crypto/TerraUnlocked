@@ -2150,6 +2150,7 @@ class MainActivity : Activity(), SensorEventListener {
         scheduleGlobalObjectiveRefresh(180L)
         loadDubaiTemperature()
         applyMapSource(getSharedPreferences("terra_map_source",Context.MODE_PRIVATE).getInt("selected",0))
+        handler.post{if(!isFinishing && !isDestroyed)showFirstRunGuide()}
     }
 
 
@@ -3208,11 +3209,13 @@ class MainActivity : Activity(), SensorEventListener {
                 if(fix==null || !fix.hasAccuracy() || fix.accuracy>35f ||
                     !fix.latitude.isFinite() || !fix.longitude.isFinite()) {
                     status.text=terms.single+" / GPS ACCURACY REQUIRED (35m OR BETTER)"
+                    showGpsProofHelp(o,"Your GPS accuracy is not yet within 35m.")
                     return@addOnSuccessListener
                 }
                 val fixAgeMillis=(android.os.SystemClock.elapsedRealtimeNanos()-fix.elapsedRealtimeNanos)/1000000L
                 if(fixAgeMillis<0L || fixAgeMillis>30000L) {
                     status.text=terms.single+" / WAIT FOR A FRESH GPS FIX"
+                    showGpsProofHelp(o,"The location reading is too old.")
                     return@addOnSuccessListener
                 }
                 val distance=FloatArray(1)
@@ -3220,6 +3223,7 @@ class MainActivity : Activity(), SensorEventListener {
                     fix.latitude,fix.longitude,o.latitude,o.longitude,distance)
                 if(distance[0]>100f) {
                     status.text=terms.single+" LOCKED / "+distance[0].toInt()+"m AWAY / NEED 100m"
+                    showGpsProofHelp(o,"You are currently outside the 100m check-in range.")
                     return@addOnSuccessListener
                 }
                 val values=android.content.ContentValues().apply {
@@ -3903,6 +3907,91 @@ class MainActivity : Activity(), SensorEventListener {
             android.graphics.drawable.ColorDrawable(ExpeditionThemes.current.surface))
         startTake()
     }
+    /**
+     * LOCATE is separate from TRACK. A one-shot permission only centres the
+     * camera; it never adds any visited territory or starts background GPS.
+     */
+    private fun locateOnce() {
+        if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=
+            PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION),14)
+            return
+        }
+        status.text="LOCATE / SEARCHING FOR POSITION"
+        try {
+            val token=com.google.android.gms.tasks.CancellationTokenSource()
+            client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY,token.token)
+                .addOnSuccessListener {fix->
+                    if(isFinishing || isDestroyed)return@addOnSuccessListener
+                    val age=if(fix!=null)
+                        (android.os.SystemClock.elapsedRealtimeNanos()-
+                            fix.elapsedRealtimeNanos)/1000000L else Long.MAX_VALUE
+                    if(fix!=null && fix.latitude.isFinite() && fix.longitude.isFinite() &&
+                        age in 0..120000L) {
+                        fogOverlay.currentPosition=GeoPoint(fix.latitude,fix.longitude)
+                        fogOverlay.positionAccuracy=if(fix.hasAccuracy())fix.accuracy else 0f
+                        followUser=true
+                        if(map.zoomLevelDouble<10.0)map.controller.setZoom(15.0)
+                        map.controller.animateTo(fogOverlay.currentPosition)
+                        status.text="LOCATE / POSITION FOUND / NOT RECORDING"
+                        refresh()
+                    } else status.text="LOCATE / NO FRESH FIX / TRY OUTDOORS"
+                }
+                .addOnFailureListener {error->
+                    if(!isFinishing)status.text="LOCATE / UNAVAILABLE / CHECK LOCATION SERVICES"
+                }
+        } catch(error:SecurityException) {
+            status.text="LOCATE / PERMISSION REVOKED"
+        }
+    }
+
+    private fun showFirstRunGuide() {
+        val prefs=getSharedPreferences("terra_first_run_v1",Context.MODE_PRIVATE)
+        if(prefs.getBoolean("seen",false))return
+        prefs.edit().putBoolean("seen",true).apply()
+        android.app.AlertDialog.Builder(this)
+            .setTitle("WELCOME TO TERRA")
+            .setMessage("Discover the world by walking.\n\n"+
+                "1. START TRACKING to reveal the map as you move.\n"+
+                "2. Use LOCATE to return to your position.\n"+
+                "3. Open MISSIONS to discover places nearby.\n\n"+
+                "GPS tracking is optional and starts only when you tap TRACK. "+
+                "You can explore the map without recording.")
+            .setPositiveButton("START TRACKING"){_,_->
+                trackButton.performClick()
+            }
+            .setNeutralButton("FIND MY LOCATION"){_,_->locateOnce()}
+            .setNegativeButton("EXPLORE FIRST"){_,_->
+                status.text="EXPLORE / TAP TRACK WHEN READY"
+            }.show()
+    }
+
+    private fun showLocationPermissionHelp() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("LOCATION IS OPTIONAL")
+            .setMessage("TERRA needs precise location to reveal visited "+
+                "territory. Without it you can still explore the map, "+
+                "but walking will not be recorded. Grant permission in "+
+                "Android Settings whenever you're ready.")
+            .setPositiveButton("APP SETTINGS"){_,_->
+                startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:"+packageName)))
+            }
+            .setNegativeButton("NOT NOW",null).show()
+    }
+
+    private fun showGpsProofHelp(o:ReconObjective,reason:String) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("CHECK-IN NEEDS RELIABLE GPS")
+            .setMessage(reason+"\n\nGo outdoors if possible, keep "+
+                "location services enabled and wait for a better fix. "+
+                "Your objective remains incomplete until verified; "+
+                "your existing progress is safe.")
+            .setPositiveButton("RETRY"){_,_->requestObjectiveProofPhoto(o)}
+            .setNegativeButton("LATER",null).show()
+    }
+
     private fun gap(a: GeoPoint, b: GeoPoint): Float {
         val out = FloatArray(1)
         android.location.Location.distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude, out)
@@ -5365,7 +5454,16 @@ class MainActivity : Activity(), SensorEventListener {
     }
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, grants: IntArray) {
         super.onRequestPermissionsResult(code, permissions, grants)
-        if (code == 10 && grants.isNotEmpty() && grants[0] == PackageManager.PERMISSION_GRANTED) startTracking()
+        if (code == 10) {
+            if(grants.isNotEmpty() && grants[0]==PackageManager.PERMISSION_GRANTED)
+                startTracking()
+            else showLocationPermissionHelp()
+        }
+        if (code==14) {
+            if(grants.isNotEmpty() && grants[0]==PackageManager.PERMISSION_GRANTED)
+                locateOnce()
+            else showLocationPermissionHelp()
+        }
         if (code == 13)status.text=if(backgroundGpsGranted())
             "BACKGROUND GPS / PERMISSION GRANTED" else "BACKGROUND GPS / PERMISSION LIMITED"
         if(code==11) {
