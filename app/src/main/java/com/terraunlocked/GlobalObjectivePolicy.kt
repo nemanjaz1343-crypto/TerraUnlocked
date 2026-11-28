@@ -8,23 +8,23 @@ import kotlin.math.hypot
 /** Five importance levels, from world landmarks (1) to neighbourhood POIs (5). */
 internal object GlobalObjectivePolicy {
     fun visibleTier(zoom:Double):Int=when {
-        zoom<7.0->1
-        zoom<10.0->2
+        zoom<5.5->1
+        zoom<9.0->2
         zoom<12.5->3
         zoom<15.0->4
         else->5
     }
 
     fun fetchBand(zoom:Double):Int=when {
-        zoom<9.0->0 // world landmarks are bundled, never query world-wide Overpass
-        zoom<11.5->2
+        zoom<7.5->0 // never query a whole country or the whole world
+        zoom<10.5->2
         zoom<13.5->3
         zoom<15.5->4
         else->5
     }
 
     fun cellSize(zoom:Double):Double=when(fetchBand(zoom)) {
-        2->.65
+        2->.35
         3->.18
         4->.065
         5->.022
@@ -120,9 +120,13 @@ internal object GlobalObjectivePolicy {
                 historic in setOf("castle","monument","archaeological_site") ||
                 tourism=="attraction")->2
             hasWiki->3
-            tourism in setOf("museum","attraction","gallery") ||
-                historic.isNotBlank() ||
-                tags["natural"] in setOf("waterfall","peak","cave_entrance")->4
+            // Many cities have poor wikidata coverage in OSM. Named tourist
+            // sights still deserve city-level visibility without a wiki tag.
+            tourism in setOf("museum","attraction","gallery","zoo","theme_park") ||
+                historic in setOf("castle","monument","archaeological_site","fort")->3
+            tourism=="viewpoint" || historic.isNotBlank() ||
+                tags["natural"] in setOf("waterfall","peak","cave_entrance") ||
+                tags["leisure"] in setOf("nature_reserve","park")->4
             else->5
         }
     }
