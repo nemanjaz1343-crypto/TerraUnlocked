@@ -10,6 +10,7 @@ import java.util.zip.ZipOutputStream
 import org.json.JSONObject
 
 class TerraArchive(private val context:Context) {
+    companion object { private val restoreLock=Any() }
     private val keys=listOf(
         Triple("notes.json","terra_notes_v1","notes"),
         Triple("discoveries.json","terra_discoveries_v1","points"),
@@ -154,15 +155,15 @@ class TerraArchive(private val context:Context) {
      * The durable marker allows a rollback on a later app launch if Android
      * kills this process in the middle of the multi-preference restore.
      */
-    @Synchronized fun recoverInterruptedRestore() {
-        if(!recoveryPrefs.getBoolean("in_progress",false))return
+    fun recoverInterruptedRestore() = synchronized(restoreLock) {
+        if(!recoveryPrefs.getBoolean("in_progress",false))return@synchronized
         check(recoveryFile.isFile) {"Restore recovery file is missing"}
         recoveryFile.inputStream().use{applyImport(it)}
         check(recoveryPrefs.edit().putBoolean("in_progress",false).commit())
         recoveryFile.delete()
     }
 
-    @Synchronized fun importFrom(input:InputStream) {
+    fun importFrom(input:InputStream) = synchronized(restoreLock) {
         recoverInterruptedRestore()
         val temp=File(context.filesDir,"terra_restore_recovery.tmp")
         try {
