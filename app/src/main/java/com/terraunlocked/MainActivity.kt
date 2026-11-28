@@ -4915,6 +4915,10 @@ class MainActivity : Activity(), SensorEventListener {
         panel.addView(label("▣ DATA / SOURCES & BACKUP",14,sand))
         fun option(name:String,fn:()->Unit) {panel.addView(action(name).apply {setOnClickListener {fn()}})}
         option("CHECK FOR UPDATES") {checkForUpdates()}
+        option("REPORT A PROBLEM") {
+            startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(
+                "https://github.com/nemanjaz1343-crypto/TerraUnlocked/issues/new")))
+        }
         option("BACKGROUND GPS PERMISSION") {explainBackgroundGps()}
         option("GPS DIAGNOSTICS / EXPORT CSV") {
             android.app.AlertDialog.Builder(this).setTitle("TERRA / GPS DIAGNOSTICS")
