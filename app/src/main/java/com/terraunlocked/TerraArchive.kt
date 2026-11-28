@@ -21,7 +21,10 @@ class TerraArchive(private val context:Context) {
         Triple("paths.json","terra_manual_paths_v1","segments"),
         Triple("places.json","terra_objectives_v1","custom_places")
     )
-    fun exportTo(output:OutputStream) {
+    // Export and restore share one process-wide lock. An export started
+    // immediately before a restore must never mix bytes from two profiles.
+    // Reentrant for the pre-restore rollback ZIP written by importFrom().
+    fun exportTo(output:OutputStream) = synchronized(restoreLock) {
         // A just-finished brush stroke may still be in the small durable
         // journal. Merge it before reading discoveries.json for backup.
         DiscoveryStore(context).flushPending()
