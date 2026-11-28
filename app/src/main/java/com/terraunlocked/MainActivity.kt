@@ -596,6 +596,30 @@ class MainActivity : Activity(), SensorEventListener {
     private var trueNorthDeclination=0f
     private var lastDeclinationLookup=0L
     private var lastHeadingRotationAt=0L
+    private var headingTarget=0f
+    private var headingFramePosted=false
+    private val headingFrame=object:Runnable {
+        override fun run() {
+            headingFramePosted=false
+            if(!headingUp || !::map.isInitialized || isFinishing || isDestroyed)return
+            val now=android.os.SystemClock.uptimeMillis()
+            val delta=if(lastHeadingRotationAt==0L)16L
+                else (now-lastHeadingRotationAt).coerceIn(1L,80L)
+            lastHeadingRotationAt=now
+            val before=map.mapOrientation
+            val next=MapHeadingPolicy.frameAngle(before,headingTarget,delta)
+            if(kotlin.math.abs(MapHeadingPolicy.shortestTurn(before,next))>=0.04f)
+                map.setMapOrientation(next,false)
+            if(MapHeadingPolicy.needsFrame(next,headingTarget))
+                postHeadingFrame()
+        }
+    }
+    private fun postHeadingFrame() {
+        if(!headingFramePosted && headingUp && ::map.isInitialized) {
+            headingFramePosted=true
+            map.postOnAnimation(headingFrame)
+        }
+    }
     private val correctedRotation=FloatArray(9)
     private lateinit var followButton:Button
     private var paintPopup:PopupWindow?=null
@@ -5545,10 +5569,14 @@ class MainActivity : Activity(), SensorEventListener {
             followUser=true
             fogOverlay.currentPosition?.let{map.controller.setCenter(it)}
             lastHeadingRotationAt=0L
+            headingTarget=map.mapOrientation
+            postHeadingFrame()
             status.text=if(fogOverlay.currentPosition==null)
                 "HEADING-UP / WAITING FOR GPS FIX"
                 else "HEADING-UP / MAP FOLLOWS YOUR DIRECTION"
         } else {
+            map.removeCallbacks(headingFrame)
+            headingFramePosted=false
             map.mapOrientation=0f
             status.text="NORTH-UP / FIXED COMPASS"
         }
@@ -5602,17 +5630,11 @@ class MainActivity : Activity(), SensorEventListener {
         expeditionHeader?.bearing=degrees
         fogOverlay.northAzimuth=current
         if(headingUp) {
-            val target=MapHeadingPolicy.headingUpOrientation(current)
-            if(MapHeadingPolicy.shouldUpdate(map.mapOrientation,target,
-                    now-lastHeadingRotationAt)) {
-                lastHeadingRotationAt=now
-                // The short-angle smoother avoids compass jitter and 360°
-                // spins, while osmdroid rotates its own map projection.
-                map.setMapOrientation(
-                    MapHeadingPolicy.easeTowards(map.mapOrientation,target),false)
-            }
+            headingTarget=MapHeadingPolicy.headingUpOrientation(current)
+            postHeadingFrame()
         }
-        if(!map.isInLayout)map.postInvalidateOnAnimation()
+        // Map repaint is paced by animation frames rather than sensor spikes.
+        if(!headingUp && !map.isInLayout)map.postInvalidateOnAnimation()
     }
     override fun onAccuracyChanged(sensor:Sensor?,accuracy:Int) {}
     private fun startTracking() {
@@ -5727,6 +5749,10 @@ class MainActivity : Activity(), SensorEventListener {
         super.onResume()
         if(!::map.isInitialized)return
         map.onResume()
+        if(headingUp) {
+            lastHeadingRotationAt=0L
+            postHeadingFrame()
+        }
         lastVerifiedGpsElapsed=android.os.SystemClock.elapsedRealtime()
         handler.removeCallbacks(gpsStatusTick)
         handler.postDelayed(gpsStatusTick,15000L)
@@ -5783,6 +5809,9 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
     override fun onPause() {
+        if(::map.isInitialized)map.removeCallbacks(headingFrame)
+        headingFramePosted=false
+        lastHeadingRotationAt=0L
         handler.removeCallbacks(gpsStatusTick)
         if(::map.isInitialized) {
             val loc=map.mapCenter
@@ -5804,6 +5833,8 @@ class MainActivity : Activity(), SensorEventListener {
         if(receiverRegistered) {unregisterReceiver(trackingReceiver);receiverRegistered=false}
     }
     override fun onDestroy() {
+        if(::map.isInitialized)map.removeCallbacks(headingFrame)
+        headingFramePosted=false
         restoreProgressDialog?.dismiss()
         restoreProgressDialog=null
         handler.removeCallbacks(gpsStatusTick)
