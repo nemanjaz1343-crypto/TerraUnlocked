@@ -130,7 +130,7 @@ internal class GlobalObjectiveStore(context:Context) {
             zoom<15.5->8000.0
             else->2900.0
         }
-        val seed=GlobalWorldLandmarks.all.filter{
+        val seed=GlobalWorldLandmarks.visible(zoom).filter{
             GlobalObjectivePolicy.distanceMetres(lat,lon,
                 it.latitude,it.longitude)<range
         }
