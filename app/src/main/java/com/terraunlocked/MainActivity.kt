@@ -92,6 +92,8 @@ class MainActivity : Activity(), SensorEventListener {
     private var overlayFiltersPopup:PopupWindow?=null
     private val layerFilters=mutableMapOf<String,Boolean>()
     private val objectiveLayerCategories=setOf("NATURE","HERITAGE","ARCH","ART","SAVED")
+    // Last rendered markers; touch targets must match the exact visible set.
+    private var drawnObjectiveTargets:List<ReconObjective> = emptyList()
 
     // Dynamic worldwide places augment -- never replace -- Dubai and SAVED IDs.
     // Draw only reads this snapshot; networking/cache writes run on a worker.
@@ -105,8 +107,16 @@ class MainActivity : Activity(), SensorEventListener {
     private var globalRetryAfter=0L
     private val globalRefreshTask=Runnable{refreshGlobalObjectiveRegion()}
 
+    /** Only displayed goals should be used in draw; saved Journey metadata
+     * must remain resolvable across regions, zoom bands and offline relaunch. */
     private fun allObjectives():List<ReconObjective> =
-        ReconObjectives.all + objectiveStore.customPlaces() + regionalObjectives
+        (ReconObjectives.all + objectiveStore.customPlaces() +
+            regionalObjectives + globalObjectiveStore.savedObjectives()
+                .filter{it.id in journeyStore.ids()}).distinctBy{it.id}
+
+    private fun knownObjectives():List<ReconObjective> =
+        (allObjectives()+globalObjectiveStore.savedObjectives()+
+            GlobalWorldLandmarks.all).distinctBy{it.id}
 
     private fun scheduleGlobalObjectiveRefresh(delayMs:Long=440L) {
         handler.removeCallbacks(globalRefreshTask)
@@ -125,10 +135,30 @@ class MainActivity : Activity(), SensorEventListener {
                 globalObjectiveStore.savedForZoom(zoom))
         if(regionalObjectives.map{it.id}!=oldIds)map.invalidate()
         if(offline || globalObjectiveLoading ||
-            System.currentTimeMillis()<globalRetryAfter ||
-            !globalObjectiveStore.needsFetch(lat,lon,zoom,System.currentTimeMillis()))
-            return
+            System.currentTimeMillis()<globalRetryAfter)return
+        // Visible geographic cells, not just the centre cell. Keep results
+        // already on screen while the worker fills missing cells one by one.
+        val w=map.width.coerceAtLeast(1)
+        val h=map.height.coerceAtLeast(1)
+        val corners=listOf(
+            map.projection.fromPixels(0,0),
+            map.projection.fromPixels(w,0),
+            map.projection.fromPixels(0,h),
+            map.projection.fromPixels(w,h))
+        fun lonNearCamera(value:Double):Double {
+            var x=value
+            while(x-lon>180.0)x-=360.0
+            while(x-lon< -180.0)x+=360.0
+            return x
+        }
+        val candidates=GlobalObjectivePolicy.viewportCells(
+            corners.minOf{it.latitude},corners.minOf{lonNearCamera(it.longitude)},
+            corners.maxOf{it.latitude},corners.maxOf{lonNearCamera(it.longitude)},
+            lat,lon,zoom)
         val now=System.currentTimeMillis()
+        val target=candidates.firstOrNull{
+            globalObjectiveStore.needsFetch(it.first,it.second,zoom,now)
+        }?:return
         if(now-globalRequestAt<9000L) {
             scheduleGlobalObjectiveRefresh(9000L-(now-globalRequestAt))
             return
@@ -138,16 +168,18 @@ class MainActivity : Activity(), SensorEventListener {
         val executor=globalObjectiveWorker
         executor.execute {
             val fetched=runCatching {
-                val found=globalObjectiveStore.fetchCell(lat,lon,zoom)
-                globalObjectiveStore.put(lat,lon,zoom,found)
+                val found=globalObjectiveStore.fetchCell(target.first,target.second,zoom)
+                globalObjectiveStore.put(target.first,target.second,zoom,found)
             }
             handler.post {
                 globalObjectiveLoading=false
-                if(fetched.isFailure)
+                if(fetched.isFailure) {
                     globalRetryAfter=System.currentTimeMillis()+120000L
-                else globalRetryAfter=0L
+                    if(!tracking && !isFinishing)
+                        status.text="WORLD OBJECTIVES / NETWORK UNAVAILABLE / CACHED MAP"
+                } else globalRetryAfter=0L
                 if(!isFinishing && !isDestroyed && fetched.isSuccess)
-                    scheduleGlobalObjectiveRefresh(280L)
+                    scheduleGlobalObjectiveRefresh(320L)
             }
         }
     }
@@ -280,6 +312,19 @@ class MainActivity : Activity(), SensorEventListener {
         quickAction("SHOW ALL",true)
         quickAction("HIDE ALL",false)
         panel.addView(controls)
+        panel.addView(action("↻  RETRY WORLD OBJECTIVES").apply {
+            applyExpeditionStyle(this)
+            textSize=11f
+            setOnClickListener {
+                overlayFiltersPopup?.dismiss()
+                globalRetryAfter=0L
+                globalRequestAt=0L
+                scheduleGlobalObjectiveRefresh(0L)
+                status.text="WORLD OBJECTIVES / CHECKING VISIBLE AREA"
+            }
+        },LinearLayout.LayoutParams(-1,dp(42)).apply {
+            setMargins(dp(2),dp(4),dp(2),0)
+        })
         panel.addView(action("⌕  SCAN MALLS IN THIS AREA").apply {
             applyExpeditionStyle(this)
             textSize=11f
@@ -349,9 +394,12 @@ class MainActivity : Activity(), SensorEventListener {
         expeditionPalette?.let{it.canUndo=true;it.canRedo=false}
     }
     private fun applyMark(state:MarkState) {
-        records.removeAll{it.manual};records.addAll(state.manual)
+        // An in-memory UI snapshot does not contain every late GPS fix.
+        // Replace only manual records under the service's shared write lock.
+        val latest=store.replaceManual(state.manual)
+        records.clear();records.addAll(latest)
         segments.clear();segments.addAll(state.segments)
-        store.replaceAll(records);pathStore.save(segments);refresh()
+        pathStore.save(segments);fogOverlay.invalidateData();refresh()
     }
     private fun markUndoAction() {
         if(markUndo.isEmpty())return
@@ -387,13 +435,29 @@ class MainActivity : Activity(), SensorEventListener {
             }
             lat+=0.00018
         }
-        store.replaceAll(records);lasso.clear();lassoFinished=false;refresh()
+        val latest=store.replaceManual(records.filter{it.manual})
+        records.clear();records.addAll(latest)
+        lasso.clear();lassoFinished=false
+        fogOverlay.invalidateData();refresh()
         status.text="LASSO / $added POINTS"
     }
 
     private var tracking = false
     private var receiverRegistered=false
     private var lastGpsUiRefresh=0L
+    private var lastVerifiedGpsElapsed=0L
+    private var lastTrackTapElapsed=0L
+    private val gpsStatusTick=object:Runnable {
+        override fun run() {
+            if(tracking && !TrackingService.resting &&
+                lastVerifiedGpsElapsed>0L &&
+                android.os.SystemClock.elapsedRealtime()-lastVerifiedGpsElapsed>45000L) {
+                status.text="GPS SIGNAL WEAK / NO FRESH VERIFIED POSITION / CHECK OPEN SKY"
+                expeditionBottom?.gpsSearching=true
+            }
+            handler.postDelayed(this,15000L)
+        }
+    }
     private var lastKnownFixTime=0L
     private fun restoreLastKnownFix():Boolean {
         if(!::fogOverlay.isInitialized)return false
@@ -450,6 +514,14 @@ class MainActivity : Activity(), SensorEventListener {
                 refresh()
                 return
             }
+            if(intent.action==TrackingService.ACTION_STATE) {
+                val active=intent.getBooleanExtra("running",false)
+                tracking=active
+                expeditionBottom?.trackingActive=active
+                expeditionBottom?.gpsSearching=active && fogOverlay.currentPosition==null
+                if(!active)status.text="TRACK STOPPED / TAP TRACK TO RESTART"
+                return
+            }
             if(intent.action==TrackingService.ACTION_MODE) {
                 val resting=intent.getBooleanExtra("eco",false)
                 status.text=if(resting)"GPS REST / BATTERY SAVER / AUTO WAKE"
@@ -489,7 +561,7 @@ class MainActivity : Activity(), SensorEventListener {
             if(revealed) {
                 // Service has already saved the fix; avoid loading all historical JSON.
                 val t=intent.getLongExtra("timestamp",System.currentTimeMillis())
-                if(records.lastOrNull()?.timestamp!=t) {
+                if(records.none{!it.manual && it.timestamp==t}) {
                     val rawLat=intent.getDoubleExtra("rawLat",lat)
                     val rawLon=intent.getDoubleExtra("rawLon",lon)
                     records.add(DiscoveryPoint(rawLat,rawLon,false,t,
@@ -499,6 +571,7 @@ class MainActivity : Activity(), SensorEventListener {
                 if(!offline && records.size%35==0)handler.post{maybeRecoverPaths()}
             }
             if(!weak) {
+                lastVerifiedGpsElapsed=android.os.SystemClock.elapsedRealtime()
                 lastKnownFixTime=System.currentTimeMillis()
                 expeditionBottom?.gpsSearching=false
             }
@@ -813,6 +886,20 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ExpeditionThemes.load(this)
+        // Recover a failed/interrupted ZIP restore BEFORE loading any stores.
+        // If rollback is impossible, fail closed rather than loading a mixed
+        // half-restored user profile and allowing it to be overwritten.
+        try {
+            TerraArchive(this).recoverInterruptedRestore()
+        } catch(error:Exception) {
+            android.util.Log.e("TERRA","Pending backup recovery failed",error)
+            android.widget.Toast.makeText(this,
+                "Backup recovery failed. Your recovery ZIP is preserved. "+
+                "Do not clear app data; contact support.",
+                android.widget.Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
         attachmentNoteTime=savedInstanceState?.getLong("attachment_note_time")?.takeIf{it!=0L}
         objectivePhotoTargetId=savedInstanceState?.getString("objective_photo_target")
         objectivePhotoPermissionId=savedInstanceState?.getString("objective_photo_permission")
@@ -910,8 +997,19 @@ class MainActivity : Activity(), SensorEventListener {
             setTileSource(TileSourceFactory.MAPNIK)
             setMultiTouchControls(true)
             setBuiltInZoomControls(false)
-            controller.setZoom(16.0)
-            controller.setCenter(GeoPoint(25.0657, 55.1403))
+            // Reopen where the user was last exploring. A fresh install
+            // starts on a neutral world view, not the developer's Dubai map.
+            val viewPrefs=getSharedPreferences("terra_map_view_v1",Context.MODE_PRIVATE)
+            val lat=viewPrefs.getString("lat",null)?.toDoubleOrNull()
+            val lon=viewPrefs.getString("lon",null)?.toDoubleOrNull()
+            if(lat!=null && lon!=null && lat in -85.0..85.0 && lon in -180.0..180.0) {
+                controller.setZoom(viewPrefs.getFloat("zoom",12f).toDouble()
+                    .coerceIn(2.5,20.0))
+                controller.setCenter(GeoPoint(lat,lon))
+            } else {
+                controller.setZoom(3.0)
+                controller.setCenter(GeoPoint(18.0,0.0))
+            }
         }
         // Normal play: reuse the actual lists (no 3,500-item filter/copy on
         // every map animation frame). The time-machine still filters as before.
@@ -922,7 +1020,15 @@ class MainActivity : Activity(), SensorEventListener {
             {if(historyCutoff==null)notes else notes.filter{it.time<=historyCutoff!!}}
         )
         map.overlays.add(fogOverlay)
-        restoreLastKnownFix()
+        val hasInitialPosition=restoreLastKnownFix()
+        if(hasInitialPosition &&
+            !getSharedPreferences("terra_map_view_v1",Context.MODE_PRIVATE)
+                .contains("lat")) {
+            fogOverlay.currentPosition?.let {
+                map.controller.setZoom(15.0)
+                map.controller.setCenter(it)
+            }
+        }
         map.overlays.add(object:Overlay() {
             override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
                 if(shadow)return
@@ -1101,13 +1207,9 @@ class MainActivity : Activity(), SensorEventListener {
                     kotlin.math.hypot((event.x-touchStartX).toDouble(),
                         (event.y-touchStartY).toDouble())>dp(22)) {
                     followUser=false
-                    if(headingUp) {
-                        headingUp=false
-                        getSharedPreferences("terra_map_orientation_v1",
-                            Context.MODE_PRIVATE).edit().putBoolean("heading_up",false).apply()
-                        map.setMapOrientation(0f,false)
-                        updateHeadingLockUi()
-                    }
+                    // Panning pauses auto-centering, not the compass lock:
+                    // a small accidental drag should not reset orientation.
+                    if(headingUp)status.text="HEADING-UP / PAN PAUSED / TAP LOCATE TO FOLLOW"
                     if(::followButton.isInitialized)followButton.text="LOCATE ○"
                 }
                 return false
@@ -1312,16 +1414,23 @@ class MainActivity : Activity(), SensorEventListener {
                 }
                 if (mode == "ERASE") {
                     val before = records.size + segments.size
-                    records.removeAll { gap(GeoPoint(it.latitude, it.longitude), geo) < radius * 1.5f }
+                    records.removeAll {it.manual &&
+                        gap(GeoPoint(it.latitude, it.longitude), geo) < radius * 1.5f }
                     segments.removeAll {
                         gap(GeoPoint(it.aLat, it.aLon), geo) < radius * 1.5f ||
                         gap(GeoPoint(it.bLat, it.bLon), geo) < radius * 1.5f
                     }
                     if (records.size + segments.size != before) {
-                        // Eraser remains separate; MARK history covers path, paint and lasso.
-                        store.replaceAll(records)
+                        // Erase against the current canonical history under
+                        // the same lock as incoming foreground GPS fixes.
+                        val latest=store.updateAtomic{persisted->
+                            persisted.filterNot {it.manual &&
+                                gap(GeoPoint(it.latitude,it.longitude),geo)<radius*1.5f
+                            }
+                        }
+                        records.clear();records.addAll(latest)
                         pathStore.save(segments)
-                        refresh()
+                        fogOverlay.invalidateData();refresh()
                     }
                     return true
                 }
@@ -1390,6 +1499,7 @@ class MainActivity : Activity(), SensorEventListener {
                     }
                 }
                 val occupied=mutableListOf<Pair<Float,Float>>()
+                val rendered=ArrayList<ReconObjective>()
                 all.forEach {o->
                     val location=if(o.id==movingObjectiveId) movingPreview else null
                     val p=mapView.projection.toPixels(location ?: GeoPoint(o.latitude,o.longitude),Point())
@@ -1422,6 +1532,7 @@ class MainActivity : Activity(), SensorEventListener {
                         val overlap=occupied.any{kotlin.math.hypot((it.first-x).toDouble(),(it.second-y).toDouble())<dp(43)}
                         val showDistance=selected || (distance!=null && !overlap && mapView.zoomLevelDouble>=15.5)
                         painter.draw(canvas,x,y,o.category,selected,objectiveStore.completed(o.id),false,if(showDistance)distance else null)
+                        rendered.add(o)
                         if(inJourney) {
                             // Ordered Journey badge: the line between stops is
                             // intentionally NOT painted as a navigable road.
@@ -1451,23 +1562,30 @@ class MainActivity : Activity(), SensorEventListener {
                         occupied.add(x to y)
                     }
                 }
+                drawnObjectiveTargets=rendered
             }
             override fun onSingleTapConfirmed(event:MotionEvent,mapView:MapView):Boolean {
                 if(!objectiveStore.enabled || mode!="VIEW")return false
-                val hit=allObjectives().filter{objectiveVisible(it)}.firstOrNull {o->
+                val hit=drawnObjectiveTargets.minByOrNull{o->
                     val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
-                    kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(22)
-                } ?: return false
+                    kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())
+                }?.takeIf{o->
+                    val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
+                    kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(26)
+                } ?:return false
                 if(measure)recordRulerPoint(GeoPoint(hit.latitude,hit.longitude))
                 else showObjective(hit)
                 return true
             }
             override fun onLongPress(event:MotionEvent,mapView:MapView):Boolean {
                 if(mode!="VIEW")return false
-                val hit=allObjectives().filter{objectiveVisible(it)}.firstOrNull {o->
+                val hit=drawnObjectiveTargets.minByOrNull{o->
                     val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
-                    kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(24)
-                } ?: return false
+                    kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())
+                }?.takeIf{o->
+                    val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
+                    kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(27)
+                } ?:return false
                 if(measure)recordRulerPoint(GeoPoint(hit.latitude,hit.longitude))
                 else showObjective(hit)
                 return true
@@ -2016,11 +2134,42 @@ class MainActivity : Activity(), SensorEventListener {
         val paletteParams=FrameLayout.LayoutParams(dp(242),dp(70),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
         paletteParams.bottomMargin=dp(12)
         mapArea.addView(palette,paletteParams)
-        root.addView(controls,LinearLayout.LayoutParams(-1,dp(49)))
+        // The artwork remains unchanged; six transparent NATIVE Button
+        // hit targets give TalkBack and Switch Access independent semantics.
+        val accessibleBottom=FrameLayout(this)
+        controls.importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        accessibleBottom.addView(controls,FrameLayout.LayoutParams(-1,-1))
+        val semanticBar=LinearLayout(this).apply{
+            orientation=LinearLayout.HORIZONTAL
+        }
+        val descriptions=listOf(
+            "Start or stop recording my GPS journey",
+            "Find my location and follow me on the map",
+            "Capture a quick photo, video or voice note",
+            "Choose manual map drawing and marking tools",
+            "Erase a previously discovered map area",
+            "Open application settings and data controls")
+        descriptions.forEachIndexed{index,description->
+            semanticBar.addView(Button(this).apply{
+                text=""
+                contentDescription=description
+                background=android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)
+                stateListAnimator=null
+                minWidth=0;minimumWidth=0
+                minHeight=0;minimumHeight=0
+                importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_YES
+                setOnClickListener{controls.onSelect(index)}
+            },LinearLayout.LayoutParams(0,-1,1f))
+        }
+        accessibleBottom.addView(semanticBar,FrameLayout.LayoutParams(-1,-1))
+        root.addView(accessibleBottom,LinearLayout.LayoutParams(-1,dp(49)))
         setContentView(root)
         if(metroStations.isEmpty())handler.post{refreshMetro()}
         handler.postDelayed({maybeRecoverPaths()},12000L)
         trackButton.setOnClickListener {
+            val tappedAt=android.os.SystemClock.elapsedRealtime()
+            if(tappedAt-lastTrackTapElapsed<650L)return@setOnClickListener
+            lastTrackTapElapsed=tappedAt
             if(tracking)stopTracking() else {
                 if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED)
                     startTracking()
@@ -2032,12 +2181,9 @@ class MainActivity : Activity(), SensorEventListener {
         followButton.setOnClickListener {
             followUser=true
             fogOverlay.currentPosition?.let{
-                val next=(map.zoomLevelDouble+0.5849625).coerceAtMost(map.maxZoomLevel.toDouble())
-                map.controller.setZoom(next)
                 map.controller.animateTo(it)
-                status.text="LOCATE / ZOOM 150%"
-            }
-                ?:run{status.text="LOCATE / WAITING FOR GPS"}
+                status.text="LOCATE / FOLLOW ACTIVE / ZOOM UNCHANGED"
+            } ?: run{locateOnce()}
         }
         markButton.setOnClickListener {
             val opening=palette.visibility!=View.VISIBLE
@@ -2058,7 +2204,7 @@ class MainActivity : Activity(), SensorEventListener {
         eraseButton.setOnClickListener {
             if(mode!="ERASE"){
                 mode="ERASE";palette.visibility=View.GONE
-                controls.selected=4;status.text="ERASE / REMOVE DISCOVERED AREA"
+                controls.selected=4;status.text="ERASE / MANUAL MARKS ONLY / GPS SAFE"
             }else{
                 mode="VIEW";controls.selected=-1;status.text="MAP READY"
             }
@@ -2090,6 +2236,7 @@ class MainActivity : Activity(), SensorEventListener {
         scheduleGlobalObjectiveRefresh(180L)
         loadDubaiTemperature()
         applyMapSource(getSharedPreferences("terra_map_source",Context.MODE_PRIVATE).getInt("selected",0))
+        handler.post{if(!isFinishing && !isDestroyed)showFirstRunGuide()}
     }
 
 
@@ -2809,7 +2956,7 @@ class MainActivity : Activity(), SensorEventListener {
         refresh()
     }
     private fun validObjectiveIds():Set<String> =
-        allObjectives().map{it.id}.toSet()
+        (knownObjectives().map{it.id}+journeyStore.ids()).toSet()
 
     /**
      * A Journey is one ordered collection of independently verifiable goals.
@@ -2829,7 +2976,7 @@ class MainActivity : Activity(), SensorEventListener {
         if(mode=="MOVE")cancelPinMove()
         journeyDraft.clear()
         val valid=validObjectiveIds()
-        journeyDraft.addAll(journeyStore.ids().filter{it in valid})
+        journeyDraft.addAll(journeyStore.ids())
         mode="JOURNEY_PLAN"
         followUser=false
         expeditionPalette?.visibility=View.GONE
@@ -2847,8 +2994,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun toggleJourneyStopOnMap(x:Float,y:Float,mapView:MapView) {
-        val candidate=allObjectives()
-            .filter{objectiveVisible(it)}
+        val candidate=drawnObjectiveTargets
             .map {o->
                 val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
                 val distance=kotlin.math.hypot(
@@ -2918,7 +3064,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun showJourneyReorder() {
         if(mode!="JOURNEY_PLAN")return
-        val all=allObjectives().associateBy{it.id}
+        val all=knownObjectives().associateBy{it.id}
         val root=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
             setPadding(dp(12),dp(8),dp(12),dp(10))
@@ -3028,15 +3174,20 @@ class MainActivity : Activity(), SensorEventListener {
             showJourneyPlanner()
             return
         }
-        val all=allObjectives().associateBy{it.id}
+        val all=knownObjectives().associateBy{it.id}
         val next=journeyStore.ids().firstOrNull{
-            it in all && !objectiveStore.completed(it)
+            !objectiveStore.completed(it)
         }
         if(next==null) {
             status.text=terms.journey+" / ALL STOPS COMPLETE"
             return
         }
-        val o=all[next]?:return
+        val o=all[next]
+        if(o==null) {
+            status.text=terms.journey+
+                " / STOP NOT LOADED. RETURN ONLINE OR VIEW SAVED GOALS."
+            return
+        }
         objectiveStore.active=o.id
         objectivesPopup?.dismiss()
         focusObjective(o,true)
@@ -3117,7 +3268,11 @@ class MainActivity : Activity(), SensorEventListener {
             override fun afterTextChanged(s:android.text.Editable?) {}
         })
         populate("")
-        objectivesPopup=PopupWindow(panel,dp(310),dp(480),true).apply {
+        val objectivesWidth=dp(310).coerceAtMost(
+            resources.displayMetrics.widthPixels-dp(16))
+        val objectivesHeight=dp(480).coerceAtMost(
+            (resources.displayMetrics.heightPixels-dp(150)).coerceAtLeast(dp(280)))
+        objectivesPopup=PopupWindow(panel,objectivesWidth,objectivesHeight,true).apply {
             isOutsideTouchable=true
             setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
             elevation=dp(8).toFloat()
@@ -3143,11 +3298,13 @@ class MainActivity : Activity(), SensorEventListener {
                 if(fix==null || !fix.hasAccuracy() || fix.accuracy>35f ||
                     !fix.latitude.isFinite() || !fix.longitude.isFinite()) {
                     status.text=terms.single+" / GPS ACCURACY REQUIRED (35m OR BETTER)"
+                    showGpsProofHelp(o,"Your GPS accuracy is not yet within 35m.")
                     return@addOnSuccessListener
                 }
                 val fixAgeMillis=(android.os.SystemClock.elapsedRealtimeNanos()-fix.elapsedRealtimeNanos)/1000000L
                 if(fixAgeMillis<0L || fixAgeMillis>30000L) {
                     status.text=terms.single+" / WAIT FOR A FRESH GPS FIX"
+                    showGpsProofHelp(o,"The location reading is too old.")
                     return@addOnSuccessListener
                 }
                 val distance=FloatArray(1)
@@ -3155,6 +3312,7 @@ class MainActivity : Activity(), SensorEventListener {
                     fix.latitude,fix.longitude,o.latitude,o.longitude,distance)
                 if(distance[0]>100f) {
                     status.text=terms.single+" LOCKED / "+distance[0].toInt()+"m AWAY / NEED 100m"
+                    showGpsProofHelp(o,"You are currently outside the 100m check-in range.")
                     return@addOnSuccessListener
                 }
                 val values=android.content.ContentValues().apply {
@@ -3276,7 +3434,7 @@ class MainActivity : Activity(), SensorEventListener {
             for((caption,click) in entries) {
                 val button=action(caption).apply {
                     applyExpeditionStyle(this)
-                    textSize=9.5f
+                    textSize=11f
                     maxLines=2
                     isSingleLine=false
                     setPadding(dp(4),dp(4),dp(4),dp(4))
@@ -3838,6 +3996,91 @@ class MainActivity : Activity(), SensorEventListener {
             android.graphics.drawable.ColorDrawable(ExpeditionThemes.current.surface))
         startTake()
     }
+    /**
+     * LOCATE is separate from TRACK. A one-shot permission only centres the
+     * camera; it never adds any visited territory or starts background GPS.
+     */
+    private fun locateOnce() {
+        if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=
+            PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION),14)
+            return
+        }
+        status.text="LOCATE / SEARCHING FOR POSITION"
+        try {
+            val token=com.google.android.gms.tasks.CancellationTokenSource()
+            client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY,token.token)
+                .addOnSuccessListener {fix->
+                    if(isFinishing || isDestroyed)return@addOnSuccessListener
+                    val age=if(fix!=null)
+                        (android.os.SystemClock.elapsedRealtimeNanos()-
+                            fix.elapsedRealtimeNanos)/1000000L else Long.MAX_VALUE
+                    if(fix!=null && fix.latitude.isFinite() && fix.longitude.isFinite() &&
+                        age in 0..120000L) {
+                        fogOverlay.currentPosition=GeoPoint(fix.latitude,fix.longitude)
+                        fogOverlay.positionAccuracy=if(fix.hasAccuracy())fix.accuracy else 0f
+                        followUser=true
+                        if(map.zoomLevelDouble<10.0)map.controller.setZoom(15.0)
+                        map.controller.animateTo(fogOverlay.currentPosition)
+                        status.text="LOCATE / POSITION FOUND / NOT RECORDING"
+                        refresh()
+                    } else status.text="LOCATE / NO FRESH FIX / TRY OUTDOORS"
+                }
+                .addOnFailureListener {error->
+                    if(!isFinishing)status.text="LOCATE / UNAVAILABLE / CHECK LOCATION SERVICES"
+                }
+        } catch(error:SecurityException) {
+            status.text="LOCATE / PERMISSION REVOKED"
+        }
+    }
+
+    private fun showFirstRunGuide() {
+        val prefs=getSharedPreferences("terra_first_run_v1",Context.MODE_PRIVATE)
+        if(prefs.getBoolean("seen",false))return
+        prefs.edit().putBoolean("seen",true).apply()
+        android.app.AlertDialog.Builder(this)
+            .setTitle("WELCOME TO TERRA")
+            .setMessage("Discover the world by walking.\n\n"+
+                "1. START TRACKING to reveal the map as you move.\n"+
+                "2. Use LOCATE to return to your position.\n"+
+                "3. Open MISSIONS to discover places nearby.\n\n"+
+                "GPS tracking is optional and starts only when you tap TRACK. "+
+                "You can explore the map without recording.")
+            .setPositiveButton("START TRACKING"){_,_->
+                trackButton.performClick()
+            }
+            .setNeutralButton("FIND MY LOCATION"){_,_->locateOnce()}
+            .setNegativeButton("EXPLORE FIRST"){_,_->
+                status.text="EXPLORE / TAP TRACK WHEN READY"
+            }.show()
+    }
+
+    private fun showLocationPermissionHelp() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("LOCATION IS OPTIONAL")
+            .setMessage("TERRA needs precise location to reveal visited "+
+                "territory. Without it you can still explore the map, "+
+                "but walking will not be recorded. Grant permission in "+
+                "Android Settings whenever you're ready.")
+            .setPositiveButton("APP SETTINGS"){_,_->
+                startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:"+packageName)))
+            }
+            .setNegativeButton("NOT NOW",null).show()
+    }
+
+    private fun showGpsProofHelp(o:ReconObjective,reason:String) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("CHECK-IN NEEDS RELIABLE GPS")
+            .setMessage(reason+"\n\nGo outdoors if possible, keep "+
+                "location services enabled and wait for a better fix. "+
+                "Your objective remains incomplete until verified; "+
+                "your existing progress is safe.")
+            .setPositiveButton("RETRY"){_,_->requestObjectiveProofPhoto(o)}
+            .setNegativeButton("LATER",null).show()
+    }
+
     private fun gap(a: GeoPoint, b: GeoPoint): Float {
         val out = FloatArray(1)
         android.location.Location.distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude, out)
@@ -4673,6 +4916,10 @@ class MainActivity : Activity(), SensorEventListener {
         panel.addView(label("▣ DATA / SOURCES & BACKUP",14,sand))
         fun option(name:String,fn:()->Unit) {panel.addView(action(name).apply {setOnClickListener {fn()}})}
         option("CHECK FOR UPDATES") {checkForUpdates()}
+        option("REPORT A PROBLEM") {
+            startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(
+                "https://github.com/nemanjaz1343-crypto/TerraUnlocked/issues/new")))
+        }
         option("BACKGROUND GPS PERMISSION") {explainBackgroundGps()}
         option("GPS DIAGNOSTICS / EXPORT CSV") {
             android.app.AlertDialog.Builder(this).setTitle("TERRA / GPS DIAGNOSTICS")
@@ -4714,7 +4961,15 @@ class MainActivity : Activity(), SensorEventListener {
             startActivityForResult(intent, 81)
         }
 
-        val window=PopupWindow(panel,dp(305),dp(430),true).apply {
+        val scroll=android.widget.ScrollView(this).apply{
+            isFillViewport=true
+            addView(panel)
+        }
+        val window=PopupWindow(scroll,
+            dp(305).coerceAtMost(resources.displayMetrics.widthPixels-dp(20)),
+            dp(430).coerceAtMost(
+                (resources.displayMetrics.heightPixels-dp(130)).coerceAtLeast(dp(240))),
+            true).apply {
             isOutsideTouchable=true
             setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
         }
@@ -5053,20 +5308,94 @@ class MainActivity : Activity(), SensorEventListener {
         if(requestCode==85 || requestCode==86) {
             val uri=data?.data
             if(resultCode==RESULT_OK && uri!=null) {
-                runCatching {
-                    if(requestCode==85) {
-                        contentResolver.openOutputStream(uri)?.use {TerraArchive(this).exportTo(it)}
-                            ?: error("Cannot write backup")
-                        status.text="BACKUP EXPORTED"
-                    } else {
-                        contentResolver.openInputStream(uri)?.use {TerraArchive(this).importFrom(it)}
-                            ?: error("Cannot read backup")
-                        notes.clear();notes.addAll(fieldNotes.load())
-                        records.clear();records.addAll(store.load())
-                        segments.clear();segments.addAll(pathStore.load())
-                        refresh();status.text="BACKUP IMPORTED"
+                if(requestCode==85) {
+                    status.text="BACKUP / EXPORTING IN BACKGROUND"
+                    Thread {
+                        val result=runCatching {
+                            contentResolver.openOutputStream(uri)?.use{
+                                TerraArchive(this).exportTo(it)
+                            }?:error("Cannot write backup")
+                        }
+                        runOnUiThread {
+                            if(!isFinishing && !isDestroyed)status.text=
+                                if(result.isSuccess)"BACKUP / EXPORTED"
+                                else "BACKUP / EXPORT FAILED"
+                        }
+                    }.start()
+                } else {
+                    // Never import while GPS can modify the same preferences.
+                    if(tracking || TrackingService.running) {
+                        android.app.AlertDialog.Builder(this)
+                            .setTitle("STOP TRACKING BEFORE RESTORE")
+                            .setMessage("Stop TRACK, then choose your backup again. "+
+                                "This prevents new GPS fixes mixing with restored data.")
+                            .setPositiveButton("OK",null).show()
+                        return
                     }
-                }.onFailure {status.text="BACKUP ERROR / "+it.javaClass.simpleName}
+                    status.text="BACKUP / CHECKING ARCHIVE"
+                    Thread {
+                        val inspect=runCatching {
+                            contentResolver.openInputStream(uri)?.use{
+                                TerraArchive(this).preview(it)
+                            }?:error("Cannot open backup")
+                        }
+                        runOnUiThread {
+                            if(isFinishing || isDestroyed)return@runOnUiThread
+                            inspect.onFailure {
+                                status.text="BACKUP / INVALID FILE"
+                                android.app.AlertDialog.Builder(this)
+                                    .setTitle("BACKUP NOT VALID")
+                                    .setMessage("Could not validate that ZIP. "+
+                                        "Nothing was changed. "+(it.message?:""))
+                                    .setPositiveButton("OK",null).show()
+                            }
+                            inspect.onSuccess {summary->
+                                android.app.AlertDialog.Builder(this)
+                                    .setTitle("REPLACE TERRA DATA?")
+                                    .setMessage("Selected archive contains:\n"+
+                                        summary.describe()+"\n\n"+
+                                        "Restoring replaces your current map, "+
+                                        "Journal, Journey and objective progress. "+
+                                        "A recovery snapshot will be staged first. "+
+                                        "Export a separate backup before continuing.")
+                                    .setNegativeButton("CANCEL",null)
+                                    .setPositiveButton("REPLACE DATA"){_,_->
+                                        if(tracking || TrackingService.running) {
+                                            status.text="BACKUP / STOP TRACK FIRST"
+                                        } else {
+                                            status.text="BACKUP / RESTORING / DO NOT EXIT"
+                                            Thread {
+                                                val restored=runCatching {
+                                                    contentResolver.openInputStream(uri)?.use{
+                                                        TerraArchive(this).importFrom(it)
+                                                    }?:error("Cannot read backup")
+                                                }
+                                                runOnUiThread {
+                                                    if(isFinishing || isDestroyed)return@runOnUiThread
+                                                    if(restored.isSuccess) {
+                                                        notes.clear();notes.addAll(fieldNotes.load())
+                                                        records.clear();records.addAll(store.load())
+                                                        segments.clear();segments.addAll(pathStore.load())
+                                                        fogOverlay.invalidateData()
+                                                        refresh()
+                                                        status.text="BACKUP / RESTORED"
+                                                    } else {
+                                                        status.text="BACKUP / RESTORE FAILED / RECOVERY PRESERVED"
+                                                        android.app.AlertDialog.Builder(this)
+                                                            .setTitle("RESTORE FAILED")
+                                                            .setMessage("TERRA attempted to restore "+
+                                                                "your previous data. The recovery "+
+                                                                "snapshot is kept until recovery completes.")
+                                                            .setPositiveButton("OK",null).show()
+                                                    }
+                                                }
+                                            }.start()
+                                        }
+                                    }.show()
+                            }
+                        }
+                    }.start()
+                }
             }
             return
         }
@@ -5240,8 +5569,19 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onAccuracyChanged(sensor:Sensor?,accuracy:Int) {}
     private fun startTracking() {
         if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED)return
-        startForegroundService(Intent(this,TrackingService::class.java).apply {action=TrackingService.ACTION_START})
+        try {
+            startForegroundService(Intent(this,TrackingService::class.java).apply {
+                action=TrackingService.ACTION_START
+            })
+        } catch(error:Exception) {
+            tracking=false
+            expeditionBottom?.trackingActive=false
+            status.text="TRACK COULD NOT START / CHECK LOCATION PERMISSION"
+            showLocationPermissionHelp()
+            return
+        }
         tracking=true
+        lastVerifiedGpsElapsed=android.os.SystemClock.elapsedRealtime()
         expeditionBottom?.trackingActive=true
         expeditionBottom?.gpsSearching=true
         trackButton.text="STOP GPS"
@@ -5282,7 +5622,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
     private fun action(t: String) = Button(this).apply {
         text=t
-        textSize=10.5f
+        textSize=11.5f
         isAllCaps=false
         gravity=Gravity.CENTER
         includeFontPadding=false
@@ -5300,7 +5640,16 @@ class MainActivity : Activity(), SensorEventListener {
     }
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, grants: IntArray) {
         super.onRequestPermissionsResult(code, permissions, grants)
-        if (code == 10 && grants.isNotEmpty() && grants[0] == PackageManager.PERMISSION_GRANTED) startTracking()
+        if (code == 10) {
+            if(grants.isNotEmpty() && grants[0]==PackageManager.PERMISSION_GRANTED)
+                startTracking()
+            else showLocationPermissionHelp()
+        }
+        if (code==14) {
+            if(grants.isNotEmpty() && grants[0]==PackageManager.PERMISSION_GRANTED)
+                locateOnce()
+            else showLocationPermissionHelp()
+        }
         if (code == 13)status.text=if(backgroundGpsGranted())
             "BACKGROUND GPS / PERMISSION GRANTED" else "BACKGROUND GPS / PERMISSION LIMITED"
         if(code==11) {
@@ -5321,7 +5670,12 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
     override fun onResume() {
-        super.onResume(); map.onResume()
+        super.onResume()
+        if(!::map.isInitialized)return
+        map.onResume()
+        lastVerifiedGpsElapsed=android.os.SystemClock.elapsedRealtime()
+        handler.removeCallbacks(gpsStatusTick)
+        handler.postDelayed(gpsStatusTick,15000L)
         handler.removeCallbacks(solarTick)
         updateSolarDial()
         loadDubaiTemperature()
@@ -5359,6 +5713,7 @@ class MainActivity : Activity(), SensorEventListener {
         val filter=IntentFilter(TrackingService.ACTION_FIX).apply {
             addAction(TrackingService.ACTION_RESET_COMPLETE)
             addAction(TrackingService.ACTION_MODE)
+            addAction(TrackingService.ACTION_STATE)
         }
         if(android.os.Build.VERSION.SDK_INT>=33) registerReceiver(trackingReceiver,filter,Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(trackingReceiver,filter)
@@ -5374,15 +5729,29 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
     override fun onPause() {
+        handler.removeCallbacks(gpsStatusTick)
+        if(::map.isInitialized) {
+            val loc=map.mapCenter
+            if(loc.latitude.isFinite() && loc.longitude.isFinite()) {
+                getSharedPreferences("terra_map_view_v1",Context.MODE_PRIVATE).edit()
+                    .putString("lat",loc.latitude.toString())
+                    .putString("lon",loc.longitude.toString())
+                    .putFloat("zoom",map.zoomLevelDouble.toFloat()).apply()
+            }
+        }
         handler.removeCallbacks(globalRefreshTask)
         handler.removeCallbacks(mallRefreshTask)
         handler.removeCallbacks(taxiRefreshTask)
         handler.removeCallbacks(repositionBubbleAfterPan)
         handler.removeCallbacks(solarTick)
-        super.onPause(); sensors.unregisterListener(this); map.onPause()
+        super.onPause()
+        if(::sensors.isInitialized)sensors.unregisterListener(this)
+        if(::map.isInitialized)map.onPause()
         if(receiverRegistered) {unregisterReceiver(trackingReceiver);receiverRegistered=false}
     }
     override fun onDestroy() {
+        handler.removeCallbacks(gpsStatusTick)
+        if(::fogOverlay.isInitialized)fogOverlay.release()
         activeVoiceMeterTick?.let{handler.removeCallbacks(it)}
         activeVoiceMeterTick=null
         runCatching{recorder?.stop()}

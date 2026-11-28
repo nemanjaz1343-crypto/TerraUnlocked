@@ -320,7 +320,7 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
                 ring.alpha=((scanPhase)*135).toInt()
                 c.drawCircle(x,17*d,(10f+10f*((scanPhase+0.5f)%1f))*d,ring)
             }
-            ExpeditionArt.label(c,if(i==0 && gpsSearching)"SEARCH" else if(i==0 && trackingActive)"STOP" else labels[i],x,h-8*d,8.7f*d,if(i==selected)ExpeditionArt.light else (if(ExpeditionThemes.current.id=="MILITARY")
+            ExpeditionArt.label(c,if(i==0 && gpsSearching)"SEARCH" else if(i==0 && trackingActive)"STOP" else labels[i],x,h-8*d,10f*d,if(i==selected)ExpeditionArt.light else (if(ExpeditionThemes.current.id=="MILITARY")
                 Color.rgb(183,178,150) else ExpeditionThemes.current.secondary),false,.2f*d)
             if(i==0 && trackingActive){
                 ExpeditionArt.p.style=Paint.Style.FILL

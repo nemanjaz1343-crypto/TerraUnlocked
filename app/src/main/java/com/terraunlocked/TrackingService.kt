@@ -649,6 +649,8 @@ class TrackingService:Service(),SensorEventListener {
         diagnostics.record(null,-1L,0.0,0.0,0,motionProfile,
             "EVENT",if(intent?.action==null)"STICKY_RESTART" else "TRACK_START_REQUEST")
         if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED) {
+            sendBroadcast(Intent(ACTION_STATE).setPackage(packageName)
+                .putExtra("running",false))
             stopSelf();return START_NOT_STICKY
         }
         val manager=getSystemService(NOTIFICATION_SERVICE) as NotificationManager
@@ -660,6 +662,8 @@ class TrackingService:Service(),SensorEventListener {
         } catch(error:Exception) {
             diagnostics.record(null,-1L,0.0,0.0,0,motionProfile,
                 "REJECTED","SERVICE_START_DENIED")
+            sendBroadcast(Intent(ACTION_STATE).setPackage(packageName)
+                .putExtra("running",false))
             stopSelf()
             return START_NOT_STICKY
         }

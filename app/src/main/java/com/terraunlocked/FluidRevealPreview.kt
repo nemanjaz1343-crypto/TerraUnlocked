@@ -185,6 +185,16 @@ internal class FluidRevealPreview {
         return true
     }
 
+    /** Activity recreation must release old GPU-backed bitmap allocations. */
+    fun release() {
+        cancel()
+        bitmap?.recycle()
+        bitmap=null
+        rasterCanvas=null
+        screenWidth=0
+        screenHeight=0
+    }
+
     fun hasPendingWork():Boolean=showBitmap && needsFrame
 
 }

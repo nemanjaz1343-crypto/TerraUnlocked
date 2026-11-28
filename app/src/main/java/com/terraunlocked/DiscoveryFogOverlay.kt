@@ -102,6 +102,23 @@ class DiscoveryFogOverlay(
     private var lastSignature=""
     private var lastPanElapsed=0L
     private val fluidBrush=FluidRevealPreview()
+    private var released=false
+
+    /** Match raster worker/bitmap lifetime to the Activity, not the process. */
+    fun release() {
+        if(released)return
+        released=true
+        generation++
+        mainThread.removeCallbacks(rebuild)
+        rasterWorker.shutdownNow()
+        organicMask?.recycle()
+        routeRaster?.recycle()
+        organicMask=null
+        routeRaster=null
+        fogShader=null
+        activeMap=null
+        fluidBrush.release()
+    }
 
     /** Direct finger-to-map drawing. No history bitmap rebuild per move. */
     fun beginFluidReveal(map:MapView,x:Float,y:Float) {
@@ -169,6 +186,7 @@ class DiscoveryFogOverlay(
     }
 
     private fun scheduleRaster(delayMs:Long) {
+        if(released)return
         val target=android.os.SystemClock.uptimeMillis()+delayMs
         if(pendingBuild && nextBuildAt<=target)return
         pendingBuild=true
@@ -178,6 +196,7 @@ class DiscoveryFogOverlay(
     }
 
     private fun prepareSnapshot(map:MapView) {
+        if(released)return
         // Never project the full history mid-drag or while brush samples are
         // coming in. The clamped shader can safely span any exposed edges
         // until movement settles. Preserve 60Hz gesture responsiveness.
@@ -203,12 +222,30 @@ class DiscoveryFogOverlay(
         val projectedOrigin=map.projection.toPixels(origin,Point())
         val zoom=map.zoomLevelDouble
         val radius=radiusPx(map,center.latitude,center.longitude)
-        val projected=ArrayList<FogProjectedPoint>(points.size)
-        for(i in points.indices){
+        // Cull history outside the padded visible viewport BEFORE projecting
+        // expensive map coordinates. Keep source indices so route segments
+        // never join across skipped points.
+        val corners=listOf(
+            map.projection.fromPixels(-pad,-pad),
+            map.projection.fromPixels(w+pad,-pad),
+            map.projection.fromPixels(-pad,h+pad),
+            map.projection.fromPixels(w+pad,h+pad))
+        val minLat=corners.minOf{it.latitude}.coerceAtLeast(-90.0)
+        val maxLat=corners.maxOf{it.latitude}.coerceAtMost(90.0)
+        val lonMin=corners.minOf{it.longitude}
+        val lonMax=corners.maxOf{it.longitude}
+        val canCullLongitude=lonMax-lonMin<180.0
+        val projected=ArrayList<FogProjectedPoint>(
+            minOf(points.size,2048))
+        var lastIndex=-2
+        for(i in points.indices) {
             val p=points[i]
+            if(p.latitude !in minLat..maxLat ||
+                (canCullLongitude && p.longitude !in lonMin..lonMax))continue
             val xy=toPoint(map,p.latitude,p.longitude)
             projected.add(FogProjectedPoint(xy.x.toFloat(),xy.y.toFloat(),
-                i>0 && canJoin(points,i)))
+                i>0 && lastIndex==i-1 && canJoin(points,i)))
+            lastIndex=i
         }
         val lines=manual.map{seg->
             val a=toPoint(map,seg.aLat,seg.aLon)
@@ -223,7 +260,7 @@ class DiscoveryFogOverlay(
             val raster=runCatching{FogRasterizer.render(snapshot)}.getOrNull()
             mainThread.post {
                 inFlightBuilds=(inFlightBuilds-1).coerceAtLeast(0)
-                if(request!=generation) {
+                if(released || request!=generation) {
                     raster?.mask?.recycle()
                     raster?.route?.recycle()
                     return@post
@@ -304,7 +341,7 @@ class DiscoveryFogOverlay(
     }
 
     override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
-        if(shadow)return
+        if(shadow || released)return
         activeMap=mapView
         val live=records()
         val simulated=demo()
