@@ -17,6 +17,9 @@ class TerraArchive(private val context:Context) {
         Triple("places.json","terra_objectives_v1","custom_places")
     )
     fun exportTo(output:OutputStream) {
+        // A just-finished brush stroke may still be in the small durable
+        // journal. Merge it before reading discoveries.json for backup.
+        DiscoveryStore(context).flushPending()
         ZipOutputStream(output).use {zip->
             for((filename,pref,key) in keys) {
                 val value=context.getSharedPreferences(pref,Context.MODE_PRIVATE).getString(key,"[]") ?: "[]"
