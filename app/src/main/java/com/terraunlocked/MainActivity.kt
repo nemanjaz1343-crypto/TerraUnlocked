@@ -93,6 +93,65 @@ class MainActivity : Activity(), SensorEventListener {
     private val layerFilters=mutableMapOf<String,Boolean>()
     private val objectiveLayerCategories=setOf("NATURE","HERITAGE","ARCH","ART","SAVED")
 
+    // Dynamic worldwide places augment -- never replace -- Dubai and SAVED IDs.
+    // Draw only reads this snapshot; networking/cache writes run on a worker.
+    private val globalObjectiveStore by lazy{GlobalObjectiveStore(applicationContext)}
+    private var regionalObjectives:List<ReconObjective> = emptyList()
+    private val globalObjectiveWorker=java.util.concurrent.Executors.newSingleThreadExecutor{
+        job->Thread(job,"terra-global-objectives").apply{isDaemon=true}
+    }
+    private var globalObjectiveLoading=false
+    private var globalRequestAt=0L
+    private var globalRetryAfter=0L
+    private val globalRefreshTask=Runnable{refreshGlobalObjectiveRegion()}
+
+    private fun allObjectives():List<ReconObjective> =
+        ReconObjectives.all + objectiveStore.customPlaces() + regionalObjectives
+
+    private fun scheduleGlobalObjectiveRefresh(delayMs:Long=440L) {
+        handler.removeCallbacks(globalRefreshTask)
+        if(::map.isInitialized)handler.postDelayed(globalRefreshTask,delayMs)
+    }
+
+    private fun refreshGlobalObjectiveRegion() {
+        if(!::map.isInitialized || !::objectiveStore.isInitialized)return
+        val lat=map.mapCenter.latitude
+        val lon=map.mapCenter.longitude
+        val zoom=map.zoomLevelDouble
+        val oldIds=regionalObjectives.map{it.id}
+        val legacy=ReconObjectives.all+objectiveStore.customPlaces()
+        regionalObjectives=GlobalObjectivePolicy.distinct(
+            legacy,globalObjectiveStore.nearby(lat,lon,zoom)+
+                globalObjectiveStore.savedForZoom(zoom))
+        if(regionalObjectives.map{it.id}!=oldIds)map.invalidate()
+        if(offline || globalObjectiveLoading ||
+            System.currentTimeMillis()<globalRetryAfter ||
+            !globalObjectiveStore.needsFetch(lat,lon,zoom,System.currentTimeMillis()))
+            return
+        val now=System.currentTimeMillis()
+        if(now-globalRequestAt<9000L) {
+            scheduleGlobalObjectiveRefresh(9000L-(now-globalRequestAt))
+            return
+        }
+        globalRequestAt=now
+        globalObjectiveLoading=true
+        val executor=globalObjectiveWorker
+        executor.execute {
+            val fetched=runCatching {
+                val found=globalObjectiveStore.fetchCell(lat,lon,zoom)
+                globalObjectiveStore.put(lat,lon,zoom,found)
+            }
+            handler.post {
+                globalObjectiveLoading=false
+                if(fetched.isFailure)
+                    globalRetryAfter=System.currentTimeMillis()+120000L
+                else globalRetryAfter=0L
+                if(!isFinishing && !isDestroyed && fetched.isSuccess)
+                    scheduleGlobalObjectiveRefresh(280L)
+            }
+        }
+    }
+
     private fun layerVisible(category:String):Boolean=when(category) {
         "TAXI" -> taxiStandsEnabled
         "MALLS" -> layerFilters["MALLS"]!=false
@@ -1077,6 +1136,27 @@ class MainActivity : Activity(), SensorEventListener {
             private var paintStart: GeoPoint? = null
             private var paintStarted = false
             private val brushPreview=ArrayList<GeoPoint>(128)
+
+            private fun appendBrushPoint(point:GeoPoint) {
+                val previous=brushPreview.lastOrNull()
+                if(previous==null) {
+                    brushPreview.add(point)
+                    return
+                }
+                val distance=gap(previous,point)
+                if(distance<.4f)return
+                val stride=(radius*.28f).coerceAtLeast(1.5f)
+                val remaining=(1800-brushPreview.size).coerceAtLeast(0)
+                if(remaining==0)return
+                val steps=kotlin.math.ceil(distance/stride).toInt()
+                    .coerceIn(1,minOf(remaining,250))
+                for(i in 1..steps) {
+                    val t=i.toFloat()/steps
+                    brushPreview.add(GeoPoint(
+                        FluidBrushSampling.lerp(previous.latitude,point.latitude,t),
+                        FluidBrushSampling.lerp(previous.longitude,point.longitude,t)))
+                }
+            }
             override fun onTouchEvent(event: MotionEvent, mapView: MapView): Boolean {
                 if(mode=="PAINT" || mode=="ERASE") {
                     if(event.actionMasked==MotionEvent.ACTION_POINTER_DOWN || event.pointerCount>1) {
@@ -1085,7 +1165,7 @@ class MainActivity : Activity(), SensorEventListener {
                         paintStart=null
                         paintStarted=false
                         brushPreview.clear()
-                        fogOverlay.liveBrushStroke=emptyList()
+                        fogOverlay.cancelFluidReveal(mapView)
                         mapView.postInvalidateOnAnimation()
                         return false // Let osmdroid handle two-finger pan and pinch zoom.
                     }
@@ -1140,8 +1220,8 @@ class MainActivity : Activity(), SensorEventListener {
                                 event.x.toInt(),event.y.toInt())
                             val endPoint=GeoPoint(pt.latitude,pt.longitude)
                             if(brushPreview.isEmpty())brushPreview.add(paintStart!!)
-                            if(gap(brushPreview.last(),endPoint)>1f)
-                                brushPreview.add(endPoint)
+                            appendBrushPoint(endPoint)
+                            fogOverlay.moveFluidReveal(mapView,event.x,event.y)
                             // The original code serialized the entire history
                             // and reblurred all fog points for EVERY drag event.
                             // Commit the undo snapshot + both stores ONCE per
@@ -1171,13 +1251,17 @@ class MainActivity : Activity(), SensorEventListener {
                             // One atomic append preserves GPS fixes written
                             // by the tracking service while the pen is moving.
                             if(committed.isNotEmpty()) {
-                                store.addAll(committed)
+                                // Persist the small stroke journal immediately;
+                                // merge into the historical JSON off the UI
+                                // thread to keep subsequent gestures responsive.
+                                store.addAllDeferred(committed)
                                 records.addAll(committed)
                             }
                             if(savedPoints.size>1)pathStore.save(segments)
-                        }
+                            fogOverlay.endFluidReveal(mapView)
+                            fogOverlay.invalidateData()
+                        } else fogOverlay.cancelFluidReveal(mapView)
                         brushPreview.clear()
-                        fogOverlay.liveBrushStroke=emptyList()
                         refresh()
                     }
                     paintStart=null;paintStarted=false;strokeLast=null
@@ -1202,7 +1286,7 @@ class MainActivity : Activity(), SensorEventListener {
                         strokeLast=null
                         brushPreview.clear()
                         brushPreview.add(geo)
-                        fogOverlay.liveBrushStroke=brushPreview
+                        fogOverlay.beginFluidReveal(mapView,event.x,event.y)
                         mapView.postInvalidateOnAnimation()
                         return true
                     }
@@ -1210,12 +1294,19 @@ class MainActivity : Activity(), SensorEventListener {
                     // permanent discoveries or JSON. The whole stroke is
                     // persisted only on ACTION_UP.
                     if(paintStart!=null) {
-                        val last=brushPreview.lastOrNull()
-                        if(last==null || gap(last,geo)>=1.5f) {
-                            if(brushPreview.size<1800)brushPreview.add(geo)
-                            paintStarted=true
-                            mapView.postInvalidateOnAnimation()
+                        // MotionEvent may batch historical touch points.
+                        // Interpolate each segment before saving so rapid
+                        // swipes cannot create disconnected reveal islands.
+                        for(index in 0 until event.historySize) {
+                            val hx=event.getHistoricalX(index)
+                            val hy=event.getHistoricalY(index)
+                            val hit=mapView.projection.fromPixels(hx.toInt(),hy.toInt())
+                            appendBrushPoint(GeoPoint(hit.latitude,hit.longitude))
+                            fogOverlay.moveFluidReveal(mapView,hx,hy)
                         }
+                        appendBrushPoint(geo)
+                        fogOverlay.moveFluidReveal(mapView,event.x,event.y)
+                        paintStarted=true
                     }
                     return true
                 }
@@ -1244,7 +1335,7 @@ class MainActivity : Activity(), SensorEventListener {
                 val user=fogOverlay.currentPosition
                 val width=canvas.width.toFloat()
                 val height=canvas.height.toFloat()
-                val all=(ReconObjectives.all+objectiveStore.customPlaces()).filter{objectiveVisible(it)}
+                val all=allObjectives().filter{objectiveVisible(it)}
                 val journeyIds=if(mode=="JOURNEY_PLAN")
                     journeyDraft.toList() else journeyStore.ids()
                 // Plan line is a straight visual sequence, NOT a navigable road.
@@ -1316,7 +1407,9 @@ class MainActivity : Activity(), SensorEventListener {
                     } else {
                         // All Journey stops remain visible at low zoom; other
                         // icons are de-cluttered as before.
-                        if(mapView.zoomLevelDouble<12.0 && !selected && !inJourney)return@forEach
+                        if(mapView.zoomLevelDouble<12.0 && !selected && !inJourney &&
+                            !o.id.startsWith("world_") && !o.id.startsWith("osm_"))
+                            return@forEach
                         val spacing=if(mapView.zoomLevelDouble<15.0)dp(66) else dp(43)
                         if(!selected && !inJourney &&
                             occupied.any{kotlin.math.hypot((it.first-x).toDouble(),(it.second-y).toDouble())<spacing})
@@ -1361,7 +1454,7 @@ class MainActivity : Activity(), SensorEventListener {
             }
             override fun onSingleTapConfirmed(event:MotionEvent,mapView:MapView):Boolean {
                 if(!objectiveStore.enabled || mode!="VIEW")return false
-                val hit=(ReconObjectives.all+objectiveStore.customPlaces()).filter{objectiveVisible(it)}.firstOrNull {o->
+                val hit=allObjectives().filter{objectiveVisible(it)}.firstOrNull {o->
                     val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
                     kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(22)
                 } ?: return false
@@ -1371,7 +1464,7 @@ class MainActivity : Activity(), SensorEventListener {
             }
             override fun onLongPress(event:MotionEvent,mapView:MapView):Boolean {
                 if(mode!="VIEW")return false
-                val hit=(ReconObjectives.all+objectiveStore.customPlaces()).filter{objectiveVisible(it)}.firstOrNull {o->
+                val hit=allObjectives().filter{objectiveVisible(it)}.firstOrNull {o->
                     val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
                     kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(24)
                 } ?: return false
@@ -1893,7 +1986,7 @@ class MainActivity : Activity(), SensorEventListener {
         controls.trackingActive=tracking
         controls.gpsSearching=tracking && fogOverlay.currentPosition==null
         fun chooseMark(next:String) {
-            fogOverlay.liveBrushStroke=emptyList()
+            fogOverlay.cancelFluidReveal(map)
             mode=next
             pending.clear();lasso.clear();lassoFinished=false
             confirmButton.visibility=View.GONE
@@ -1980,6 +2073,7 @@ class MainActivity : Activity(), SensorEventListener {
                 handler.postDelayed(repositionBubbleAfterPan,85L)
                 scheduleTaxiStandsRefresh()
                 scheduleMallRefresh()
+                scheduleGlobalObjectiveRefresh()
                 return false
             }
             override fun onZoom(event:org.osmdroid.events.ZoomEvent?):Boolean {
@@ -1988,10 +2082,12 @@ class MainActivity : Activity(), SensorEventListener {
                 handler.postDelayed(repositionBubbleAfterPan,110L)
                 scheduleTaxiStandsRefresh()
                 scheduleMallRefresh()
+                scheduleGlobalObjectiveRefresh()
                 return false
             }
         })
         map.setUseDataConnection(true)
+        scheduleGlobalObjectiveRefresh(180L)
         loadDubaiTemperature()
         applyMapSource(getSharedPreferences("terra_map_source",Context.MODE_PRIVATE).getInt("selected",0))
     }
@@ -2435,6 +2531,7 @@ class MainActivity : Activity(), SensorEventListener {
         status.text="NAV / "+target.title.take(12)+" / "+distance+" / "+readings[1].toInt()+"°"
     }
     private fun focusObjective(o:ReconObjective,extent:Boolean=false) {
+        globalObjectiveStore.remember(o)
         // The MISSIONS list only flies to the target. Its icon opens the detail actions.
         clearMapPreview()
         followUser=false
@@ -2712,7 +2809,7 @@ class MainActivity : Activity(), SensorEventListener {
         refresh()
     }
     private fun validObjectiveIds():Set<String> =
-        (ReconObjectives.all+objectiveStore.customPlaces()).map{it.id}.toSet()
+        allObjectives().map{it.id}.toSet()
 
     /**
      * A Journey is one ordered collection of independently verifiable goals.
@@ -2750,7 +2847,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun toggleJourneyStopOnMap(x:Float,y:Float,mapView:MapView) {
-        val candidate=(ReconObjectives.all+objectiveStore.customPlaces())
+        val candidate=allObjectives()
             .filter{objectiveVisible(it)}
             .map {o->
                 val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
@@ -2763,6 +2860,7 @@ class MainActivity : Activity(), SensorEventListener {
             return
         }
         val selected=candidate.first
+        globalObjectiveStore.remember(selected)
         if(selected.id in journeyDraft) {
             journeyDraft.remove(selected.id)
             status.text=terms.journey+" / REMOVED "+selected.name.take(24)
@@ -2820,7 +2918,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun showJourneyReorder() {
         if(mode!="JOURNEY_PLAN")return
-        val all=(ReconObjectives.all+objectiveStore.customPlaces()).associateBy{it.id}
+        val all=allObjectives().associateBy{it.id}
         val root=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
             setPadding(dp(12),dp(8),dp(12),dp(10))
@@ -2930,7 +3028,7 @@ class MainActivity : Activity(), SensorEventListener {
             showJourneyPlanner()
             return
         }
-        val all=(ReconObjectives.all+objectiveStore.customPlaces()).associateBy{it.id}
+        val all=allObjectives().associateBy{it.id}
         val next=journeyStore.ids().firstOrNull{
             it in all && !objectiveStore.completed(it)
         }
@@ -2989,7 +3087,7 @@ class MainActivity : Activity(), SensorEventListener {
                     " COMPLETE / "+(if(journeyStore.enabled)"ACTIVE" else "PAUSED")
             val journeyIndices=if(journeyStore.enabled)journeyStore.ids()
                 .withIndex().associate{it.value to it.index} else emptyMap()
-            (ReconObjectives.all+objectiveStore.customPlaces())
+            allObjectives()
                 .filterNot {objectiveStore.isHidden(it.id)}
                 .filter {it.name.contains(query,true)||it.category.contains(query,true)}
                 .sortedWith(compareBy<ReconObjective> {
@@ -3114,6 +3212,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun showObjective(o:ReconObjective) {
+        globalObjectiveStore.remember(o)
         objectiveBubble?.dismiss()
         objectiveBubblePlace=o
         objectiveBubbleBelow=false
@@ -4007,7 +4106,7 @@ class MainActivity : Activity(), SensorEventListener {
         option("◈  SAVE AS A DESTINATION") {
             // Check built-in landmarks too; Dubai Marina Mall is already
             // a curated objective, and should not be duplicated.
-            val already=(ReconObjectives.all+objectiveStore.customPlaces())
+            val already=allObjectives()
                 .firstOrNull{existing->
                     existing.name.equals(mall.name,true) &&
                         kotlin.math.abs(existing.latitude-mall.latitude)<.002 &&
@@ -4870,7 +4969,7 @@ class MainActivity : Activity(), SensorEventListener {
             val id=objectivePhotoTargetId
             val uri=cameraUri
             if(resultCode==RESULT_OK && id!=null && uri!=null) {
-                val objective=(ReconObjectives.all+objectiveStore.customPlaces())
+                val objective=allObjectives()
                     .firstOrNull{it.id==id}
                 if(objective!=null) {
                     val file=File(filesDir,"mission_"+System.currentTimeMillis()+".jpg")
@@ -5216,7 +5315,7 @@ class MainActivity : Activity(), SensorEventListener {
             val id=objectivePhotoPermissionId
             objectivePhotoPermissionId=null
             if(grants.isNotEmpty() && grants[0]==PackageManager.PERMISSION_GRANTED && id!=null) {
-                (ReconObjectives.all+objectiveStore.customPlaces()).firstOrNull{it.id==id}
+                allObjectives().firstOrNull{it.id==id}
                     ?.let {requestObjectiveProofPhoto(it)}
             } else status.text=terms.single+" / LOCATION PERMISSION REQUIRED"
         }
@@ -5228,6 +5327,7 @@ class MainActivity : Activity(), SensorEventListener {
         loadDubaiTemperature()
         scheduleTaxiStandsRefresh()
         scheduleMallRefresh()
+        scheduleGlobalObjectiveRefresh(180L)
         handler.postDelayed(solarTick,60000L)
         tracking=TrackingService.running
         val interrupted=!tracking &&
@@ -5274,6 +5374,7 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
     override fun onPause() {
+        handler.removeCallbacks(globalRefreshTask)
         handler.removeCallbacks(mallRefreshTask)
         handler.removeCallbacks(taxiRefreshTask)
         handler.removeCallbacks(repositionBubbleAfterPan)
@@ -5295,6 +5396,8 @@ class MainActivity : Activity(), SensorEventListener {
         handler.removeCallbacks(simulationStep)
         handler.removeCallbacks(taxiRefreshTask)
         handler.removeCallbacks(mallRefreshTask)
+        handler.removeCallbacks(globalRefreshTask)
+        globalObjectiveWorker.shutdown()
         handler.removeCallbacks(solarTick)
         solarPopup?.dismiss()
         overlayFiltersPopup?.dismiss()

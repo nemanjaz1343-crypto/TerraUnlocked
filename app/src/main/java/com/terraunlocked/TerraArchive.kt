@@ -17,6 +17,9 @@ class TerraArchive(private val context:Context) {
         Triple("places.json","terra_objectives_v1","custom_places")
     )
     fun exportTo(output:OutputStream) {
+        // A just-finished brush stroke may still be in the small durable
+        // journal. Merge it before reading discoveries.json for backup.
+        DiscoveryStore(context).flushPending()
         ZipOutputStream(output).use {zip->
             for((filename,pref,key) in keys) {
                 val value=context.getSharedPreferences(pref,Context.MODE_PRIVATE).getString(key,"[]") ?: "[]"
@@ -29,7 +32,9 @@ class TerraArchive(private val context:Context) {
             val objectives=ObjectiveStore(context)
             val objectivePrefs=context.getSharedPreferences(
                 "terra_objectives_v1",Context.MODE_PRIVATE)
-            val allGoals=ReconObjectives.all+objectives.customPlaces()
+            val global=GlobalObjectiveStore(context)
+            val allGoals=ReconObjectives.all+objectives.customPlaces()+
+                GlobalWorldLandmarks.all+global.savedObjectives()
             val done=org.json.JSONArray()
             val hidden=org.json.JSONArray()
             allGoals.forEach { goal ->
@@ -42,6 +47,11 @@ class TerraArchive(private val context:Context) {
                 .put("active",objectivePrefs.getString("active","") ?: "")
             zip.putNextEntry(ZipEntry("objective_state.json"))
             zip.write(objectiveState.toString().toByteArray(Charsets.UTF_8))
+            zip.closeEntry()
+            // Stable OSM objective metadata is optional. Legacy backups need
+            // no migration; never put dynamic map caches into a user ZIP.
+            zip.putNextEntry(ZipEntry("global_objectives.json"))
+            zip.write(global.exportPinned().toByteArray(Charsets.UTF_8))
             zip.closeEntry()
             // Optional Journey remains independent of one active objective.
             val journey=JourneyStore(context)
@@ -82,12 +92,17 @@ class TerraArchive(private val context:Context) {
         }
     }
     fun importFrom(input:InputStream) {
+        // Finish any recently queued manual strokes before a backup restore
+        // replaces discoveries.json. Otherwise a late writer could append
+        // stale strokes into the newly imported history.
+        DiscoveryStore(context).flushPending()
         val fields=mutableMapOf<String,String>()
         val media=mutableMapOf<String,ByteArray>()
         val gpsFiles=mutableMapOf<String,ByteArray>()
         var anchors:JSONObject?=null
         var journey:JSONObject?=null
         var objectiveState:JSONObject?=null
+        var globalObjectives:String?=null
         ZipInputStream(input).use {zip->
             while(true) {
                 val entry=zip.nextEntry ?: break
@@ -100,6 +115,12 @@ class TerraArchive(private val context:Context) {
                     val bytes=zip.readBytes()
                     require(bytes.size<=100_000) {"Journey too large"}
                     journey=JSONObject(bytes.toString(Charsets.UTF_8))
+                } else if(name=="global_objectives.json") {
+                    val bytes=zip.readBytes()
+                    require(bytes.size<=250_000) {"Global objective metadata too large"}
+                    val raw=bytes.toString(Charsets.UTF_8)
+                    org.json.JSONArray(raw)
+                    globalObjectives=raw
                 } else if(name=="objective_state.json") {
                     val bytes=zip.readBytes()
                     require(bytes.size<=100_000) {"Objective state too large"}
@@ -150,11 +171,14 @@ class TerraArchive(private val context:Context) {
         for((filename,pref,key) in keys.filter {fields.containsKey(it.first)}) {
             context.getSharedPreferences(pref,Context.MODE_PRIVATE).edit().putString(key,fields.getValue(filename)).commit()
         }
+        // Restore retained global IDs before progress and Journey IDs.
+        globalObjectives?.let{GlobalObjectiveStore(context).importPinned(it)}
         // Apply optional completion/visibility snapshot after places.json.
         // Strictly whitelist objective IDs from built-ins and restored custom
         // places, never arbitrary preference keys from a ZIP.
         objectiveState?.let {state->
-            val valid=(ReconObjectives.all+ObjectiveStore(context).customPlaces())
+            val valid=(ReconObjectives.all+ObjectiveStore(context).customPlaces()+
+                GlobalWorldLandmarks.all+GlobalObjectiveStore(context).savedObjectives())
                 .map{it.id}.toSet()
             fun listed(key:String):Set<String> {
                 val array=state.optJSONArray(key)?:org.json.JSONArray()
@@ -182,7 +206,8 @@ class TerraArchive(private val context:Context) {
             val ids=(0 until raw.length()).mapNotNull {i->
                 raw.optString(i,"").takeIf{it.isNotBlank()}
             }
-            val valid=(ReconObjectives.all+ObjectiveStore(context).customPlaces())
+            val valid=(ReconObjectives.all+ObjectiveStore(context).customPlaces()+
+                GlobalWorldLandmarks.all+GlobalObjectiveStore(context).savedObjectives())
                 .map{it.id}.toSet()
             JourneyStore(context).save(ids,valid,plan.optBoolean("enabled",false))
         }

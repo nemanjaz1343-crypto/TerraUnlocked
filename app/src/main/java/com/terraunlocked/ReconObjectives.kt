@@ -41,13 +41,26 @@ class ObjectiveStore(context:Context) {
     fun hide(id:String,hidden:Boolean=true){prefs.edit().putBoolean("hidden_"+id,hidden).apply()}
     fun completed(id:String)=prefs.getBoolean("done_"+id,false)
     fun complete(id:String){prefs.edit().putBoolean("done_"+id,true).apply()}
-    fun customPlaces():List<ReconObjective> = runCatching {
-        val arr=org.json.JSONArray(prefs.getString("custom_places","[]"))
-        (0 until arr.length()).map {i->
-            val j=arr.getJSONObject(i)
-            ReconObjective(j.getString("id"),j.getString("name"),"SAVED",j.getDouble("lat"),j.getDouble("lon"),j.optString("brief","Want to visit"),"")
-        }
-    }.getOrDefault(emptyList())
+    // Map draw reads SAVED places many times per second. Parse the JSON only
+    // when it actually changes (including after an import or pin move).
+    private var lastCustomRaw:String?=null
+    private var lastCustomList:List<ReconObjective> = emptyList()
+    fun customPlaces():List<ReconObjective> {
+        val raw=prefs.getString("custom_places","[]")?:"[]"
+        if(raw==lastCustomRaw)return lastCustomList
+        val places=runCatching {
+            val arr=org.json.JSONArray(raw)
+            (0 until arr.length()).map{i->
+                val j=arr.getJSONObject(i)
+                ReconObjective(j.getString("id"),j.getString("name"),"SAVED",
+                    j.getDouble("lat"),j.getDouble("lon"),
+                    j.optString("brief","Want to visit"),"")
+            }
+        }.getOrDefault(emptyList())
+        lastCustomRaw=raw
+        lastCustomList=places
+        return places
+    }
     fun addPlace(name:String,lat:Double,lon:Double,address:String):ReconObjective {
         val item=ReconObjective("saved_"+System.currentTimeMillis(),name,"SAVED",lat,lon,address,"")
         val arr=org.json.JSONArray(prefs.getString("custom_places","[]"))
