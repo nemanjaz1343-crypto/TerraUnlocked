@@ -618,6 +618,18 @@ class TrackingService:Service(),SensorEventListener {
     }
     override fun onBind(intent:Intent?):IBinder?=null
     override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int {
+        if(intent?.action==ACTION_RESET_EXPLORATION &&
+            (TerraArchive.importInProgress ||
+                getSharedPreferences("terra_restore_transaction_v1",MODE_PRIVATE)
+                    .getBoolean("in_progress",false))) {
+            // A late RESET intent must not erase a profile that is being
+            // imported or rolled back. Do not touch discovery or GPS files.
+            sendBroadcast(Intent(ACTION_STATE).setPackage(packageName)
+                .putExtra("running",false)
+                .putExtra("reason","BACKUP_RESTORE_IN_PROGRESS"))
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if(intent?.action==ACTION_RESET_EXPLORATION) {
             // Reset is handled on the service main thread, serialized with GPS fixes.
             // Disable tracking before clearing so no late callback can reveal the map.
