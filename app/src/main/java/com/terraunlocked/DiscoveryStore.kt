@@ -12,7 +12,13 @@ data class DiscoveryPoint(
 )
 
 class DiscoveryStore(context:Context) {
-    companion object { private val sharedWriteLock=Any() }
+    companion object {
+        private val sharedWriteLock=Any()
+        private const val PENDING_MANUAL="pending_manual_strokes"
+        private val manualWriter=java.util.concurrent.Executors.newSingleThreadExecutor {
+            work->Thread(work,"terra-brush-commit").apply{isDaemon=true}
+        }
+    }
     private val preferences=context.getSharedPreferences("terra_discoveries_v1",Context.MODE_PRIVATE)
     // A single cached JSONArray avoids parsing the ENTIRE exploration history
     // on every GPS fix. Detect cross-instance edits before appending.
@@ -23,9 +29,8 @@ class DiscoveryStore(context:Context) {
         cachedArray?.let {if(cachedRaw==raw)return it}
         return JSONArray(raw).also {cachedRaw=raw;cachedArray=it}
     }
-    fun load():List<DiscoveryPoint> {
-        val data=array()
-        return (0 until data.length()).mapNotNull {index->
+    private fun decode(data:JSONArray):List<DiscoveryPoint> =
+        (0 until data.length()).mapNotNull {index->
             runCatching {
                 val p=data.getJSONObject(index)
                 DiscoveryPoint(p.getDouble("lat"),p.getDouble("lon"),
@@ -35,6 +40,14 @@ class DiscoveryStore(context:Context) {
                     p.optInt("confidence",0).coerceIn(0,100))
             }.getOrNull()
         }
+
+    fun load():List<DiscoveryPoint> = synchronized(sharedWriteLock) {
+        val pending=runCatching {
+            JSONArray(preferences.getString(PENDING_MANUAL,"[]"))
+        }.getOrDefault(JSONArray())
+        val result=decode(array())+decode(pending)
+        if(pending.length()>0)manualWriter.execute{flushPending()}
+        result
     }
     private fun json(point:DiscoveryPoint)=JSONObject()
         .put("lat",point.latitude).put("lon",point.longitude)
@@ -50,9 +63,40 @@ class DiscoveryStore(context:Context) {
         val data=JSONArray()
         points.forEach {data.put(json(it))}
         val raw=data.toString()
-        preferences.edit().putString("points",raw).apply()
+        // Undo, erase and reset supersede any queued, not-yet-merged pen
+        // points so no background write can resurrect deleted discoveries.
+        preferences.edit().putString("points",raw).remove(PENDING_MANUAL).apply()
         cachedRaw=raw;cachedArray=data
     }
+    /**
+     * Immediate visual commit is already reflected in MainActivity.records.
+     * Store only the small stroke in a journal on the UI thread, then merge
+     * it into the full historical JSON on a single writer thread. This avoids
+     * serializing thousands of old GPS points at the end of each gesture.
+     */
+    fun addAllDeferred(points:List<DiscoveryPoint>) {
+        if(points.isEmpty())return
+        synchronized(sharedWriteLock) {
+            val pending=JSONArray(preferences.getString(PENDING_MANUAL,"[]"))
+            points.forEach{pending.put(json(it))}
+            preferences.edit().putString(PENDING_MANUAL,pending.toString()).apply()
+        }
+        manualWriter.execute{flushPending()}
+    }
+
+    /** Merges journal and complete history under the GPS service's lock. */
+    fun flushPending() = synchronized(sharedWriteLock) {
+        val pending=JSONArray(preferences.getString(PENDING_MANUAL,"[]"))
+        if(pending.length()==0)return@synchronized
+        val historical=array()
+        for(i in 0 until pending.length())historical.put(pending.getJSONObject(i))
+        val raw=historical.toString()
+        preferences.edit().putString("points",raw)
+            .remove(PENDING_MANUAL).commit()
+        cachedRaw=raw
+        cachedArray=historical
+    }
+
     fun add(point:DiscoveryPoint) = addAll(listOf(point))
 
     /**
