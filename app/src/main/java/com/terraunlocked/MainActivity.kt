@@ -145,9 +145,15 @@ class MainActivity : Activity(), SensorEventListener {
             map.projection.fromPixels(w,0),
             map.projection.fromPixels(0,h),
             map.projection.fromPixels(w,h))
+        fun lonNearCamera(value:Double):Double {
+            var x=value
+            while(x-lon>180.0)x-=360.0
+            while(x-lon< -180.0)x+=360.0
+            return x
+        }
         val candidates=GlobalObjectivePolicy.viewportCells(
-            corners.minOf{it.latitude},corners.first().longitude,
-            corners.maxOf{it.latitude},corners.last().longitude,
+            corners.minOf{it.latitude},corners.minOf{lonNearCamera(it.longitude)},
+            corners.maxOf{it.latitude},corners.maxOf{lonNearCamera(it.longitude)},
             lat,lon,zoom)
         val now=System.currentTimeMillis()
         val target=candidates.firstOrNull{
@@ -167,9 +173,11 @@ class MainActivity : Activity(), SensorEventListener {
             }
             handler.post {
                 globalObjectiveLoading=false
-                if(fetched.isFailure)
+                if(fetched.isFailure) {
                     globalRetryAfter=System.currentTimeMillis()+120000L
-                else globalRetryAfter=0L
+                    if(!tracking && !isFinishing)
+                        status.text="WORLD OBJECTIVES / NETWORK UNAVAILABLE / CACHED MAP"
+                } else globalRetryAfter=0L
                 if(!isFinishing && !isDestroyed && fetched.isSuccess)
                     scheduleGlobalObjectiveRefresh(320L)
             }
@@ -304,6 +312,19 @@ class MainActivity : Activity(), SensorEventListener {
         quickAction("SHOW ALL",true)
         quickAction("HIDE ALL",false)
         panel.addView(controls)
+        panel.addView(action("↻  RETRY WORLD OBJECTIVES").apply {
+            applyExpeditionStyle(this)
+            textSize=11f
+            setOnClickListener {
+                overlayFiltersPopup?.dismiss()
+                globalRetryAfter=0L
+                globalRequestAt=0L
+                scheduleGlobalObjectiveRefresh(0L)
+                status.text="WORLD OBJECTIVES / CHECKING VISIBLE AREA"
+            }
+        },LinearLayout.LayoutParams(-1,dp(42)).apply {
+            setMargins(dp(2),dp(4),dp(2),0)
+        })
         panel.addView(action("⌕  SCAN MALLS IN THIS AREA").apply {
             applyExpeditionStyle(this)
             textSize=11f
