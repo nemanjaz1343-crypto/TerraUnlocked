@@ -445,6 +445,18 @@ class MainActivity : Activity(), SensorEventListener {
     private var tracking = false
     private var receiverRegistered=false
     private var lastGpsUiRefresh=0L
+    private var lastVerifiedGpsElapsed=0L
+    private var lastTrackTapElapsed=0L
+    private val gpsStatusTick=object:Runnable {
+        override fun run() {
+            if(tracking && lastVerifiedGpsElapsed>0L &&
+                android.os.SystemClock.elapsedRealtime()-lastVerifiedGpsElapsed>45000L) {
+                status.text="GPS SIGNAL WEAK / NO FRESH VERIFIED POSITION / CHECK OPEN SKY"
+                expeditionBottom?.gpsSearching=true
+            }
+            handler.postDelayed(this,15000L)
+        }
+    }
     private var lastKnownFixTime=0L
     private fun restoreLastKnownFix():Boolean {
         if(!::fogOverlay.isInitialized)return false
@@ -558,6 +570,7 @@ class MainActivity : Activity(), SensorEventListener {
                 if(!offline && records.size%35==0)handler.post{maybeRecoverPaths()}
             }
             if(!weak) {
+                lastVerifiedGpsElapsed=android.os.SystemClock.elapsedRealtime()
                 lastKnownFixTime=System.currentTimeMillis()
                 expeditionBottom?.gpsSearching=false
             }
@@ -2153,6 +2166,9 @@ class MainActivity : Activity(), SensorEventListener {
         if(metroStations.isEmpty())handler.post{refreshMetro()}
         handler.postDelayed({maybeRecoverPaths()},12000L)
         trackButton.setOnClickListener {
+            val tappedAt=android.os.SystemClock.elapsedRealtime()
+            if(tappedAt-lastTrackTapElapsed<650L)return@setOnClickListener
+            lastTrackTapElapsed=tappedAt
             if(tracking)stopTracking() else {
                 if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED)
                     startTracking()
@@ -5560,6 +5576,7 @@ class MainActivity : Activity(), SensorEventListener {
             return
         }
         tracking=true
+        lastVerifiedGpsElapsed=android.os.SystemClock.elapsedRealtime()
         expeditionBottom?.trackingActive=true
         expeditionBottom?.gpsSearching=true
         trackButton.text="STOP GPS"
@@ -5649,6 +5666,9 @@ class MainActivity : Activity(), SensorEventListener {
     }
     override fun onResume() {
         super.onResume(); map.onResume()
+        lastVerifiedGpsElapsed=android.os.SystemClock.elapsedRealtime()
+        handler.removeCallbacks(gpsStatusTick)
+        handler.postDelayed(gpsStatusTick,15000L)
         handler.removeCallbacks(solarTick)
         updateSolarDial()
         loadDubaiTemperature()
@@ -5702,6 +5722,7 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
     override fun onPause() {
+        handler.removeCallbacks(gpsStatusTick)
         if(::map.isInitialized) {
             val loc=map.mapCenter
             if(loc.latitude.isFinite() && loc.longitude.isFinite()) {
@@ -5720,6 +5741,7 @@ class MainActivity : Activity(), SensorEventListener {
         if(receiverRegistered) {unregisterReceiver(trackingReceiver);receiverRegistered=false}
     }
     override fun onDestroy() {
+        handler.removeCallbacks(gpsStatusTick)
         if(::fogOverlay.isInitialized)fogOverlay.release()
         activeVoiceMeterTick?.let{handler.removeCallbacks(it)}
         activeVoiceMeterTick=null
