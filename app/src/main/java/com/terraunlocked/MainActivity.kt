@@ -2103,9 +2103,10 @@ class MainActivity : Activity(), SensorEventListener {
                 0->trackButton.performClick()
                 1->followButton.performClick()
                 2->snapButton.performClick()
-                3->markButton.performClick()
-                4->eraseButton.performClick()
-                5->viewButton.performClick()
+                3->showMapLookup()
+                4->markButton.performClick()
+                5->eraseButton.performClick()
+                6->viewButton.performClick()
             }
         }
         expeditionBottom=controls
@@ -2143,8 +2144,8 @@ class MainActivity : Activity(), SensorEventListener {
         val paletteParams=FrameLayout.LayoutParams(dp(242),dp(70),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
         paletteParams.bottomMargin=dp(12)
         mapArea.addView(palette,paletteParams)
-        // The artwork remains unchanged; six transparent NATIVE Button
-        // hit targets give TalkBack and Switch Access independent semantics.
+        // Seven transparent native buttons align with the 7 drawn slots.
+        // SEARCH is exactly in the middle (index 3), including for TalkBack.
         val accessibleBottom=FrameLayout(this)
         controls.importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
         accessibleBottom.addView(controls,FrameLayout.LayoutParams(-1,-1))
@@ -2155,6 +2156,7 @@ class MainActivity : Activity(), SensorEventListener {
             "Start or stop recording my GPS journey",
             "Find my location and follow me on the map",
             "Capture a quick photo, video or voice note",
+            "Search for a city, attraction, address or coordinates",
             "Choose manual map drawing and marking tools",
             "Erase a previously discovered map area",
             "Open application settings and data controls")
@@ -2189,9 +2191,13 @@ class MainActivity : Activity(), SensorEventListener {
         }
         followButton.setOnClickListener {
             followUser=true
-            fogOverlay.currentPosition?.let{
+            fogOverlay.currentPosition?.let {
+                val next=LocateZoomPolicy.next(map.zoomLevelDouble,
+                    map.maxZoomLevel.toDouble())
+                map.controller.setZoom(next)
                 map.controller.animateTo(it)
-                status.text="LOCATE / FOLLOW ACTIVE / ZOOM UNCHANGED"
+                status.text="LOCATE / FOLLOW ACTIVE / ZOOM %.1f".format(
+                    java.util.Locale.US,next)
             } ?: run{locateOnce()}
         }
         markButton.setOnClickListener {
@@ -2206,14 +2212,14 @@ class MainActivity : Activity(), SensorEventListener {
             }else{
                 mode="VIEW";pending.clear();lasso.clear();confirmButton.visibility=View.GONE
             }
-            controls.selected=if(opening)3 else -1
+            controls.selected=if(opening)4 else -1
             refresh()
         }
         snapButton.setOnClickListener {showSnapOptions()}
         eraseButton.setOnClickListener {
             if(mode!="ERASE"){
                 mode="ERASE";palette.visibility=View.GONE
-                controls.selected=4;status.text="ERASE / MANUAL MARKS ONLY / GPS SAFE"
+                controls.selected=5;status.text="ERASE / MANUAL MARKS ONLY / GPS SAFE"
             }else{
                 mode="VIEW";controls.selected=-1;status.text="MAP READY"
             }
@@ -5197,9 +5203,9 @@ class MainActivity : Activity(), SensorEventListener {
             setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
             elevation=dp(8).toFloat()
             setOnDismissListener {
-                if(expeditionBottom?.selected==4)expeditionBottom?.selected=-1
+                if(expeditionBottom?.selected==6)expeditionBottom?.selected=-1
             }
-            expeditionBottom?.selected=4
+            expeditionBottom?.selected=6
             showAtLocation(map,Gravity.END or Gravity.BOTTOM,dp(9),dp(66))
         }
     }
