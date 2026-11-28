@@ -349,9 +349,12 @@ class MainActivity : Activity(), SensorEventListener {
         expeditionPalette?.let{it.canUndo=true;it.canRedo=false}
     }
     private fun applyMark(state:MarkState) {
-        records.removeAll{it.manual};records.addAll(state.manual)
+        // An in-memory UI snapshot does not contain every late GPS fix.
+        // Replace only manual records under the service's shared write lock.
+        val latest=store.replaceManual(state.manual)
+        records.clear();records.addAll(latest)
         segments.clear();segments.addAll(state.segments)
-        store.replaceAll(records);pathStore.save(segments);refresh()
+        pathStore.save(segments);fogOverlay.invalidateData();refresh()
     }
     private fun markUndoAction() {
         if(markUndo.isEmpty())return
@@ -387,7 +390,10 @@ class MainActivity : Activity(), SensorEventListener {
             }
             lat+=0.00018
         }
-        store.replaceAll(records);lasso.clear();lassoFinished=false;refresh()
+        val latest=store.replaceManual(records.filter{it.manual})
+        records.clear();records.addAll(latest)
+        lasso.clear();lassoFinished=false
+        fogOverlay.invalidateData();refresh()
         status.text="LASSO / $added POINTS"
     }
 
@@ -489,7 +495,7 @@ class MainActivity : Activity(), SensorEventListener {
             if(revealed) {
                 // Service has already saved the fix; avoid loading all historical JSON.
                 val t=intent.getLongExtra("timestamp",System.currentTimeMillis())
-                if(records.lastOrNull()?.timestamp!=t) {
+                if(records.none{!it.manual && it.timestamp==t}) {
                     val rawLat=intent.getDoubleExtra("rawLat",lat)
                     val rawLon=intent.getDoubleExtra("rawLon",lon)
                     records.add(DiscoveryPoint(rawLat,rawLon,false,t,
@@ -1318,10 +1324,16 @@ class MainActivity : Activity(), SensorEventListener {
                         gap(GeoPoint(it.bLat, it.bLon), geo) < radius * 1.5f
                     }
                     if (records.size + segments.size != before) {
-                        // Eraser remains separate; MARK history covers path, paint and lasso.
-                        store.replaceAll(records)
+                        // Erase against the current canonical history under
+                        // the same lock as incoming foreground GPS fixes.
+                        val latest=store.updateAtomic{persisted->
+                            persisted.filterNot {
+                                gap(GeoPoint(it.latitude,it.longitude),geo)<radius*1.5f
+                            }
+                        }
+                        records.clear();records.addAll(latest)
                         pathStore.save(segments)
-                        refresh()
+                        fogOverlay.invalidateData();refresh()
                     }
                     return true
                 }
