@@ -5373,12 +5373,15 @@ class MainActivity : Activity(), SensorEventListener {
                                                 runOnUiThread {
                                                     if(isFinishing || isDestroyed)return@runOnUiThread
                                                     if(restored.isSuccess) {
-                                                        notes.clear();notes.addAll(fieldNotes.load())
-                                                        records.clear();records.addAll(store.load())
-                                                        segments.clear();segments.addAll(pathStore.load())
-                                                        fogOverlay.invalidateData()
-                                                        refresh()
-                                                        status.text="BACKUP / RESTORED"
+                                                        // A profile restore also changes cached
+                                                        // world objectives, Journey, themes and
+                                                        // mission progress. Recreate the Activity
+                                                        // instead of keeping stale in-memory stores
+                                                        // and overlays from the previous profile.
+                                                        android.widget.Toast.makeText(this,
+                                                            "Backup restored — reloading map",
+                                                            android.widget.Toast.LENGTH_SHORT).show()
+                                                        recreate()
                                                     } else {
                                                         status.text="BACKUP / RESTORE FAILED / RECOVERY PRESERVED"
                                                         android.app.AlertDialog.Builder(this)
@@ -5568,6 +5571,12 @@ class MainActivity : Activity(), SensorEventListener {
     }
     override fun onAccuracyChanged(sensor:Sensor?,accuracy:Int) {}
     private fun startTracking() {
+        if(TerraArchive.importInProgress ||
+            getSharedPreferences("terra_restore_transaction_v1",Context.MODE_PRIVATE)
+                .getBoolean("in_progress",false)) {
+            status.text="TRACK / WAIT FOR BACKUP RESTORE TO FINISH"
+            return
+        }
         if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED)return
         try {
             startForegroundService(Intent(this,TrackingService::class.java).apply {
