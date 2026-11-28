@@ -1369,7 +1369,9 @@ class MainActivity : Activity(), SensorEventListener {
                     } else {
                         // All Journey stops remain visible at low zoom; other
                         // icons are de-cluttered as before.
-                        if(mapView.zoomLevelDouble<12.0 && !selected && !inJourney)return@forEach
+                        if(mapView.zoomLevelDouble<12.0 && !selected && !inJourney &&
+                            !o.id.startsWith("world_") && !o.id.startsWith("osm_"))
+                            return@forEach
                         val spacing=if(mapView.zoomLevelDouble<15.0)dp(66) else dp(43)
                         if(!selected && !inJourney &&
                             occupied.any{kotlin.math.hypot((it.first-x).toDouble(),(it.second-y).toDouble())<spacing})
@@ -2033,6 +2035,7 @@ class MainActivity : Activity(), SensorEventListener {
                 handler.postDelayed(repositionBubbleAfterPan,85L)
                 scheduleTaxiStandsRefresh()
                 scheduleMallRefresh()
+                scheduleGlobalObjectiveRefresh()
                 return false
             }
             override fun onZoom(event:org.osmdroid.events.ZoomEvent?):Boolean {
@@ -2041,10 +2044,12 @@ class MainActivity : Activity(), SensorEventListener {
                 handler.postDelayed(repositionBubbleAfterPan,110L)
                 scheduleTaxiStandsRefresh()
                 scheduleMallRefresh()
+                scheduleGlobalObjectiveRefresh()
                 return false
             }
         })
         map.setUseDataConnection(true)
+        scheduleGlobalObjectiveRefresh(180L)
         loadDubaiTemperature()
         applyMapSource(getSharedPreferences("terra_map_source",Context.MODE_PRIVATE).getInt("selected",0))
     }
@@ -2488,6 +2493,7 @@ class MainActivity : Activity(), SensorEventListener {
         status.text="NAV / "+target.title.take(12)+" / "+distance+" / "+readings[1].toInt()+"°"
     }
     private fun focusObjective(o:ReconObjective,extent:Boolean=false) {
+        globalObjectiveStore.remember(o)
         // The MISSIONS list only flies to the target. Its icon opens the detail actions.
         clearMapPreview()
         followUser=false
@@ -3167,6 +3173,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun showObjective(o:ReconObjective) {
+        globalObjectiveStore.remember(o)
         objectiveBubble?.dismiss()
         objectiveBubblePlace=o
         objectiveBubbleBelow=false
@@ -5281,6 +5288,7 @@ class MainActivity : Activity(), SensorEventListener {
         loadDubaiTemperature()
         scheduleTaxiStandsRefresh()
         scheduleMallRefresh()
+        scheduleGlobalObjectiveRefresh(180L)
         handler.postDelayed(solarTick,60000L)
         tracking=TrackingService.running
         val interrupted=!tracking &&
@@ -5327,6 +5335,7 @@ class MainActivity : Activity(), SensorEventListener {
         }
     }
     override fun onPause() {
+        handler.removeCallbacks(globalRefreshTask)
         handler.removeCallbacks(mallRefreshTask)
         handler.removeCallbacks(taxiRefreshTask)
         handler.removeCallbacks(repositionBubbleAfterPan)
@@ -5348,6 +5357,8 @@ class MainActivity : Activity(), SensorEventListener {
         handler.removeCallbacks(simulationStep)
         handler.removeCallbacks(taxiRefreshTask)
         handler.removeCallbacks(mallRefreshTask)
+        handler.removeCallbacks(globalRefreshTask)
+        globalObjectiveWorker.shutdown()
         handler.removeCallbacks(solarTick)
         solarPopup?.dismiss()
         overlayFiltersPopup?.dismiss()
