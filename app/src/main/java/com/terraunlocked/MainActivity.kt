@@ -93,6 +93,59 @@ class MainActivity : Activity(), SensorEventListener {
     private val layerFilters=mutableMapOf<String,Boolean>()
     private val objectiveLayerCategories=setOf("NATURE","HERITAGE","ARCH","ART","SAVED")
 
+    // Dynamic worldwide places augment -- never replace -- Dubai and SAVED IDs.
+    // Draw only reads this snapshot; networking/cache writes run on a worker.
+    private val globalObjectiveStore by lazy{GlobalObjectiveStore(applicationContext)}
+    private var regionalObjectives:List<ReconObjective> = emptyList()
+    private val globalObjectiveWorker=java.util.concurrent.Executors.newSingleThreadExecutor{
+        job->Thread(job,"terra-global-objectives").apply{isDaemon=true}
+    }
+    private var globalObjectiveLoading=false
+    private var globalRequestAt=0L
+    private val globalRefreshTask=Runnable{refreshGlobalObjectiveRegion()}
+
+    private fun allObjectives():List<ReconObjective> =
+        ReconObjectives.all + objectiveStore.customPlaces() + regionalObjectives
+
+    private fun scheduleGlobalObjectiveRefresh(delayMs:Long=440L) {
+        handler.removeCallbacks(globalRefreshTask)
+        if(::map.isInitialized)handler.postDelayed(globalRefreshTask,delayMs)
+    }
+
+    private fun refreshGlobalObjectiveRegion() {
+        if(!::map.isInitialized || !::objectiveStore.isInitialized)return
+        val lat=map.mapCenter.latitude
+        val lon=map.mapCenter.longitude
+        val zoom=map.zoomLevelDouble
+        val oldIds=regionalObjectives.map{it.id}
+        val legacy=ReconObjectives.all+objectiveStore.customPlaces()
+        regionalObjectives=GlobalObjectivePolicy.distinct(
+            legacy,globalObjectiveStore.nearby(lat,lon,zoom))
+        if(regionalObjectives.map{it.id}!=oldIds)map.invalidate()
+        if(offline || globalObjectiveLoading ||
+            !globalObjectiveStore.needsFetch(lat,lon,zoom,System.currentTimeMillis()))
+            return
+        val now=System.currentTimeMillis()
+        if(now-globalRequestAt<9000L) {
+            scheduleGlobalObjectiveRefresh(9000L-(now-globalRequestAt))
+            return
+        }
+        globalRequestAt=now
+        globalObjectiveLoading=true
+        val executor=globalObjectiveWorker
+        executor.execute {
+            runCatching {
+                val found=globalObjectiveStore.fetchCell(lat,lon,zoom)
+                globalObjectiveStore.put(lat,lon,zoom,found)
+            }
+            handler.post {
+                globalObjectiveLoading=false
+                if(!isFinishing && !isDestroyed)
+                    scheduleGlobalObjectiveRefresh(280L)
+            }
+        }
+    }
+
     private fun layerVisible(category:String):Boolean=when(category) {
         "TAXI" -> taxiStandsEnabled
         "MALLS" -> layerFilters["MALLS"]!=false
@@ -1244,7 +1297,7 @@ class MainActivity : Activity(), SensorEventListener {
                 val user=fogOverlay.currentPosition
                 val width=canvas.width.toFloat()
                 val height=canvas.height.toFloat()
-                val all=(ReconObjectives.all+objectiveStore.customPlaces()).filter{objectiveVisible(it)}
+                val all=allObjectives().filter{objectiveVisible(it)}
                 val journeyIds=if(mode=="JOURNEY_PLAN")
                     journeyDraft.toList() else journeyStore.ids()
                 // Plan line is a straight visual sequence, NOT a navigable road.
@@ -1361,7 +1414,7 @@ class MainActivity : Activity(), SensorEventListener {
             }
             override fun onSingleTapConfirmed(event:MotionEvent,mapView:MapView):Boolean {
                 if(!objectiveStore.enabled || mode!="VIEW")return false
-                val hit=(ReconObjectives.all+objectiveStore.customPlaces()).filter{objectiveVisible(it)}.firstOrNull {o->
+                val hit=allObjectives().filter{objectiveVisible(it)}.firstOrNull {o->
                     val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
                     kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(22)
                 } ?: return false
@@ -1371,7 +1424,7 @@ class MainActivity : Activity(), SensorEventListener {
             }
             override fun onLongPress(event:MotionEvent,mapView:MapView):Boolean {
                 if(mode!="VIEW")return false
-                val hit=(ReconObjectives.all+objectiveStore.customPlaces()).filter{objectiveVisible(it)}.firstOrNull {o->
+                val hit=allObjectives().filter{objectiveVisible(it)}.firstOrNull {o->
                     val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
                     kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(24)
                 } ?: return false
@@ -2712,7 +2765,7 @@ class MainActivity : Activity(), SensorEventListener {
         refresh()
     }
     private fun validObjectiveIds():Set<String> =
-        (ReconObjectives.all+objectiveStore.customPlaces()).map{it.id}.toSet()
+        allObjectives().map{it.id}.toSet()
 
     /**
      * A Journey is one ordered collection of independently verifiable goals.
@@ -2750,7 +2803,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun toggleJourneyStopOnMap(x:Float,y:Float,mapView:MapView) {
-        val candidate=(ReconObjectives.all+objectiveStore.customPlaces())
+        val candidate=allObjectives()
             .filter{objectiveVisible(it)}
             .map {o->
                 val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
@@ -2820,7 +2873,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun showJourneyReorder() {
         if(mode!="JOURNEY_PLAN")return
-        val all=(ReconObjectives.all+objectiveStore.customPlaces()).associateBy{it.id}
+        val all=allObjectives().associateBy{it.id}
         val root=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
             setPadding(dp(12),dp(8),dp(12),dp(10))
@@ -2930,7 +2983,7 @@ class MainActivity : Activity(), SensorEventListener {
             showJourneyPlanner()
             return
         }
-        val all=(ReconObjectives.all+objectiveStore.customPlaces()).associateBy{it.id}
+        val all=allObjectives().associateBy{it.id}
         val next=journeyStore.ids().firstOrNull{
             it in all && !objectiveStore.completed(it)
         }
@@ -2989,7 +3042,7 @@ class MainActivity : Activity(), SensorEventListener {
                     " COMPLETE / "+(if(journeyStore.enabled)"ACTIVE" else "PAUSED")
             val journeyIndices=if(journeyStore.enabled)journeyStore.ids()
                 .withIndex().associate{it.value to it.index} else emptyMap()
-            (ReconObjectives.all+objectiveStore.customPlaces())
+            allObjectives()
                 .filterNot {objectiveStore.isHidden(it.id)}
                 .filter {it.name.contains(query,true)||it.category.contains(query,true)}
                 .sortedWith(compareBy<ReconObjective> {
@@ -4007,7 +4060,7 @@ class MainActivity : Activity(), SensorEventListener {
         option("◈  SAVE AS A DESTINATION") {
             // Check built-in landmarks too; Dubai Marina Mall is already
             // a curated objective, and should not be duplicated.
-            val already=(ReconObjectives.all+objectiveStore.customPlaces())
+            val already=allObjectives()
                 .firstOrNull{existing->
                     existing.name.equals(mall.name,true) &&
                         kotlin.math.abs(existing.latitude-mall.latitude)<.002 &&
@@ -4870,7 +4923,7 @@ class MainActivity : Activity(), SensorEventListener {
             val id=objectivePhotoTargetId
             val uri=cameraUri
             if(resultCode==RESULT_OK && id!=null && uri!=null) {
-                val objective=(ReconObjectives.all+objectiveStore.customPlaces())
+                val objective=allObjectives()
                     .firstOrNull{it.id==id}
                 if(objective!=null) {
                     val file=File(filesDir,"mission_"+System.currentTimeMillis()+".jpg")
@@ -5216,7 +5269,7 @@ class MainActivity : Activity(), SensorEventListener {
             val id=objectivePhotoPermissionId
             objectivePhotoPermissionId=null
             if(grants.isNotEmpty() && grants[0]==PackageManager.PERMISSION_GRANTED && id!=null) {
-                (ReconObjectives.all+objectiveStore.customPlaces()).firstOrNull{it.id==id}
+                allObjectives().firstOrNull{it.id==id}
                     ?.let {requestObjectiveProofPhoto(it)}
             } else status.text=terms.single+" / LOCATION PERMISSION REQUIRED"
         }
