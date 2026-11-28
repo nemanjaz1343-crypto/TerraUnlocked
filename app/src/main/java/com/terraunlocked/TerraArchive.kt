@@ -92,6 +92,10 @@ class TerraArchive(private val context:Context) {
         }
     }
     fun importFrom(input:InputStream) {
+        // Finish any recently queued manual strokes before a backup restore
+        // replaces discoveries.json. Otherwise a late writer could append
+        // stale strokes into the newly imported history.
+        DiscoveryStore(context).flushPending()
         val fields=mutableMapOf<String,String>()
         val media=mutableMapOf<String,ByteArray>()
         val gpsFiles=mutableMapOf<String,ByteArray>()
