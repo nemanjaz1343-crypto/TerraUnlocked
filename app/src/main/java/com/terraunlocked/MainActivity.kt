@@ -92,6 +92,8 @@ class MainActivity : Activity(), SensorEventListener {
     private var overlayFiltersPopup:PopupWindow?=null
     private val layerFilters=mutableMapOf<String,Boolean>()
     private val objectiveLayerCategories=setOf("NATURE","HERITAGE","ARCH","ART","SAVED")
+    // Last rendered markers; touch targets must match the exact visible set.
+    private var drawnObjectiveTargets:List<ReconObjective> = emptyList()
 
     // Dynamic worldwide places augment -- never replace -- Dubai and SAVED IDs.
     // Draw only reads this snapshot; networking/cache writes run on a worker.
@@ -1453,6 +1455,7 @@ class MainActivity : Activity(), SensorEventListener {
                     }
                 }
                 val occupied=mutableListOf<Pair<Float,Float>>()
+                val rendered=ArrayList<ReconObjective>()
                 all.forEach {o->
                     val location=if(o.id==movingObjectiveId) movingPreview else null
                     val p=mapView.projection.toPixels(location ?: GeoPoint(o.latitude,o.longitude),Point())
@@ -1485,6 +1488,7 @@ class MainActivity : Activity(), SensorEventListener {
                         val overlap=occupied.any{kotlin.math.hypot((it.first-x).toDouble(),(it.second-y).toDouble())<dp(43)}
                         val showDistance=selected || (distance!=null && !overlap && mapView.zoomLevelDouble>=15.5)
                         painter.draw(canvas,x,y,o.category,selected,objectiveStore.completed(o.id),false,if(showDistance)distance else null)
+                        rendered.add(o)
                         if(inJourney) {
                             // Ordered Journey badge: the line between stops is
                             // intentionally NOT painted as a navigable road.
@@ -1514,23 +1518,30 @@ class MainActivity : Activity(), SensorEventListener {
                         occupied.add(x to y)
                     }
                 }
+                drawnObjectiveTargets=rendered
             }
             override fun onSingleTapConfirmed(event:MotionEvent,mapView:MapView):Boolean {
                 if(!objectiveStore.enabled || mode!="VIEW")return false
-                val hit=allObjectives().filter{objectiveVisible(it)}.firstOrNull {o->
+                val hit=drawnObjectiveTargets.minByOrNull{o->
                     val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
-                    kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(22)
-                } ?: return false
+                    kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())
+                }?.takeIf{o->
+                    val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
+                    kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(26)
+                } ?:return false
                 if(measure)recordRulerPoint(GeoPoint(hit.latitude,hit.longitude))
                 else showObjective(hit)
                 return true
             }
             override fun onLongPress(event:MotionEvent,mapView:MapView):Boolean {
                 if(mode!="VIEW")return false
-                val hit=allObjectives().filter{objectiveVisible(it)}.firstOrNull {o->
+                val hit=drawnObjectiveTargets.minByOrNull{o->
                     val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
-                    kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(24)
-                } ?: return false
+                    kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())
+                }?.takeIf{o->
+                    val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
+                    kotlin.math.hypot((p.x-event.x).toDouble(),(p.y-event.y).toDouble())<dp(27)
+                } ?:return false
                 if(measure)recordRulerPoint(GeoPoint(hit.latitude,hit.longitude))
                 else showObjective(hit)
                 return true
@@ -2908,8 +2919,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
 
     private fun toggleJourneyStopOnMap(x:Float,y:Float,mapView:MapView) {
-        val candidate=allObjectives()
-            .filter{objectiveVisible(it)}
+        val candidate=drawnObjectiveTargets
             .map {o->
                 val p=mapView.projection.toPixels(GeoPoint(o.latitude,o.longitude),Point())
                 val distance=kotlin.math.hypot(
