@@ -44,12 +44,15 @@ internal class JourneyStore(context:Context) {
         seen.toList()
     }.getOrDefault(emptyList())
 
-    fun save(ids:List<String>,validIds:Set<String>,start:Boolean=true) {
+    fun save(ids:List<String>,validIds:Set<String>,start:Boolean=true,
+        durable:Boolean=false) {
         val normalized=JourneyPlanner.normalize(ids,validIds)
         val json=JSONArray()
         normalized.forEach{json.put(it)}
-        prefs.edit().putString("objective_ids",json.toString())
-            .putBoolean("enabled",start && normalized.isNotEmpty()).apply()
+        val edit=prefs.edit().putString("objective_ids",json.toString())
+            .putBoolean("enabled",start && normalized.isNotEmpty())
+        if(durable)check(edit.commit()) {"Journey could not be saved"}
+        else edit.apply()
     }
 
     fun clear() {
