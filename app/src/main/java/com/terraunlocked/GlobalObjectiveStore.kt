@@ -175,14 +175,15 @@ internal class GlobalObjectiveStore(context:Context) {
         val box="${south},${west},${north},${east}"
         val query=when(band) {
             2->"""[out:json][timeout:22];(
-                nwr["tourism"~"^(attraction|museum|gallery)$"]["wikidata"]($box);
-                nwr["historic"]["wikidata"]($box);
-                nwr["natural"~"^(peak|waterfall)$"]["wikidata"]($box);
+                nwr["tourism"~"^(attraction|museum|gallery|zoo|theme_park)$"]["name"]($box);
+                nwr["historic"~"^(castle|monument|archaeological_site|fort)$"]["name"]($box);
+                nwr["natural"~"^(peak|waterfall)$"]["name"]($box);
             );out center 240;""".trimIndent()
             3->"""[out:json][timeout:22];(
                 nwr["tourism"~"^(attraction|museum|gallery|viewpoint)$"]["name"]($box);
                 nwr["historic"]["name"]($box);
                 nwr["natural"~"^(peak|waterfall|cave_entrance)$"]["name"]($box);
+                nwr["leisure"~"^(nature_reserve|park)$"]["name"]($box);
             );out center 240;""".trimIndent()
             else->"""[out:json][timeout:22];(
                 nwr["tourism"~"^(attraction|museum|gallery|viewpoint|artwork)$"]["name"]($box);
