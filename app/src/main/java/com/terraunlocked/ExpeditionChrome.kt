@@ -84,6 +84,11 @@ internal object ExpeditionArt {
                 c.restore()
                 c.drawArc(-8f,5f,8f,18f,202f,136f,false,p)
             }
+            "search" -> {
+                c.drawCircle(-2f,-2f,6.8f,p)
+                p.strokeWidth=2.2f
+                line(3f,3f,10.5f,10.5f)
+            }
             "follow" -> {
                 p.style=Paint.Style.FILL
                 val v=Path().apply{moveTo(-7f,7f);lineTo(10f,-10f);lineTo(3f,10f);lineTo(-1f,2f);close()}
@@ -291,14 +296,15 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
     override fun onDetachedFromWindow(){radar.cancel();super.onDetachedFromWindow()}
     private var pressedIndex=-1
     private val d=resources.displayMetrics.density
-    private val labels=arrayOf("TRACK","LOCATE","SNAP","MARK","ERASE","SETTINGS")
-    private val icons=arrayOf("track","follow","snap","mark","erase","settings")
+    // Odd slot count puts SEARCH exactly at horizontal centre on every screen.
+    private val labels=arrayOf("TRACK","LOCATE","SNAP","SEARCH","MARK","ERASE","SETTINGS")
+    private val icons=arrayOf("track","follow","snap","search","mark","erase","settings")
     override fun onDraw(c:Canvas) {
         val w=width.toFloat();val h=height.toFloat()
         ExpeditionArt.fill(c,0f,0f,w,h,ExpeditionArt.dark)
         ExpeditionArt.panel(c,RectF(3*d,3*d,w-3*d,h-3*d),false,8*d)
-        val step=(w-6*d)/6
-        for(i in 0..5){
+        val step=(w-6*d)/7
+        for(i in 0..6){
             val x=3*d+(i+.5f)*step
             if(i==selected || i==pressedIndex || (i==0 && trackingActive)){
                 ExpeditionArt.panel(c,RectF(3*d+i*step,3*d,3*d+(i+1)*step,h-3*d),true,7*d)
@@ -320,7 +326,7 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
                 ring.alpha=((scanPhase)*135).toInt()
                 c.drawCircle(x,17*d,(10f+10f*((scanPhase+0.5f)%1f))*d,ring)
             }
-            ExpeditionArt.label(c,if(i==0 && gpsSearching)"SEARCH" else if(i==0 && trackingActive)"STOP" else labels[i],x,h-8*d,10f*d,if(i==selected)ExpeditionArt.light else (if(ExpeditionThemes.current.id=="MILITARY")
+            ExpeditionArt.label(c,if(i==0 && gpsSearching)"SCAN" else if(i==0 && trackingActive)"STOP" else labels[i],x,h-8*d,8.5f*d,if(i==selected)ExpeditionArt.light else (if(ExpeditionThemes.current.id=="MILITARY")
                 Color.rgb(183,178,150) else ExpeditionThemes.current.secondary),false,.2f*d)
             if(i==0 && trackingActive){
                 ExpeditionArt.p.style=Paint.Style.FILL
@@ -333,11 +339,11 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
     override fun onTouchEvent(e:MotionEvent):Boolean {
         when(e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                pressedIndex=(6*e.x/width).toInt().coerceIn(0,5)
+                pressedIndex=(7*e.x/width).toInt().coerceIn(0,6)
                 invalidate();return true
             }
             MotionEvent.ACTION_UP -> {
-                val idx=(6*e.x/width).toInt().coerceIn(0,5)
+                val idx=(7*e.x/width).toInt().coerceIn(0,6)
                 val shouldClick=idx==pressedIndex
                 pressedIndex=-1;invalidate()
                 if(shouldClick)onSelect(idx)
