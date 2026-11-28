@@ -480,6 +480,14 @@ class MainActivity : Activity(), SensorEventListener {
                 refresh()
                 return
             }
+            if(intent.action==TrackingService.ACTION_STATE) {
+                val active=intent.getBooleanExtra("running",false)
+                tracking=active
+                expeditionBottom?.trackingActive=active
+                expeditionBottom?.gpsSearching=active && fogOverlay.currentPosition==null
+                if(!active)status.text="TRACK STOPPED / TAP TRACK TO RESTART"
+                return
+            }
             if(intent.action==TrackingService.ACTION_MODE) {
                 val resting=intent.getBooleanExtra("eco",false)
                 status.text=if(resting)"GPS REST / BATTERY SAVER / AUTO WAKE"
@@ -5506,7 +5514,17 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onAccuracyChanged(sensor:Sensor?,accuracy:Int) {}
     private fun startTracking() {
         if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED)return
-        startForegroundService(Intent(this,TrackingService::class.java).apply {action=TrackingService.ACTION_START})
+        try {
+            startForegroundService(Intent(this,TrackingService::class.java).apply {
+                action=TrackingService.ACTION_START
+            })
+        } catch(error:Exception) {
+            tracking=false
+            expeditionBottom?.trackingActive=false
+            status.text="TRACK COULD NOT START / CHECK LOCATION PERMISSION"
+            showLocationPermissionHelp()
+            return
+        }
         tracking=true
         expeditionBottom?.trackingActive=true
         expeditionBottom?.gpsSearching=true
@@ -5634,6 +5652,7 @@ class MainActivity : Activity(), SensorEventListener {
         val filter=IntentFilter(TrackingService.ACTION_FIX).apply {
             addAction(TrackingService.ACTION_RESET_COMPLETE)
             addAction(TrackingService.ACTION_MODE)
+            addAction(TrackingService.ACTION_STATE)
         }
         if(android.os.Build.VERSION.SDK_INT>=33) registerReceiver(trackingReceiver,filter,Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(trackingReceiver,filter)
