@@ -80,14 +80,16 @@ internal class GlobalObjectiveStore(context:Context) {
         }
     }
 
-    private fun persist() {
+    private fun persist(durable:Boolean=false) {
         val arr=JSONArray()
         cells.values.forEach{cell->
             arr.put(JSONObject().put("key",cell.key).put("at",cell.updated)
                 .put("items",encode(cell.items)))
         }
-        prefs.edit().putString("cells",arr.toString())
-            .putString("pinned",encode(pinned.values.toList()).toString()).apply()
+        val edit=prefs.edit().putString("cells",arr.toString())
+            .putString("pinned",encode(pinned.values.toList()).toString())
+        if(durable)check(edit.commit()) {"Global objective pins could not be saved"}
+        else edit.apply()
     }
 
     @Synchronized fun exportPinned():String=encode(pinned.values.toList()).toString()
@@ -100,7 +102,7 @@ internal class GlobalObjectiveStore(context:Context) {
         val valid=decode(JSONArray(raw))
         valid.forEach{pinned[it.objective.id]=it}
         trim()
-        persist()
+        persist(durable=true)
     }
 
     @Synchronized fun remember(objective:ReconObjective) {

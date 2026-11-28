@@ -618,6 +618,18 @@ class TrackingService:Service(),SensorEventListener {
     }
     override fun onBind(intent:Intent?):IBinder?=null
     override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int {
+        if(intent?.action==ACTION_RESET_EXPLORATION &&
+            (TerraArchive.importInProgress ||
+                getSharedPreferences("terra_restore_transaction_v1",MODE_PRIVATE)
+                    .getBoolean("in_progress",false))) {
+            // A late RESET intent must not erase a profile that is being
+            // imported or rolled back. Do not touch discovery or GPS files.
+            sendBroadcast(Intent(ACTION_STATE).setPackage(packageName)
+                .putExtra("running",false)
+                .putExtra("reason","BACKUP_RESTORE_IN_PROGRESS"))
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if(intent?.action==ACTION_RESET_EXPLORATION) {
             // Reset is handled on the service main thread, serialized with GPS fixes.
             // Disable tracking before clearing so no late callback can reveal the map.
@@ -642,6 +654,21 @@ class TrackingService:Service(),SensorEventListener {
         // Android may restart a sticky service with a null intent after a kill.
         // Never resume unless TRACK was explicitly enabled by the user.
         if(intent?.action==null && !trackingPrefs.getBoolean("requested",false)) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        // An import could begin after the Activity checked TRACK state.
+        // Reject service start here too, before subscribing to any provider
+        // or writing new fixes into a profile that is being replaced.
+        if(!running && (TerraArchive.importInProgress ||
+            getSharedPreferences("terra_restore_transaction_v1",MODE_PRIVATE)
+                .getBoolean("in_progress",false))) {
+            saveTrackingRequested(false)
+            // Do not write GPS diagnostics either: these CSV files may be
+            // in the process of being replaced by the imported archive.
+            sendBroadcast(Intent(ACTION_STATE).setPackage(packageName)
+                .putExtra("running",false)
+                .putExtra("reason","BACKUP_RESTORE_IN_PROGRESS"))
             stopSelf()
             return START_NOT_STICKY
         }

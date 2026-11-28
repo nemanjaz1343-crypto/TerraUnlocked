@@ -10,14 +10,21 @@ import java.util.zip.ZipOutputStream
 import org.json.JSONObject
 
 class TerraArchive(private val context:Context) {
-    companion object { private val restoreLock=Any() }
+    companion object {
+        private val restoreLock=Any()
+        /** Foreground GPS must never start while a profile restore is in flight. */
+        @Volatile internal var importInProgress=false
+    }
     private val keys=listOf(
         Triple("notes.json","terra_notes_v1","notes"),
         Triple("discoveries.json","terra_discoveries_v1","points"),
         Triple("paths.json","terra_manual_paths_v1","segments"),
         Triple("places.json","terra_objectives_v1","custom_places")
     )
-    fun exportTo(output:OutputStream) {
+    // Export and restore share one process-wide lock. An export started
+    // immediately before a restore must never mix bytes from two profiles.
+    // Reentrant for the pre-restore rollback ZIP written by importFrom().
+    fun exportTo(output:OutputStream) = synchronized(restoreLock) {
         // A just-finished brush stroke may still be in the small durable
         // journal. Merge it before reading discoveries.json for backup.
         DiscoveryStore(context).flushPending()
@@ -164,9 +171,13 @@ class TerraArchive(private val context:Context) {
     }
 
     fun importFrom(input:InputStream) = synchronized(restoreLock) {
-        recoverInterruptedRestore()
+        check(!TrackingService.running) {
+            "Stop GPS tracking before importing a different profile"
+        }
+        importInProgress=true
         val temp=File(context.filesDir,"terra_restore_recovery.tmp")
         try {
+            recoverInterruptedRestore()
             temp.outputStream().use{exportTo(it)}
             check(temp.isFile && temp.length()>0L) {"Could not stage rollback"}
             if(recoveryFile.exists())recoveryFile.delete()
@@ -182,7 +193,10 @@ class TerraArchive(private val context:Context) {
                 runCatching{recoverInterruptedRestore()}
                 throw error
             }
-        } finally {temp.delete()}
+        } finally {
+            temp.delete()
+            importInProgress=false
+        }
     }
 
     private fun applyImport(input:InputStream) {
@@ -207,6 +221,10 @@ class TerraArchive(private val context:Context) {
             val out=java.io.ByteArrayOutputStream()
             stage(zip,out,limit)
             return out.toString("UTF-8")
+        }
+        val ignoreUnknown=object:java.io.OutputStream() {
+            override fun write(value:Int) {}
+            override fun write(bytes:ByteArray,offset:Int,length:Int) {}
         }
         val stageDir=File(context.cacheDir,"terra_import_"+System.nanoTime()).apply{
             check(mkdirs()) {"Cannot stage backup files"}
@@ -260,6 +278,11 @@ class TerraArchive(private val context:Context) {
                     val output=File(stageDir,"media_"+entryCount)
                     output.outputStream().use{stage(zip,it,25_000_000L)}
                     media[filename]=output
+                } else {
+                    // Unknown ZIP members are not trusted or extracted. Still
+                    // drain through the same byte counters: closeEntry()
+                    // alone would bypass the decompressed size limit.
+                    stage(zip,ignoreUnknown,40_000_000L)
                 }
                 zip.closeEntry()
             }
@@ -271,10 +294,13 @@ class TerraArchive(private val context:Context) {
         anchors?.let {j->
             val edit=context.getSharedPreferences("terra_anchors_v1",Context.MODE_PRIVATE).edit()
             j.keys().forEach {k->edit.putString(k,j.optString(k))}
-            edit.commit()
+            check(edit.commit()) {"Could not persist restored anchors"}
         }
         for((filename,pref,key) in keys.filter {fields.containsKey(it.first)}) {
-            context.getSharedPreferences(pref,Context.MODE_PRIVATE).edit().putString(key,fields.getValue(filename)).commit()
+            check(context.getSharedPreferences(pref,Context.MODE_PRIVATE).edit()
+                .putString(key,fields.getValue(filename)).commit()) {
+                "Could not persist restored $filename"
+            }
         }
         // Restore retained global IDs before progress and Journey IDs.
         globalObjectives?.let{GlobalObjectiveStore(context).importPinned(it)}
@@ -302,7 +328,7 @@ class TerraArchive(private val context:Context) {
             val active=state.optString("active","").takeIf{it in valid}
             if(active==null)editor.remove("active")
             else editor.putString("active",active)
-            editor.commit()
+            check(editor.commit()) {"Could not persist restored objectives"}
         }
         // Load Journey only after places.json, so restored user-created goals
         // can be matched to their stable IDs. Older backups remain valid.
@@ -314,7 +340,8 @@ class TerraArchive(private val context:Context) {
             val valid=(ReconObjectives.all+ObjectiveStore(context).customPlaces()+
                 GlobalWorldLandmarks.all+GlobalObjectiveStore(context).savedObjectives())
                 .map{it.id}.toSet()
-            JourneyStore(context).save(ids,valid,plan.optBoolean("enabled",false))
+            JourneyStore(context).save(ids,valid,
+                plan.optBoolean("enabled",false),durable=true)
         }
         } finally {stageDir.deleteRecursively()}
     }
