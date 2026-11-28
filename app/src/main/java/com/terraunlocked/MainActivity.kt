@@ -1400,7 +1400,8 @@ class MainActivity : Activity(), SensorEventListener {
                 }
                 if (mode == "ERASE") {
                     val before = records.size + segments.size
-                    records.removeAll { gap(GeoPoint(it.latitude, it.longitude), geo) < radius * 1.5f }
+                    records.removeAll {it.manual &&
+                        gap(GeoPoint(it.latitude, it.longitude), geo) < radius * 1.5f }
                     segments.removeAll {
                         gap(GeoPoint(it.aLat, it.aLon), geo) < radius * 1.5f ||
                         gap(GeoPoint(it.bLat, it.bLon), geo) < radius * 1.5f
@@ -1409,7 +1410,7 @@ class MainActivity : Activity(), SensorEventListener {
                         // Erase against the current canonical history under
                         // the same lock as incoming foreground GPS fixes.
                         val latest=store.updateAtomic{persisted->
-                            persisted.filterNot {
+                            persisted.filterNot {it.manual &&
                                 gap(GeoPoint(it.latitude,it.longitude),geo)<radius*1.5f
                             }
                         }
@@ -2186,7 +2187,7 @@ class MainActivity : Activity(), SensorEventListener {
         eraseButton.setOnClickListener {
             if(mode!="ERASE"){
                 mode="ERASE";palette.visibility=View.GONE
-                controls.selected=4;status.text="ERASE / REMOVE DISCOVERED AREA"
+                controls.selected=4;status.text="ERASE / MANUAL MARKS ONLY / GPS SAFE"
             }else{
                 mode="VIEW";controls.selected=-1;status.text="MAP READY"
             }
