@@ -5207,20 +5207,94 @@ class MainActivity : Activity(), SensorEventListener {
         if(requestCode==85 || requestCode==86) {
             val uri=data?.data
             if(resultCode==RESULT_OK && uri!=null) {
-                runCatching {
-                    if(requestCode==85) {
-                        contentResolver.openOutputStream(uri)?.use {TerraArchive(this).exportTo(it)}
-                            ?: error("Cannot write backup")
-                        status.text="BACKUP EXPORTED"
-                    } else {
-                        contentResolver.openInputStream(uri)?.use {TerraArchive(this).importFrom(it)}
-                            ?: error("Cannot read backup")
-                        notes.clear();notes.addAll(fieldNotes.load())
-                        records.clear();records.addAll(store.load())
-                        segments.clear();segments.addAll(pathStore.load())
-                        refresh();status.text="BACKUP IMPORTED"
+                if(requestCode==85) {
+                    status.text="BACKUP / EXPORTING IN BACKGROUND"
+                    Thread {
+                        val result=runCatching {
+                            contentResolver.openOutputStream(uri)?.use{
+                                TerraArchive(this).exportTo(it)
+                            }?:error("Cannot write backup")
+                        }
+                        runOnUiThread {
+                            if(!isFinishing && !isDestroyed)status.text=
+                                if(result.isSuccess)"BACKUP / EXPORTED"
+                                else "BACKUP / EXPORT FAILED"
+                        }
+                    }.start()
+                } else {
+                    // Never import while GPS can modify the same preferences.
+                    if(tracking || TrackingService.running) {
+                        android.app.AlertDialog.Builder(this)
+                            .setTitle("STOP TRACKING BEFORE RESTORE")
+                            .setMessage("Stop TRACK, then choose your backup again. "+
+                                "This prevents new GPS fixes mixing with restored data.")
+                            .setPositiveButton("OK",null).show()
+                        return
                     }
-                }.onFailure {status.text="BACKUP ERROR / "+it.javaClass.simpleName}
+                    status.text="BACKUP / CHECKING ARCHIVE"
+                    Thread {
+                        val inspect=runCatching {
+                            contentResolver.openInputStream(uri)?.use{
+                                TerraArchive(this).preview(it)
+                            }?:error("Cannot open backup")
+                        }
+                        runOnUiThread {
+                            if(isFinishing || isDestroyed)return@runOnUiThread
+                            inspect.onFailure {
+                                status.text="BACKUP / INVALID FILE"
+                                android.app.AlertDialog.Builder(this)
+                                    .setTitle("BACKUP NOT VALID")
+                                    .setMessage("Could not validate that ZIP. "+
+                                        "Nothing was changed. "+(it.message?:""))
+                                    .setPositiveButton("OK",null).show()
+                            }
+                            inspect.onSuccess {summary->
+                                android.app.AlertDialog.Builder(this)
+                                    .setTitle("REPLACE TERRA DATA?")
+                                    .setMessage("Selected archive contains:\n"+
+                                        summary.describe()+"\n\n"+
+                                        "Restoring replaces your current map, "+
+                                        "Journal, Journey and objective progress. "+
+                                        "A recovery snapshot will be staged first. "+
+                                        "Export a separate backup before continuing.")
+                                    .setNegativeButton("CANCEL",null)
+                                    .setPositiveButton("REPLACE DATA"){_,_->
+                                        if(tracking || TrackingService.running) {
+                                            status.text="BACKUP / STOP TRACK FIRST"
+                                        } else {
+                                            status.text="BACKUP / RESTORING / DO NOT EXIT"
+                                            Thread {
+                                                val restored=runCatching {
+                                                    contentResolver.openInputStream(uri)?.use{
+                                                        TerraArchive(this).importFrom(it)
+                                                    }?:error("Cannot read backup")
+                                                }
+                                                runOnUiThread {
+                                                    if(isFinishing || isDestroyed)return@runOnUiThread
+                                                    if(restored.isSuccess) {
+                                                        notes.clear();notes.addAll(fieldNotes.load())
+                                                        records.clear();records.addAll(store.load())
+                                                        segments.clear();segments.addAll(pathStore.load())
+                                                        fogOverlay.invalidateData()
+                                                        refresh()
+                                                        status.text="BACKUP / RESTORED"
+                                                    } else {
+                                                        status.text="BACKUP / RESTORE FAILED / RECOVERY PRESERVED"
+                                                        android.app.AlertDialog.Builder(this)
+                                                            .setTitle("RESTORE FAILED")
+                                                            .setMessage("TERRA attempted to restore "+
+                                                                "your previous data. The recovery "+
+                                                                "snapshot is kept until recovery completes.")
+                                                            .setPositiveButton("OK",null).show()
+                                                    }
+                                                }
+                                            }.start()
+                                        }
+                                    }.show()
+                            }
+                        }
+                    }.start()
+                }
             }
             return
         }
