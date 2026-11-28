@@ -652,8 +652,8 @@ class TrackingService:Service(),SensorEventListener {
             getSharedPreferences("terra_restore_transaction_v1",MODE_PRIVATE)
                 .getBoolean("in_progress",false))) {
             saveTrackingRequested(false)
-            diagnostics.record(null,-1L,0.0,0.0,0,motionProfile,
-                "EVENT","TRACK_BLOCKED_DURING_RESTORE")
+            // Do not write GPS diagnostics either: these CSV files may be
+            // in the process of being replaced by the imported archive.
             sendBroadcast(Intent(ACTION_STATE).setPackage(packageName)
                 .putExtra("running",false)
                 .putExtra("reason","BACKUP_RESTORE_IN_PROGRESS"))
