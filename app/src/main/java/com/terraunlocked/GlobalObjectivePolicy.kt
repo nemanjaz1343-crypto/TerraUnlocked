@@ -38,6 +38,45 @@ internal object GlobalObjectivePolicy {
         return "${fetchBand(zoom)}_${y}_${x}"
     }
 
+    /**
+     * Return fetch-cell centres that actually intersect the map viewport,
+     * centre-first. Repeated requests fetch the next missing cell, rather
+     * than overloading a public Overpass server with one giant query.
+     * Coordinates are unwrapped relative to the camera to cross ±180°.
+     */
+    fun viewportCells(south:Double,west:Double,north:Double,east:Double,
+        centerLat:Double,centerLon:Double,zoom:Double):List<Pair<Double,Double>> {
+        if(fetchBand(zoom)==0 || !south.isFinite() || !north.isFinite() ||
+            !west.isFinite() || !east.isFinite())return emptyList()
+        val size=cellSize(zoom)
+        val cy=floor(centerLat/size).toInt()
+        val cx=floor(centerLon/size).toInt()
+        fun unwrap(lon:Double):Double {
+            var x=lon
+            while(x-centerLon>180.0)x-=360.0
+            while(x-centerLon< -180.0)x+=360.0
+            return x
+        }
+        val loLat=floor(minOf(south,north).coerceIn(-89.9,89.9)/size).toInt()
+        val hiLat=floor(maxOf(south,north).coerceIn(-89.9,89.9)/size).toInt()
+        val loLon=floor(minOf(unwrap(west),unwrap(east))/size).toInt()
+        val hiLon=floor(maxOf(unwrap(west),unwrap(east))/size).toInt()
+        // A single viewport could span many hundreds of cells near world
+        // zoom. Keep a finite centre-first queue; subsequent pans refill it.
+        val candidates=ArrayList<Triple<Int,Int,Int>>()
+        for(y in maxOf(loLat,cy-10)..minOf(hiLat,cy+10)) {
+            for(x in maxOf(loLon,cx-10)..minOf(hiLon,cx+10)) {
+                candidates.add(Triple(
+                    kotlin.math.abs(y-cy)+kotlin.math.abs(x-cx),y,x))
+            }
+        }
+        return candidates.sortedWith(compareBy<Triple<Int,Int,Int>>{it.first}
+            .thenBy{it.second}.thenBy{it.third}).take(32).map{(_,y,x)->
+            val lon=((x+.5)*size+540.0)%360.0-180.0
+            (y+.5)*size to lon
+        }
+    }
+
     fun distanceMetres(aLat:Double,aLon:Double,bLat:Double,bLon:Double):Double {
         val y=(bLat-aLat)*111195.0
         var longitudeDelta=bLon-aLon
