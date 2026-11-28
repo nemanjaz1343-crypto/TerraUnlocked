@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.RadialGradient
 import android.graphics.Shader
 import android.graphics.PorterDuff
@@ -32,6 +33,11 @@ internal object FluidBrushSampling {
  * GPS history, no full-screen GPU saveLayer and no stroke-path reprojection.
  */
 internal class FluidRevealPreview {
+    // Half-resolution screen-space mask has feathered edges by design and
+    // uploads only 1/4 as many pixels per frame as a full-screen ARGB image.
+    private val bufferScale=.5f
+    private var screenWidth=0
+    private var screenHeight=0
     private data class Stamp(
         val x:Float,val y:Float,val radius:Float,val at:Long,
         val gradient:RadialGradient,var removed:Float=0f
@@ -62,11 +68,17 @@ internal class FluidRevealPreview {
     fun begin(width:Int,height:Int,renderBase:(Canvas)->Unit,
         x:Float,y:Float,radius:Float) {
         if(width<=0||height<=0)return
+        screenWidth=width
+        screenHeight=height
+        val bw=(width*bufferScale).toInt().coerceAtLeast(1)
+        val bh=(height*bufferScale).toInt().coerceAtLeast(1)
         val old=bitmap
-        if(old==null || old.isRecycled || old.width!=width || old.height!=height) {
+        if(old==null || old.isRecycled || old.width!=bw || old.height!=bh) {
             old?.recycle()
-            bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888)
-            rasterCanvas=bitmap?.let{Canvas(it)}
+            bitmap=Bitmap.createBitmap(bw,bh,Bitmap.Config.ARGB_8888)
+            rasterCanvas=bitmap?.let{Canvas(it).apply {
+                scale(bufferScale,bufferScale)
+            }}
         }
         bitmap?.eraseColor(Color.TRANSPARENT)
         rasterCanvas?.let(renderBase)
@@ -161,7 +173,8 @@ internal class FluidRevealPreview {
         val now=SystemClock.uptimeMillis()
         advance(now)
         if(!showBitmap)return false
-        canvas.drawBitmap(current,0f,0f,bitmapInk)
+        canvas.drawBitmap(current,null,
+            RectF(0f,0f,screenWidth.toFloat(),screenHeight.toFloat()),bitmapInk)
         if(running) {
             val pulse=((now-touchedAt)%600L)/600f
             scanner.color=Color.argb((90f*(1f-pulse)).toInt(), 
