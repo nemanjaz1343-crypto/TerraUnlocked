@@ -91,6 +91,8 @@ internal class GlobalObjectiveStore(context:Context) {
     }
 
     @Synchronized fun exportPinned():String=encode(pinned.values.toList()).toString()
+    @Synchronized fun savedObjectives():List<ReconObjective> =
+        pinned.values.map{it.objective}
     @Synchronized fun importPinned(raw:String) {
         val valid=decode(JSONArray(raw))
         valid.forEach{pinned[it.objective.id]=it}
