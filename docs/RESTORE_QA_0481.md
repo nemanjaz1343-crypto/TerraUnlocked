@@ -18,6 +18,13 @@ v0.4.80 audit remediation. No new map layers, gamification or user data migratio
   decompressed-byte budget as known entries. `ZipInputStream.closeEntry()`
   alone could have decompressed and discarded an oversized unknown payload
   without counting it in the safety limit.
+- Import displays a non-cancelable progress panel to stop MAP/MARK/ERASE
+  edits while the worker is restoring. A late RESET command is rejected at
+  service level. If durable rollback is still pending after a failed import,
+  the Activity fails closed rather than exposing a mixed profile.
+- Backup export and import use the same process-wide reentrant lock; an
+  asynchronous export cannot create a mixed-state ZIP while restore replaces
+  the current profile.
 - The restore path verifies synchronous `SharedPreferences.commit()` results
   for anchors, discovery JSON, objectives, global objective pins and Journey.
   Any reported write failure triggers the existing durable rollback path.
