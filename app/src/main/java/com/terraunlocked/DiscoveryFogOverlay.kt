@@ -102,6 +102,23 @@ class DiscoveryFogOverlay(
     private var lastSignature=""
     private var lastPanElapsed=0L
     private val fluidBrush=FluidRevealPreview()
+    private var released=false
+
+    /** Match raster worker/bitmap lifetime to the Activity, not the process. */
+    fun release() {
+        if(released)return
+        released=true
+        generation++
+        mainThread.removeCallbacks(rebuild)
+        rasterWorker.shutdownNow()
+        organicMask?.recycle()
+        routeRaster?.recycle()
+        organicMask=null
+        routeRaster=null
+        fogShader=null
+        activeMap=null
+        fluidBrush.release()
+    }
 
     /** Direct finger-to-map drawing. No history bitmap rebuild per move. */
     fun beginFluidReveal(map:MapView,x:Float,y:Float) {
@@ -169,6 +186,7 @@ class DiscoveryFogOverlay(
     }
 
     private fun scheduleRaster(delayMs:Long) {
+        if(released)return
         val target=android.os.SystemClock.uptimeMillis()+delayMs
         if(pendingBuild && nextBuildAt<=target)return
         pendingBuild=true
@@ -178,6 +196,7 @@ class DiscoveryFogOverlay(
     }
 
     private fun prepareSnapshot(map:MapView) {
+        if(released)return
         // Never project the full history mid-drag or while brush samples are
         // coming in. The clamped shader can safely span any exposed edges
         // until movement settles. Preserve 60Hz gesture responsiveness.
@@ -223,7 +242,7 @@ class DiscoveryFogOverlay(
             val raster=runCatching{FogRasterizer.render(snapshot)}.getOrNull()
             mainThread.post {
                 inFlightBuilds=(inFlightBuilds-1).coerceAtLeast(0)
-                if(request!=generation) {
+                if(released || request!=generation) {
                     raster?.mask?.recycle()
                     raster?.route?.recycle()
                     return@post
@@ -304,7 +323,7 @@ class DiscoveryFogOverlay(
     }
 
     override fun draw(canvas:Canvas,mapView:MapView,shadow:Boolean) {
-        if(shadow)return
+        if(shadow || released)return
         activeMap=mapView
         val live=records()
         val simulated=demo()
