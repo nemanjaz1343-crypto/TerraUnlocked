@@ -102,7 +102,7 @@ class TerraArchive(private val context:Context) {
     }
 
     /** Non-mutating preview; used before asking permission to replace data. */
-    fun preview(input:InputStream):BackupPreview {
+    internal fun preview(input:InputStream):BackupPreview {
         val counts=HashMap<String,Int>()
         val seen=HashSet<String>()
         var media=0
