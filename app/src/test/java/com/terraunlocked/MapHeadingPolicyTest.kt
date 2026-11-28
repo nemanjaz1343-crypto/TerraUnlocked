@@ -15,6 +15,15 @@ class MapHeadingPolicyTest {
         assertEquals(-2f,MapHeadingPolicy.shortestTurn(1f,359f),0.01f)
         assertEquals(0f,MapHeadingPolicy.shortestTurn(0f,360f),0.01f)
     }
+    @Test fun headingFramesEaseContinuouslyAcrossNorth() {
+        val first=MapHeadingPolicy.frameAngle(359f,1f,16L)
+        assertTrue(MapHeadingPolicy.shortestTurn(359f,first)>0f)
+        assertTrue(MapHeadingPolicy.shortestTurn(359f,first)<2f)
+        assertEquals(0f,MapHeadingPolicy.shortestTurn(359f,
+            MapHeadingPolicy.frameAngle(359f,359.15f,16L)),0.01f)
+        assertFalse(MapHeadingPolicy.needsFrame(359f,359.1f))
+        assertTrue(MapHeadingPolicy.needsFrame(359f,10f))
+    }
     @Test fun dampingAndSmallAngleThresholdPreventJitter() {
         assertEquals(0f,MapHeadingPolicy.normalize(720f),0.01f)
         assertEquals(0f,MapHeadingPolicy.easeTowards(359f,1f,.5f),.01f)
