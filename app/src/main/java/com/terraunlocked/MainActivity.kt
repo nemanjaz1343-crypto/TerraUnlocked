@@ -102,6 +102,7 @@ class MainActivity : Activity(), SensorEventListener {
     }
     private var globalObjectiveLoading=false
     private var globalRequestAt=0L
+    private var globalRetryAfter=0L
     private val globalRefreshTask=Runnable{refreshGlobalObjectiveRegion()}
 
     private fun allObjectives():List<ReconObjective> =
@@ -124,6 +125,7 @@ class MainActivity : Activity(), SensorEventListener {
                 globalObjectiveStore.savedForZoom(zoom))
         if(regionalObjectives.map{it.id}!=oldIds)map.invalidate()
         if(offline || globalObjectiveLoading ||
+            System.currentTimeMillis()<globalRetryAfter ||
             !globalObjectiveStore.needsFetch(lat,lon,zoom,System.currentTimeMillis()))
             return
         val now=System.currentTimeMillis()
@@ -135,13 +137,16 @@ class MainActivity : Activity(), SensorEventListener {
         globalObjectiveLoading=true
         val executor=globalObjectiveWorker
         executor.execute {
-            runCatching {
+            val fetched=runCatching {
                 val found=globalObjectiveStore.fetchCell(lat,lon,zoom)
                 globalObjectiveStore.put(lat,lon,zoom,found)
             }
             handler.post {
                 globalObjectiveLoading=false
-                if(!isFinishing && !isDestroyed)
+                if(fetched.isFailure)
+                    globalRetryAfter=System.currentTimeMillis()+120000L
+                else globalRetryAfter=0L
+                if(!isFinishing && !isDestroyed && fetched.isSuccess)
                     scheduleGlobalObjectiveRefresh(280L)
             }
         }
