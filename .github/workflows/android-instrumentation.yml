@@ -1,8 +1,6 @@
 name: Terra Android restore & data integrity QA
 
 on:
-  push:
-    branches: [fix/pre-release-restore-hardening-0481]
   pull_request:
     branches: [main]
     paths:
