@@ -105,8 +105,16 @@ class MainActivity : Activity(), SensorEventListener {
     private var globalRetryAfter=0L
     private val globalRefreshTask=Runnable{refreshGlobalObjectiveRegion()}
 
+    /** Only displayed goals should be used in draw; saved Journey metadata
+     * must remain resolvable across regions, zoom bands and offline relaunch. */
     private fun allObjectives():List<ReconObjective> =
-        ReconObjectives.all + objectiveStore.customPlaces() + regionalObjectives
+        (ReconObjectives.all + objectiveStore.customPlaces() +
+            regionalObjectives + globalObjectiveStore.savedObjectives()
+                .filter{it.id in journeyStore.ids()}).distinctBy{it.id}
+
+    private fun knownObjectives():List<ReconObjective> =
+        (allObjectives()+globalObjectiveStore.savedObjectives()+
+            GlobalWorldLandmarks.all).distinctBy{it.id}
 
     private fun scheduleGlobalObjectiveRefresh(delayMs:Long=440L) {
         handler.removeCallbacks(globalRefreshTask)
@@ -819,6 +827,20 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ExpeditionThemes.load(this)
+        // Recover a failed/interrupted ZIP restore BEFORE loading any stores.
+        // If rollback is impossible, fail closed rather than loading a mixed
+        // half-restored user profile and allowing it to be overwritten.
+        try {
+            TerraArchive(this).recoverInterruptedRestore()
+        } catch(error:Exception) {
+            android.util.Log.e("TERRA","Pending backup recovery failed",error)
+            android.widget.Toast.makeText(this,
+                "Backup recovery failed. Your recovery ZIP is preserved. "+
+                "Do not clear app data; contact support.",
+                android.widget.Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
         attachmentNoteTime=savedInstanceState?.getLong("attachment_note_time")?.takeIf{it!=0L}
         objectivePhotoTargetId=savedInstanceState?.getString("objective_photo_target")
         objectivePhotoPermissionId=savedInstanceState?.getString("objective_photo_permission")
@@ -2821,7 +2843,7 @@ class MainActivity : Activity(), SensorEventListener {
         refresh()
     }
     private fun validObjectiveIds():Set<String> =
-        allObjectives().map{it.id}.toSet()
+        (knownObjectives().map{it.id}+journeyStore.ids()).toSet()
 
     /**
      * A Journey is one ordered collection of independently verifiable goals.
@@ -2841,7 +2863,7 @@ class MainActivity : Activity(), SensorEventListener {
         if(mode=="MOVE")cancelPinMove()
         journeyDraft.clear()
         val valid=validObjectiveIds()
-        journeyDraft.addAll(journeyStore.ids().filter{it in valid})
+        journeyDraft.addAll(journeyStore.ids())
         mode="JOURNEY_PLAN"
         followUser=false
         expeditionPalette?.visibility=View.GONE
@@ -2930,7 +2952,7 @@ class MainActivity : Activity(), SensorEventListener {
 
     private fun showJourneyReorder() {
         if(mode!="JOURNEY_PLAN")return
-        val all=allObjectives().associateBy{it.id}
+        val all=knownObjectives().associateBy{it.id}
         val root=LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
             setPadding(dp(12),dp(8),dp(12),dp(10))
@@ -3040,15 +3062,20 @@ class MainActivity : Activity(), SensorEventListener {
             showJourneyPlanner()
             return
         }
-        val all=allObjectives().associateBy{it.id}
+        val all=knownObjectives().associateBy{it.id}
         val next=journeyStore.ids().firstOrNull{
-            it in all && !objectiveStore.completed(it)
+            !objectiveStore.completed(it)
         }
         if(next==null) {
             status.text=terms.journey+" / ALL STOPS COMPLETE"
             return
         }
-        val o=all[next]?:return
+        val o=all[next]
+        if(o==null) {
+            status.text=terms.journey+
+                " / STOP NOT LOADED. RETURN ONLINE OR VIEW SAVED GOALS."
+            return
+        }
         objectiveStore.active=o.id
         objectivesPopup?.dismiss()
         focusObjective(o,true)
