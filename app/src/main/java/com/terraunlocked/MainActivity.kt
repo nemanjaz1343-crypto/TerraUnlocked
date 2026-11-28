@@ -133,10 +133,24 @@ class MainActivity : Activity(), SensorEventListener {
                 globalObjectiveStore.savedForZoom(zoom))
         if(regionalObjectives.map{it.id}!=oldIds)map.invalidate()
         if(offline || globalObjectiveLoading ||
-            System.currentTimeMillis()<globalRetryAfter ||
-            !globalObjectiveStore.needsFetch(lat,lon,zoom,System.currentTimeMillis()))
-            return
+            System.currentTimeMillis()<globalRetryAfter)return
+        // Visible geographic cells, not just the centre cell. Keep results
+        // already on screen while the worker fills missing cells one by one.
+        val w=map.width.coerceAtLeast(1)
+        val h=map.height.coerceAtLeast(1)
+        val corners=listOf(
+            map.projection.fromPixels(0,0),
+            map.projection.fromPixels(w,0),
+            map.projection.fromPixels(0,h),
+            map.projection.fromPixels(w,h))
+        val candidates=GlobalObjectivePolicy.viewportCells(
+            corners.minOf{it.latitude},corners.first().longitude,
+            corners.maxOf{it.latitude},corners.last().longitude,
+            lat,lon,zoom)
         val now=System.currentTimeMillis()
+        val target=candidates.firstOrNull{
+            globalObjectiveStore.needsFetch(it.first,it.second,zoom,now)
+        }?:return
         if(now-globalRequestAt<9000L) {
             scheduleGlobalObjectiveRefresh(9000L-(now-globalRequestAt))
             return
@@ -146,8 +160,8 @@ class MainActivity : Activity(), SensorEventListener {
         val executor=globalObjectiveWorker
         executor.execute {
             val fetched=runCatching {
-                val found=globalObjectiveStore.fetchCell(lat,lon,zoom)
-                globalObjectiveStore.put(lat,lon,zoom,found)
+                val found=globalObjectiveStore.fetchCell(target.first,target.second,zoom)
+                globalObjectiveStore.put(target.first,target.second,zoom,found)
             }
             handler.post {
                 globalObjectiveLoading=false
@@ -155,7 +169,7 @@ class MainActivity : Activity(), SensorEventListener {
                     globalRetryAfter=System.currentTimeMillis()+120000L
                 else globalRetryAfter=0L
                 if(!isFinishing && !isDestroyed && fetched.isSuccess)
-                    scheduleGlobalObjectiveRefresh(280L)
+                    scheduleGlobalObjectiveRefresh(320L)
             }
         }
     }
