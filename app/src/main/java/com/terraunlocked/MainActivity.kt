@@ -2191,14 +2191,17 @@ class MainActivity : Activity(), SensorEventListener {
         }
         followButton.setOnClickListener {
             followUser=true
-            fogOverlay.currentPosition?.let {
+            val age=System.currentTimeMillis()-lastKnownFixTime
+            val fresh=lastKnownFixTime>0L && age in 0L..120000L
+            val point=if(fresh)fogOverlay.currentPosition else null
+            if(point!=null) {
                 val next=LocateZoomPolicy.next(map.zoomLevelDouble,
                     map.maxZoomLevel.toDouble())
                 map.controller.setZoom(next)
-                map.controller.animateTo(it)
+                map.controller.animateTo(point)
                 status.text="LOCATE / FOLLOW ACTIVE / ZOOM %.1f".format(
                     java.util.Locale.US,next)
-            } ?: run{locateOnce()}
+            } else locateOnce()
         }
         markButton.setOnClickListener {
             val opening=palette.visibility!=View.VISIBLE
@@ -4036,9 +4039,13 @@ class MainActivity : Activity(), SensorEventListener {
                         fogOverlay.currentPosition=GeoPoint(fix.latitude,fix.longitude)
                         fogOverlay.positionAccuracy=if(fix.hasAccuracy())fix.accuracy else 0f
                         followUser=true
-                        if(map.zoomLevelDouble<10.0)map.controller.setZoom(15.0)
+                        lastKnownFixTime=System.currentTimeMillis()
+                        val next=LocateZoomPolicy.next(map.zoomLevelDouble,
+                            map.maxZoomLevel.toDouble())
+                        map.controller.setZoom(next)
                         map.controller.animateTo(fogOverlay.currentPosition)
-                        status.text="LOCATE / POSITION FOUND / NOT RECORDING"
+                        status.text="LOCATE / POSITION FOUND / ZOOM %.1f / NOT RECORDING"
+                            .format(java.util.Locale.US,next)
                         refresh()
                     } else status.text="LOCATE / NO FRESH FIX / TRY OUTDOORS"
                 }
