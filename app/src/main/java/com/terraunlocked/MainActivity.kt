@@ -1130,6 +1130,27 @@ class MainActivity : Activity(), SensorEventListener {
             private var paintStart: GeoPoint? = null
             private var paintStarted = false
             private val brushPreview=ArrayList<GeoPoint>(128)
+
+            private fun appendBrushPoint(point:GeoPoint) {
+                val previous=brushPreview.lastOrNull()
+                if(previous==null) {
+                    brushPreview.add(point)
+                    return
+                }
+                val distance=gap(previous,point)
+                if(distance<.4f)return
+                val stride=(radius*.28f).coerceAtLeast(1.5f)
+                val remaining=(1800-brushPreview.size).coerceAtLeast(0)
+                if(remaining==0)return
+                val steps=kotlin.math.ceil(distance/stride).toInt()
+                    .coerceIn(1,minOf(remaining,250))
+                for(i in 1..steps) {
+                    val t=i.toFloat()/steps
+                    brushPreview.add(GeoPoint(
+                        FluidBrushSampling.lerp(previous.latitude,point.latitude,t),
+                        FluidBrushSampling.lerp(previous.longitude,point.longitude,t)))
+                }
+            }
             override fun onTouchEvent(event: MotionEvent, mapView: MapView): Boolean {
                 if(mode=="PAINT" || mode=="ERASE") {
                     if(event.actionMasked==MotionEvent.ACTION_POINTER_DOWN || event.pointerCount>1) {
@@ -1138,7 +1159,7 @@ class MainActivity : Activity(), SensorEventListener {
                         paintStart=null
                         paintStarted=false
                         brushPreview.clear()
-                        fogOverlay.liveBrushStroke=emptyList()
+                        fogOverlay.cancelFluidReveal(mapView)
                         mapView.postInvalidateOnAnimation()
                         return false // Let osmdroid handle two-finger pan and pinch zoom.
                     }
@@ -1193,8 +1214,8 @@ class MainActivity : Activity(), SensorEventListener {
                                 event.x.toInt(),event.y.toInt())
                             val endPoint=GeoPoint(pt.latitude,pt.longitude)
                             if(brushPreview.isEmpty())brushPreview.add(paintStart!!)
-                            if(gap(brushPreview.last(),endPoint)>1f)
-                                brushPreview.add(endPoint)
+                            appendBrushPoint(endPoint)
+                            fogOverlay.moveFluidReveal(mapView,event.x,event.y)
                             // The original code serialized the entire history
                             // and reblurred all fog points for EVERY drag event.
                             // Commit the undo snapshot + both stores ONCE per
@@ -1224,13 +1245,17 @@ class MainActivity : Activity(), SensorEventListener {
                             // One atomic append preserves GPS fixes written
                             // by the tracking service while the pen is moving.
                             if(committed.isNotEmpty()) {
-                                store.addAll(committed)
+                                // Persist the small stroke journal immediately;
+                                // merge into the historical JSON off the UI
+                                // thread to keep subsequent gestures responsive.
+                                store.addAllDeferred(committed)
                                 records.addAll(committed)
                             }
                             if(savedPoints.size>1)pathStore.save(segments)
-                        }
+                            fogOverlay.endFluidReveal(mapView)
+                            fogOverlay.invalidateData()
+                        } else fogOverlay.cancelFluidReveal(mapView)
                         brushPreview.clear()
-                        fogOverlay.liveBrushStroke=emptyList()
                         refresh()
                     }
                     paintStart=null;paintStarted=false;strokeLast=null
@@ -1255,7 +1280,7 @@ class MainActivity : Activity(), SensorEventListener {
                         strokeLast=null
                         brushPreview.clear()
                         brushPreview.add(geo)
-                        fogOverlay.liveBrushStroke=brushPreview
+                        fogOverlay.beginFluidReveal(mapView,event.x,event.y)
                         mapView.postInvalidateOnAnimation()
                         return true
                     }
@@ -1263,12 +1288,19 @@ class MainActivity : Activity(), SensorEventListener {
                     // permanent discoveries or JSON. The whole stroke is
                     // persisted only on ACTION_UP.
                     if(paintStart!=null) {
-                        val last=brushPreview.lastOrNull()
-                        if(last==null || gap(last,geo)>=1.5f) {
-                            if(brushPreview.size<1800)brushPreview.add(geo)
-                            paintStarted=true
-                            mapView.postInvalidateOnAnimation()
+                        // MotionEvent may batch historical touch points.
+                        // Interpolate each segment before saving so rapid
+                        // swipes cannot create disconnected reveal islands.
+                        for(index in 0 until event.historySize) {
+                            val hx=event.getHistoricalX(index)
+                            val hy=event.getHistoricalY(index)
+                            val hit=mapView.projection.fromPixels(hx.toInt(),hy.toInt())
+                            appendBrushPoint(GeoPoint(hit.latitude,hit.longitude))
+                            fogOverlay.moveFluidReveal(mapView,hx,hy)
                         }
+                        appendBrushPoint(geo)
+                        fogOverlay.moveFluidReveal(mapView,event.x,event.y)
+                        paintStarted=true
                     }
                     return true
                 }
@@ -1948,7 +1980,7 @@ class MainActivity : Activity(), SensorEventListener {
         controls.trackingActive=tracking
         controls.gpsSearching=tracking && fogOverlay.currentPosition==null
         fun chooseMark(next:String) {
-            fogOverlay.liveBrushStroke=emptyList()
+            fogOverlay.cancelFluidReveal(map)
             mode=next
             pending.clear();lasso.clear();lassoFinished=false
             confirmButton.visibility=View.GONE
