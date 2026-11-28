@@ -381,6 +381,7 @@ class MainActivity : Activity(), SensorEventListener {
     private val records = mutableListOf<DiscoveryPoint>()
     private val demo = mutableListOf<DiscoveryPoint>()
     private var mode = "VIEW"
+    private var restoreProgressDialog:android.app.AlertDialog?=null
     private data class MarkState(val manual:List<DiscoveryPoint>,val segments:List<ManualSegment>)
     private val markUndo=java.util.ArrayDeque<MarkState>()
     private val markRedo=java.util.ArrayDeque<MarkState>()
@@ -886,6 +887,14 @@ class MainActivity : Activity(), SensorEventListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ExpeditionThemes.load(this)
+        // Avoid main-thread wait on a previous Activity's active import.
+        if(TerraArchive.importInProgress) {
+            android.widget.Toast.makeText(this,
+                "TERRA is restoring a backup. Reopen after it completes.",
+                android.widget.Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
         // Recover a failed/interrupted ZIP restore BEFORE loading any stores.
         // If rollback is impossible, fail closed rather than loading a mixed
         // half-restored user profile and allowing it to be overwritten.
@@ -5364,6 +5373,12 @@ class MainActivity : Activity(), SensorEventListener {
                                             status.text="BACKUP / STOP TRACK FIRST"
                                         } else {
                                             status.text="BACKUP / RESTORING / DO NOT EXIT"
+                                            restoreProgressDialog?.dismiss()
+                                            restoreProgressDialog=android.app.AlertDialog.Builder(this)
+                                                .setTitle("RESTORING TERRA PROFILE")
+                                                .setMessage("Your data is being restored and verified. "+
+                                                    "Map tools are temporarily unavailable.")
+                                                .setCancelable(false).create().also{it.show()}
                                             Thread {
                                                 val restored=runCatching {
                                                     contentResolver.openInputStream(uri)?.use{
@@ -5371,6 +5386,8 @@ class MainActivity : Activity(), SensorEventListener {
                                                     }?:error("Cannot read backup")
                                                 }
                                                 runOnUiThread {
+                                                    restoreProgressDialog?.dismiss()
+                                                    restoreProgressDialog=null
                                                     if(isFinishing || isDestroyed)return@runOnUiThread
                                                     if(restored.isSuccess) {
                                                         // A profile restore also changes cached
@@ -5383,13 +5400,28 @@ class MainActivity : Activity(), SensorEventListener {
                                                             android.widget.Toast.LENGTH_SHORT).show()
                                                         recreate()
                                                     } else {
-                                                        status.text="BACKUP / RESTORE FAILED / RECOVERY PRESERVED"
+                                                        val rollbackPending=getSharedPreferences(
+                                                            "terra_restore_transaction_v1",Context.MODE_PRIVATE)
+                                                            .getBoolean("in_progress",false)
+                                                        status.text=if(rollbackPending)
+                                                            "BACKUP / RECOVERY REQUIRED"
+                                                            else "BACKUP / ORIGINAL DATA RESTORED"
                                                         android.app.AlertDialog.Builder(this)
-                                                            .setTitle("RESTORE FAILED")
-                                                            .setMessage("TERRA attempted to restore "+
-                                                                "your previous data. The recovery "+
-                                                                "snapshot is kept until recovery completes.")
-                                                            .setPositiveButton("OK",null).show()
+                                                            .setTitle(if(rollbackPending)
+                                                                "RESTORE INCOMPLETE — CLOSE TERRA"
+                                                                else "RESTORE FAILED — ORIGINAL DATA PRESERVED")
+                                                            .setMessage(if(rollbackPending)
+                                                                "Rollback is still pending. Close TERRA "+
+                                                                "to prevent editing a partially restored "+
+                                                                "profile. Reopen to retry recovery. "+
+                                                                "Do not clear application data."
+                                                                else "The archive could not be imported. "+
+                                                                "Your previous profile was restored.")
+                                                            .setCancelable(!rollbackPending)
+                                                            .setPositiveButton(if(rollbackPending)
+                                                                "CLOSE TERRA" else "OK"){_,_->
+                                                                if(rollbackPending)finishAffinity()
+                                                            }.show()
                                                     }
                                                 }
                                             }.start()
@@ -5759,6 +5791,8 @@ class MainActivity : Activity(), SensorEventListener {
         if(receiverRegistered) {unregisterReceiver(trackingReceiver);receiverRegistered=false}
     }
     override fun onDestroy() {
+        restoreProgressDialog?.dismiss()
+        restoreProgressDialog=null
         handler.removeCallbacks(gpsStatusTick)
         if(::fogOverlay.isInitialized)fogOverlay.release()
         activeVoiceMeterTick?.let{handler.removeCallbacks(it)}
