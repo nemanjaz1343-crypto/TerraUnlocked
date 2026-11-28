@@ -127,13 +127,26 @@ internal object GlobalObjectivePolicy {
         }
     }
 
+    /**
+     * Group by normalized name before spatial de-duplication. Ordinary
+     * objective catalogs have thousands of different names; checking each
+     * one against every prior objective used to scale quadratically.
+     */
     fun distinct(legacy:List<ReconObjective>,
         incoming:List<ReconObjective>):List<ReconObjective> {
+        fun key(value:String)=java.text.Normalizer.normalize(
+            value.lowercase(Locale.US),java.text.Normalizer.Form.NFD)
+            .replace(Regex("\\p{M}+"),"")
+            .replace(Regex("[^a-z0-9]+"),"").trim()
         val seenIds=legacy.mapTo(HashSet()){it.id}
+        val byName=HashMap<String,MutableList<ReconObjective>>()
+        legacy.forEach{byName.getOrPut(key(it.name)){ArrayList()}.add(it)}
         val accepted=ArrayList<ReconObjective>()
         for(o in incoming) {
             if(!seenIds.add(o.id))continue
-            if(legacy.any{overlapping(it,o)} || accepted.any{overlapping(it,o)})continue
+            val sameName=byName.getOrPut(key(o.name)){ArrayList()}
+            if(sameName.any{overlapping(it,o)})continue
+            sameName.add(o)
             accepted.add(o)
         }
         return accepted
