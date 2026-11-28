@@ -645,6 +645,21 @@ class TrackingService:Service(),SensorEventListener {
             stopSelf()
             return START_NOT_STICKY
         }
+        // An import could begin after the Activity checked TRACK state.
+        // Reject service start here too, before subscribing to any provider
+        // or writing new fixes into a profile that is being replaced.
+        if(!running && (TerraArchive.importInProgress ||
+            getSharedPreferences("terra_restore_transaction_v1",MODE_PRIVATE)
+                .getBoolean("in_progress",false))) {
+            saveTrackingRequested(false)
+            diagnostics.record(null,-1L,0.0,0.0,0,motionProfile,
+                "EVENT","TRACK_BLOCKED_DURING_RESTORE")
+            sendBroadcast(Intent(ACTION_STATE).setPackage(packageName)
+                .putExtra("running",false)
+                .putExtra("reason","BACKUP_RESTORE_IN_PROGRESS"))
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if(running)return START_STICKY
         diagnostics.record(null,-1L,0.0,0.0,0,motionProfile,
             "EVENT",if(intent?.action==null)"STICKY_RESTART" else "TRACK_START_REQUEST")
