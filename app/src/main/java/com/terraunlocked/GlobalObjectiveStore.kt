@@ -90,15 +90,15 @@ internal class GlobalObjectiveStore(context:Context) {
             .putString("pinned",encode(pinned.values.toList()).toString()).apply()
     }
 
-    fun exportPinned():String=encode(pinned.values.toList()).toString()
-    fun importPinned(raw:String) {
+    @Synchronized fun exportPinned():String=encode(pinned.values.toList()).toString()
+    @Synchronized fun importPinned(raw:String) {
         val valid=decode(JSONArray(raw))
         valid.forEach{pinned[it.objective.id]=it}
         trim()
         persist()
     }
 
-    fun remember(objective:ReconObjective) {
+    @Synchronized fun remember(objective:ReconObjective) {
         if(!objective.id.startsWith("osm_"))return
         val matched=cells.values.asSequence().flatMap{it.items.asSequence()}
             .firstOrNull{it.objective.id==objective.id}
@@ -113,7 +113,7 @@ internal class GlobalObjectiveStore(context:Context) {
     }
 
     /** Cached + pinned map facts only; no network, safe for the UI thread. */
-    fun nearby(lat:Double,lon:Double,zoom:Double):List<ReconObjective> {
+    @Synchronized fun nearby(lat:Double,lon:Double,zoom:Double):List<ReconObjective> {
         val tier=GlobalObjectivePolicy.visibleTier(zoom)
         val range=when {
             zoom<7.0->21000000.0
@@ -146,7 +146,7 @@ internal class GlobalObjectiveStore(context:Context) {
         return (seed+distinct).take(300)
     }
 
-    fun needsFetch(lat:Double,lon:Double,zoom:Double,now:Long):Boolean {
+    @Synchronized fun needsFetch(lat:Double,lon:Double,zoom:Double,now:Long):Boolean {
         if(GlobalObjectivePolicy.fetchBand(zoom)==0)return false
         val key=GlobalObjectivePolicy.cellKey(lat,lon,zoom)
         val previous=cells[key]?:return true
@@ -249,7 +249,7 @@ internal class GlobalObjectiveStore(context:Context) {
     }
 
     /** Commit a region independently so old cached regions survive failures. */
-    fun put(lat:Double,lon:Double,zoom:Double,items:List<GlobalObjectiveItem>) {
+    @Synchronized fun put(lat:Double,lon:Double,zoom:Double,items:List<GlobalObjectiveItem>) {
         val key=GlobalObjectivePolicy.cellKey(lat,lon,zoom)
         cells.remove(key) // keep most recently used cells at end
         cells[key]=GlobalObjectiveCell(key,System.currentTimeMillis(),items.take(240))
