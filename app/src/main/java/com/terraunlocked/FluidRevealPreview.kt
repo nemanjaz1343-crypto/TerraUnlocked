@@ -50,6 +50,7 @@ internal class FluidRevealPreview {
     private var rasterCanvas:Canvas?=null
     private var running=false
     private var waitingForRaster=false
+    private var rasterReady=false
     private var cursorX=0f
     private var cursorY=0f
     private var cursorRadius=1f
@@ -72,6 +73,8 @@ internal class FluidRevealPreview {
         stamps.clear()
         running=true
         waitingForRaster=false
+        rasterReady=false
+        showBitmap=true
         touchedAt=SystemClock.uptimeMillis()
         cursorX=x;cursorY=y;cursorRadius=radius.coerceAtLeast(1f)
         add(x,y,cursorRadius)
@@ -125,24 +128,26 @@ internal class FluidRevealPreview {
         }
         while(stamps.isNotEmpty() && stamps.first().removed>=.999f)
             stamps.removeFirst()
-        if(waitingForRaster && stamps.isEmpty())cancel()
+        if(waitingForRaster && rasterReady && stamps.isEmpty())cancel()
     }
 
     fun finish() {
         running=false
         waitingForRaster=true
+        rasterReady=false
     }
 
     fun rasterUpdated() {
-        // Keep the preview until a newly committed fog mask arrives.
-        // If a fade animation is still active, release it after 210 ms.
-        waitingForRaster=true
-        if(!running && stamps.isEmpty())cancel()
+        // A new mask now includes the persisted discoveries. Do not release
+        // before the fade completes or the user will see the old hard fog.
+        if(waitingForRaster && !running)rasterReady=true
+        if(rasterReady && stamps.isEmpty())cancel()
     }
 
     fun cancel() {
         running=false
         waitingForRaster=false
+        rasterReady=false
         stamps.clear()
         // Keep bitmap allocation for the next stroke; mark it not visible.
         showBitmap=false
@@ -169,5 +174,4 @@ internal class FluidRevealPreview {
 
     fun hasPendingWork():Boolean=showBitmap && needsFrame
 
-    fun startShowing(){showBitmap=true}
 }
