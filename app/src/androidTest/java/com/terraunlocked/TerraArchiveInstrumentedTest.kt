@@ -113,6 +113,40 @@ class TerraArchiveInstrumentedTest {
             .getBoolean("in_progress",false))
     }
 
+    @Test fun simultaneousGpsAppendsAndManualUndoRetainVerifiedFixes() {
+        val gps=DiscoveryStore(context)
+        val editor=DiscoveryStore(context)
+        gps.replaceAll(emptyList())
+        val start=java.util.concurrent.CountDownLatch(1)
+        val failures=java.util.Collections.synchronizedList(mutableListOf<Throwable>())
+        val gpsWorker=Thread {
+            try {
+                start.await()
+                repeat(100){i->
+                    gps.add(DiscoveryPoint(25.0+i*.00001,55.0,false,
+                        1800000000000L+i,9f,1f,80))
+                }
+            }catch(error:Throwable){failures.add(error)}
+        }
+        val manualWorker=Thread {
+            try {
+                start.await()
+                repeat(30){i->
+                    editor.replaceManual(listOf(DiscoveryPoint(25.06,
+                        55.12,true,1900000000000L+i)))
+                }
+            }catch(error:Throwable){failures.add(error)}
+        }
+        gpsWorker.start();manualWorker.start();start.countDown()
+        gpsWorker.join(30000L);manualWorker.join(30000L)
+        assertFalse("GPS worker must finish",gpsWorker.isAlive)
+        assertFalse("Manual worker must finish",manualWorker.isAlive)
+        assertTrue("Concurrent writes must not throw",failures.isEmpty())
+        val verified=DiscoveryStore(context).load().filterNot{it.manual}
+        assertEquals(100,verified.size)
+        assertEquals(100,verified.map{it.timestamp}.toSet().size)
+    }
+
     @Test fun importDoesNotStartWhileGpsServiceIsRunning() {
         seedOne()
         val saved=backup()
