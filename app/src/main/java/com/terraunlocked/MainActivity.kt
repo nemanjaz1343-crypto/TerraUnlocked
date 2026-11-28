@@ -1683,27 +1683,27 @@ class MainActivity : Activity(), SensorEventListener {
                     // Diamond marker, high contrast on both bright map tiles
                     // and dark fog. Full fill prevents icons disappearing
                     // against satellite imagery.
-                    val diamond=android.graphics.Path().apply{
-                        moveTo(x,y-size)
-                        lineTo(x+size,y)
-                        lineTo(x,y+size)
-                        lineTo(x-size,y)
-                        close()
-                    }
+                    // Rotate a rounded square instead of a hard diamond.
+                    // Rounded corners stay crisp with cheap GPU geometry.
+                    val half=size*.70710678f
+                    canvas.save()
+                    canvas.rotate(45f,x,y)
+                    val rect=android.graphics.RectF(x-half,y-half,x+half,y+half)
                     ink.style=Paint.Style.FILL
                     ink.color=fill
-                    canvas.drawPath(diamond,ink)
+                    canvas.drawRoundRect(rect,4f*density,4f*density,ink)
                     ink.style=Paint.Style.STROKE
-                    ink.strokeWidth=border
+                    ink.strokeWidth=border*.72f
                     ink.strokeJoin=Paint.Join.ROUND
                     ink.color=outline
-                    canvas.drawPath(diamond,ink)
-                    // Simple central facet differentiates it from objective
-                    // diamonds and makes smaller community malls legible.
+                    canvas.drawRoundRect(rect,4f*density,4f*density,ink)
+                    canvas.restore()
+                    // Soft, rounded central facet retains mall distinctiveness.
                     ink.style=Paint.Style.FILL
                     ink.color=outline
-                    val facet=size*.28f
-                    canvas.drawRect(x-facet,y-facet,x+facet,y+facet,ink)
+                    val facet=size*.23f
+                    canvas.drawRoundRect(x-facet,y-facet,x+facet,y+facet,
+                        facet*.48f,facet*.48f,ink)
 
                     // Names appear earlier at mid-range zoom. Avoid labels
                     // at country/city zoom where they would overlap.
@@ -2914,6 +2914,8 @@ class MainActivity : Activity(), SensorEventListener {
             mapSearchGeneration++
         }
         popup.showAtLocation(map,Gravity.TOP or Gravity.CENTER_HORIZONTAL,0,dp(112))
+        box.alpha=0f
+        box.animate().alpha(1f).setDuration(170L).start()
     }
     private fun resolveMapLocation(raw:String) {
         if(raw.isBlank())return
@@ -3541,7 +3543,7 @@ class MainActivity : Activity(), SensorEventListener {
                     popup.dismiss()
                 }
             },
-            (if(o.id.startsWith("saved_"))"MOVE PIN" else "SOURCE") to {
+            (if(o.id.startsWith("saved_"))"MOVE PIN" else "CLOSE") to {
                 popup.dismiss()
                 if(o.id.startsWith("saved_")) {
                     movingObjectiveId=o.id;movingPinTime=null;movingOriginalNote=null
@@ -3551,9 +3553,7 @@ class MainActivity : Activity(), SensorEventListener {
                     movePinBar?.visibility=View.VISIBLE
                     pinMoveReticle?.invalidate()
                     status.text="MOVE "+terms.single+" / TOUCH MAP TO RELOCATE, THEN CONFIRM"
-                } else if(o.source.startsWith("http")) {
-                    startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(o.source)))
-                }
+                } else popup.dismiss()
             }
         )
         if(!o.id.startsWith("saved_")) {
@@ -5771,7 +5771,7 @@ class MainActivity : Activity(), SensorEventListener {
         minimumWidth=0
         setPadding(dp(6),dp(3),dp(6),dp(3))
         background=GradientDrawable().apply {
-            cornerRadius=dp(7).toFloat()
+            cornerRadius=dp(12).toFloat()
             setColor(ExpeditionThemes.current.surface)
             setStroke(dp(1),ExpeditionThemes.current.raised)
         }
