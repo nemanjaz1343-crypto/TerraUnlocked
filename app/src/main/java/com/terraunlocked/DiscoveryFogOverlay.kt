@@ -277,7 +277,9 @@ class DiscoveryFogOverlay(
      */
     private fun drawCachedFog(canvas:Canvas,mapView:MapView) {
         val angle=Math.toRadians(mapView.mapOrientation.toDouble())
-        val w=canvas.width.toFloat();val h=canvas.height.toFloat()
+        // Use the real viewport dimensions, not the brush's optional
+        // half-resolution offscreen canvas dimensions.
+        val w=mapView.width.toFloat();val h=mapView.height.toFloat()
         val ca=kotlin.math.abs(kotlin.math.cos(angle)).toFloat()
         val sa=kotlin.math.abs(kotlin.math.sin(angle)).toFloat()
         val dx=((ca*w+sa*h-w)*.5f).coerceAtLeast(0f)+8f
