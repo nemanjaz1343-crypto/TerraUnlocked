@@ -22,7 +22,7 @@ internal object ExpeditionArt {
     fun fill(c:Canvas,l:Float,t:Float,r:Float,b:Float,col:Int) {
         p.style=Paint.Style.FILL;p.color=col;p.clearShadowLayer();c.drawRect(l,t,r,b,p)
     }
-    fun panel(c:Canvas,rect:RectF,highlight:Boolean=false,radius:Float=10f) {
+    fun panel(c:Canvas,rect:RectF,highlight:Boolean=false,radius:Float=12f) {
         p.style=Paint.Style.FILL;p.color=if(highlight)
             (if(ExpeditionThemes.current.id=="MILITARY")Color.rgb(54,49,31)
                 else ExpeditionThemes.current.raised)
@@ -30,13 +30,14 @@ internal object ExpeditionArt {
         c.drawRoundRect(rect,radius,radius,p)
         // Faint leather/grain and military-map scuffs; deterministic, inexpensive.
         p.style=Paint.Style.STROKE;p.strokeWidth=.45f
-        for(i in 0..75) {
+        for(i in 0..31) {
             val x=rect.left+(i*47%997)/997f*rect.width()
             val y=rect.top+(i*73%991)/991f*rect.height()
-            p.color=if(i%3==0)Color.argb(26,205,179,122) else Color.argb(21,117,131,103)
+            p.color=if(i%3==0)Color.argb(13,205,179,122) else Color.argb(9,117,131,103)
             if(x<rect.right-6f && y<rect.bottom-4f)c.drawLine(x,y,x+(i%5+1)*.9f,y+.65f,p)
         }
-        p.style=Paint.Style.STROKE;p.strokeWidth=1.25f;p.color=if(highlight)light else gold
+        p.style=Paint.Style.STROKE;p.strokeWidth=if(highlight)1.0f else .85f
+        p.color=if(highlight)light else Color.argb(190,213,175,106)
         c.drawRoundRect(RectF(rect.left+1,rect.top+1,rect.right-1,rect.bottom-1),radius,radius,p)
     }
     fun rule(c:Canvas,x1:Float,y1:Float,x2:Float,y2:Float,color:Int=gold,w:Float=1f) {
@@ -205,7 +206,7 @@ internal class ExpeditionHeaderView(context:Context,
         c.save();c.scale(scale,scale)
         val hh=h/scale
         ExpeditionArt.fill(c,0f,0f,393f,hh,ExpeditionArt.dark)
-        ExpeditionArt.panel(c,RectF(10f,6f,94f,hh-8f),false,5f)
+        ExpeditionArt.panel(c,RectF(10f,6f,94f,hh-8f),false,9f)
         val missionHeading=ExpeditionWording.current.heading
         ExpeditionArt.label(c,missionHeading+" ›",52f,hh/2f+5f,
             if(missionHeading.length>9)9.5f else 12f,
@@ -302,12 +303,13 @@ internal class ExpeditionBottomView(context:Context,val onSelect:(Int)->Unit):Vi
     override fun onDraw(c:Canvas) {
         val w=width.toFloat();val h=height.toFloat()
         ExpeditionArt.fill(c,0f,0f,w,h,ExpeditionArt.dark)
-        ExpeditionArt.panel(c,RectF(3*d,3*d,w-3*d,h-3*d),false,8*d)
+        ExpeditionArt.panel(c,RectF(3*d,3*d,w-3*d,h-3*d),false,13*d)
         val step=(w-6*d)/7
         for(i in 0..6){
             val x=3*d+(i+.5f)*step
             if(i==selected || i==pressedIndex || (i==0 && trackingActive)){
-                ExpeditionArt.panel(c,RectF(3*d+i*step,3*d,3*d+(i+1)*step,h-3*d),true,7*d)
+                ExpeditionArt.panel(c,RectF(3*d+i*step+1*d,4*d,
+                    3*d+(i+1)*step-1*d,h-4*d),true,10*d)
                 ExpeditionArt.rule(c,x-step*.22f,h-8*d,x+step*.22f,h-8*d,
                     if(ExpeditionThemes.current.id=="CIVIL")ExpeditionThemes.current.accent
                     else ExpeditionArt.light,1*d)
