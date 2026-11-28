@@ -26,11 +26,12 @@ v0.4.80 audit remediation. No new map layers, gamification or user data migratio
 ## Android runtime tests
 
 `app/src/androidTest/java/com/terraunlocked/TerraArchiveInstrumentedTest.kt`
-covers four isolated emulator scenarios:
+covers five isolated emulator scenarios:
 1. Full ZIP round-trip preserves a verified discovery.
 2. A simulated persisted in-progress rollback marker restores pre-import state.
 3. An oversized unknown ZIP member is rejected without replacing the history.
 4. Import fails while the GPS tracking service is reported running.
+5. Simultaneous verified GPS appends and manual Undo rewrites preserve every verified fix.
 
 `.github/workflows/android-instrumentation.yml` adds a separate Android 35
 emulator lane. The unit-test/assemble/build/release pipeline is unchanged.
